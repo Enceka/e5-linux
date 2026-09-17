@@ -51,9 +51,25 @@ Three things bite in that chroot, all of them environment leakage from Android:
 
 ## Next steps
 
-1. **Wait for `device-finalize.sh`** to finish and confirm
-   `/data/e5linux/rootfs.ext4` exists.  It is in its shrink step (deleting the
-   1.2 GiB apt cache on f2fs) and then copies the 6 GiB image into place.
+1. **Finish publishing the image, then boot it.**
+   `rootfs/device-finalize.sh` got as far as the shrink step before its remote
+   shell was killed; the last few cache entries were removed but the image was
+   never copied into place, and the build filesystem may still be loop mounted.
+   `rootfs/device-publish.sh` does the rest -- drop the remaining cache entries,
+   unmount, and `cp` the image to `/data/e5linux/rootfs.ext4` -- and it is meant
+   to be started with `setsid nohup` so that losing the adb connection does not
+   kill it, which is exactly what happened the first time:
+
+   ```
+   adb push rootfs/device-publish.sh /data/local/tmp/
+   adb shell su -c 'setsid nohup sh /data/local/tmp/device-publish.sh \
+       >/data/local/tmp/device-publish.log 2>&1 </dev/null &'
+   ```
+
+   At the end of the session the device had also disappeared from USB entirely
+   (`adb devices` empty, nothing in `lsusb`), so check that it is reachable
+   before anything else.  Nothing on the device is armed for Linux: `misc`
+   points at slot a and the device boots Android, so it is safe to leave.
 2. **Boot it.**  `boot/install-rootfs.sh` (or `work/doflash.sh`) arms slot b and
    reboots.  `boot/init` finds the image, loop mounts it, and `switch_root`s.
    Expect `stage=switch-root` in the persistent log.

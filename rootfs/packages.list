@@ -1,0 +1,64 @@
+# e5-linux root filesystem package set.
+#
+# Plasma Mobile is the session the E5 is being built for.  The device has a
+# 480x320 DSI panel (lcd_st7365p_mipi_hdp) driven by the SPRD DRM/KMS driver, so
+# the session is Wayland with the DRM backend.
+#
+# No GPU driver exists for the UMS9621 in mainline Mesa, so rendering falls back
+# to llvmpipe (libgl1-mesa-dri / libegl-mesa0).  That is software rasterisation
+# at 480x320, which is slow but workable; it is the only option that does not
+# depend on a vendor blob we do not have.
+
+# --- base system ---
+systemd
+systemd-sysv
+dbus
+sudo
+locales
+tzdata
+ca-certificates
+kmod
+udev
+procps
+psmisc
+less
+nano
+htop
+curl
+wget
+iproute2
+iputils-ping
+net-tools
+e2fsprogs
+dosfstools
+parted
+
+# --- Plasma Mobile session ---
+plasma-mobile
+plasma-workspace
+kwin-wayland
+kwin-x11
+sddm
+polkitd
+qt6-wayland
+xdg-desktop-portal
+xdg-desktop-portal-kde
+fonts-noto-core
+fonts-noto-color-emoji
+fonts-dejavu-core
+
+# --- graphics: software rendering only ---
+libgl1-mesa-dri
+libegl-mesa0
+libgles2
+mesa-utils
+libdrm-tests
+
+# --- networking ---
+network-manager
+rfkill
+
+# --- audio (UCM for the UMS9621 codec is not ported; PipeWire is here so the
+#     stack exists once it is) ---
+pipewire
+wireplumber

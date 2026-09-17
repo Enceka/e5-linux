@@ -1,0 +1,306 @@
+#!/bin/busybox sh
+# e5-linux standalone initramfs init for the Rongyue E5 (Unisoc UMS9621 / ums9158_1h10).
+#
+# Booted from slot b. Follows the mu300-linux design:
+#   * load the rebuilt modules in a fixed order (boot/module-order.txt)
+#   * restore slot a in misc unless /etc/e5linux/default-boot says otherwise,
+#     so a Linux boot that never reaches userspace falls back to Android
+#   * bring up a USB gadget (ECM network + CDC-ACM console) before anything else
+#   * mount the Linux root filesystem and switch_root to systemd
+#   * if there is no root filesystem, stay standalone (telnet + serial) and
+#     reboot back to Android after a timeout
+#
+# Everything is written to /dev/kmsg (-> ramoops console) and to a 4 MiB block
+# inside boot_b, which survives a cold power cycle (pstore does not).
+/bin/busybox mkdir -p /bin /sbin /proc /sys /dev /run /tmp /root /etc
+/bin/busybox --install -s /bin
+export PATH=/bin:/sbin HOME=/root TERM=vt100
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+echo 7 > /proc/sys/kernel/printk
+if ! mount -t devtmpfs -o mode=0755 devtmpfs /dev 2>/dev/null; then
+    mount -t tmpfs -o mode=0755 tmpfs /dev
+    mknod /dev/null c 1 3
+    mknod /dev/console c 5 1
+    mknod /dev/kmsg c 1 11
+    mknod /dev/zero c 1 5
+    mknod /dev/urandom c 1 9
+fi
+pmsg_major=$(awk '$2=="pmsg"{print $1}' /proc/devices)
+[ -n "$pmsg_major" ] && [ ! -e /dev/pmsg0 ] && mknod /dev/pmsg0 c "$pmsg_major" 0
+
+log() {
+    echo "<3>E5-LINUX: $*" > /dev/kmsg
+    [ -c /dev/pmsg0 ] && echo "E5-LINUX: $*" > /dev/pmsg0
+    echo "$(cut -d' ' -f1 /proc/uptime) $*" >> /run/stages
+}
+
+# Persistent log: 4 MiB at 56 MiB inside boot_b, past the image and its AVB data.
+# boot/build-boot-image.py refuses to build an image that overlaps this block.
+bootb=
+PERSIST_SEEK_BLOCKS=14336      # 56 MiB / 4096
+persist() {
+    [ -n "$bootb" ] && [ -b "$bootb" ] || return
+    # The lock keeps the periodic loop from racing the script's own calls.  It has
+    # to expire on its own: a persist interrupted half way used to leave the lock
+    # behind, after which every later call returned silently and the log simply
+    # stopped -- which is exactly how a boot that died at 300 s ended up with its
+    # last record at 14 s.  Anything older than two minutes is stale by
+    # definition, since the loop runs every fifteen seconds.
+    if [ -d /run/persist.lock ]; then
+        now=$(cut -d. -f1 /proc/uptime)
+        made=$(cat /run/persist.lock 2>/dev/null)
+        case "$made" in
+            ''|*[!0-9]*) made=0 ;;
+        esac
+        [ $((now - made)) -gt 120 ] || return
+        rmdir /run/persist.lock 2>/dev/null
+    fi
+    mkdir /run/persist.lock 2>/dev/null || return
+    echo "$(cut -d. -f1 /proc/uptime)" > /run/persist.lock/stamp 2>/dev/null
+    {
+        echo "E5-PERSIST-BEGIN uptime=$(cut -d' ' -f1 /proc/uptime) release=$(uname -r)"
+        cat /run/stages
+        echo "--- cmdline"; cat /proc/cmdline
+        echo "--- lsmod"; cat /proc/modules
+        echo "--- udc"; ls /sys/class/udc 2>&1
+        echo "--- deferred"; cat /sys/kernel/debug/devices_deferred 2>&1
+        echo "--- block"; ls /dev/mmcblk0p* 2>&1 | tr '\n' ' '
+        echo; echo "--- dmesg"; dmesg | tail -c 2000000
+        echo "E5-PERSIST-END"
+    } > /run/persist.txt 2>&1
+    head -c 65536 /dev/zero >> /run/persist.txt
+    dd if=/run/persist.txt of="$bootb" bs=4096 seek=$PERSIST_SEEK_BLOCKS conv=notrunc 2>/dev/null
+    sync
+    rmdir /run/persist.lock
+}
+
+log "stage=init-start pid=$$ release=$(uname -r)"
+
+mkdir -p /dev/pts
+mount -t devpts -o mode=0620,ptmxmode=0666 devpts /dev/pts 2>/dev/null
+ln -sf pts/ptmx /dev/ptmx
+mount -t tmpfs tmpfs /run
+mount -t tmpfs tmpfs /tmp
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+echo /bin/mdev > /proc/sys/kernel/hotplug
+mdev -s
+log "stage=devfs-ready"
+
+# Turn hangs into panics so the bootloader slot logic can roll back to Android.
+echo 1 > /proc/sys/kernel/softlockup_panic
+echo 1 > /proc/sys/kernel/panic_on_oops
+echo 1 > /proc/sys/kernel/sysrq
+
+# Locate misc and boot_b.  Reading the partition names out of sysfs needs no
+# modules, so this is attempted before the module pass as well -- but on this
+# platform the eMMC partitions do not appear in /sys/class/block for several
+# seconds, and an attempt that ran only here came up empty for twenty seconds
+# straight (misc=none boot_b=none, and with no boot_b there is no log at all).
+# So the authoritative attempt stays after the module pass, and the early one is
+# best effort: it only exists so that a crash during module loading still leaves
+# a record in boot_b.
+find_partitions() {
+    n=0
+    while [ "$n" -lt "${1:-20}" ]; do
+        for u in /sys/class/block/mmcblk*p*/uevent; do
+            grep -qx PARTNAME=misc "$u" 2>/dev/null && misc=/dev/$(basename "$(dirname "$u")")
+            grep -qx PARTNAME=boot_b "$u" 2>/dev/null && bootb=/dev/$(basename "$(dirname "$u")")
+        done
+        [ -b "$misc" ] && return 0
+        n=$((n + 1))
+        mdev -s
+        sleep 1
+    done
+    return 1
+}
+
+misc=
+bootb=
+find_partitions 6 || true
+persist
+(while :; do sleep 15; persist; done) &
+
+# Safety net: reboot after ten minutes, by which time misc points at slot a again.
+# Create /run/stay (through the serial console or telnet) to keep Linux running.
+# This is the fallback path only -- when a root filesystem is found the timer is
+# killed before switch_root, so a real system never inherits it.
+#
+# The decision is written to /dev/kmsg as well as the persistent block, because
+# the persistent block is written through the same code path this timer is
+# supposed to survive, and a reboot with no recorded reason is impossible to
+# diagnose after the fact.
+(sleep 600
+ if [ -e /run/stay ] || [ -e /data/e5linux/stay ]; then log "stage=timer-skipped"; persist; exit 0; fi
+ log "stage=timer-reboot"
+ echo "<3>E5-LINUX: safety timer expired, no /run/stay -- rebooting to slot a" > /dev/kmsg
+ persist; reboot -f; sleep 10; echo b > /proc/sysrq-trigger) &
+
+loaded=0
+failed=0
+if [ -f /etc/module-order ]; then
+    while read module; do
+        [ -n "$module" ] || continue
+        if insmod "/linux-modules/$module" 2>/run/insmod.err; then
+            loaded=$((loaded + 1))
+        else
+            failed=$((failed + 1))
+            log "insmod-fail $module $(cat /run/insmod.err)"
+        fi
+    done < /etc/module-order
+fi
+mdev -s
+log "stage=modules-done loaded=$loaded failed=$failed"
+find_partitions 20 || true
+log "stage=partitions misc=${misc:-none} boot_b=${bootb:-none}"
+persist
+
+write_misc_bc() {  # write_misc_bc FILE STAGE
+    [ -n "$misc" ] || { log "stage=misc-NOT-FOUND"; return 1; }
+    dd if="$1" of="$misc" bs=1 seek=2048 conv=notrunc 2>/dev/null
+    sync
+    dd if="$misc" of=/run/bc.bin bs=1 skip=2048 count=32 2>/dev/null
+    if cmp -s /run/bc.bin "$1"; then log "stage=$2 dev=$misc"; else log "stage=$2-MISMATCH dev=$misc"; fi
+}
+restore_slot_a() { write_misc_bc /etc/misc-bc-slot-a.bin misc-restored-slot-a; }
+
+hostname e5-linux
+ifconfig lo 127.0.0.1 up
+
+# ---------------------------------------------------------------- USB gadget
+log "stage=usb-configfs"
+mount -t configfs configfs /config 2>/run/configfs.err || log "stage=configfs-fail $(cat /run/configfs.err)"
+g=/config/usb_gadget/linux
+mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409" "$g/functions/ecm.usb0"
+echo 0x0525 > "$g/idVendor"
+echo 0xa4a1 > "$g/idProduct"
+echo 0x0200 > "$g/bcdUSB"
+echo E5LINUX > "$g/strings/0x409/serialnumber"
+echo Unisoc > "$g/strings/0x409/manufacturer"
+echo "E5 Linux USB Ethernet" > "$g/strings/0x409/product"
+echo "Linux ECM + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
+echo 250 > "$g/configs/c.1/MaxPower"
+echo 02:50:00:00:e5:01 > "$g/functions/ecm.usb0/dev_addr"
+echo 02:50:00:00:e5:02 > "$g/functions/ecm.usb0/host_addr"
+ln -s "$g/functions/ecm.usb0" "$g/configs/c.1/f1"
+mkdir -p "$g/functions/acm.GS0" && ln -s "$g/functions/acm.GS0" "$g/configs/c.1/f2"
+
+log "stage=usb-wait-udc"
+udc=
+for n in $(seq 1 40); do
+    for u in /sys/class/udc/*; do
+        [ -e "$u" ] && { udc=$(basename "$u"); break; }
+    done
+    [ -n "$udc" ] && break
+    sleep 1
+done
+log "stage=udc udc=${udc:-none} available=$(ls /sys/class/udc 2>/dev/null | tr '\n' ',')"
+persist
+if [ -n "$udc" ]; then
+    echo "$udc" > "$g/UDC"
+    log "stage=usb-bind-done rc=$?"
+fi
+ifconfig usb0 up 2>/dev/null
+persist
+
+# ------------------------------------------------------- root filesystem
+# The E5 has no unallocated eMMC space (userdata runs to the last usable LBA),
+# so the Linux root filesystem lives in a file on Android /data, which is
+# f2fs and mounted directly from mmcblk0p70 (no metadata encryption).
+ROOT_FILE=/data/e5linux/rootfs.ext4
+data=
+for u in /sys/class/block/mmcblk*p*/uevent; do
+    grep -qx PARTNAME=userdata "$u" 2>/dev/null && data=/dev/$(basename "$(dirname "$u")")
+done
+log "stage=data-partition dev=${data:-none}"
+
+has_init() { [ -x "$1/lib/systemd/systemd" ] || [ -x "$1/sbin/init" ]; }
+pick_root() {
+    want=$(cat /disk/e5linux/boot-os 2>/dev/null)
+    for os in $want ubuntu; do
+        [ -d "/disk/$os" ] && has_init "/disk/$os" && { echo "/disk/$os"; return; }
+        [ "$os" = ubuntu ] && [ -x /disk/lib/systemd/systemd ] && { echo /disk; return; }
+    done
+}
+
+mkdir -p /newroot /data /disk
+rootdir=
+if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/datamount.err; then
+    log "stage=data-mounted"
+    [ -f "$ROOT_FILE" ] || log "stage=no-rootfile $ROOT_FILE"
+    if [ -f "$ROOT_FILE" ]; then
+        rootloop=$(losetup -f 2>/run/rootmount.err)
+        if [ -n "$rootloop" ] && losetup "$rootloop" "$ROOT_FILE" 2>>/run/rootmount.err \
+           && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err \
+           && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
+            :
+        else
+            rootdir=
+        fi
+    fi
+else
+    log "stage=data-mount-fail $(cat /run/datamount.err 2>/dev/null)"
+fi
+
+if [ -n "$rootdir" ]; then
+    if [ "$rootdir" = /disk ]; then
+        mount --move /disk /newroot
+    else
+        mount --bind "$rootdir" /newroot
+        mkdir -p /newroot/mnt/e5-disk && mount --move /disk /newroot/mnt/e5-disk
+    fi
+    # Default-Linux mode leaves LK decremented tries alone; userspace re-arms
+    # slot b once the system is up (e5-boot-ok.service).
+    if [ "$(cat /newroot/etc/e5linux/default-boot 2>/dev/null)" = linux ]; then
+        log "stage=default-boot-linux (slot a restore skipped)"
+    else
+        restore_slot_a
+    fi
+    mkdir -p /run/e5linux && cp /etc/misc-bc-slot-a.bin /etc/misc-bc-slot-b-trial.bin /run/e5linux/ 2>/dev/null
+    [ -n "$misc" ] && echo "$misc" > /run/e5linux/misc-dev
+    [ -n "$data" ] && echo "$data" > /run/e5linux/data-dev
+    init=/sbin/init
+    [ -x /newroot/lib/systemd/systemd ] && init=/lib/systemd/systemd
+    log "stage=switch-root root=$rootdir init=$init os=$(sed -n 's/^PRETTY_NAME=//p' /newroot/etc/os-release)"
+    persist
+    kill $(jobs -p) 2>/dev/null
+    for p in /proc/[0-9]*; do [ "${p#/proc/}" = 1 ] || kill -9 "${p#/proc/}" 2>/dev/null; done
+    umount /config 2>/dev/null
+    mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run
+    mount --move /dev /newroot/dev
+    mount --move /proc /newroot/proc
+    mount --move /sys /newroot/sys
+    mount --move /run /newroot/run 2>/dev/null
+    exec switch_root /newroot $init
+fi
+
+# ------------------------------------------------- standalone Linux fallback
+log "stage=rootfs-unavailable err=$(cat /run/rootmount.err 2>/dev/null)"
+restore_slot_a
+ifconfig usb0 192.168.77.1 netmask 255.255.255.0 up
+log "stage=usb0 $(ifconfig usb0 2>&1 | head -1)"
+cat > /etc/udhcpd.conf <<'EOF'
+start 192.168.77.2
+end 192.168.77.9
+interface usb0
+option subnet 255.255.255.0
+option lease 600
+lease_file /run/udhcpd.leases
+pidfile /run/udhcpd.pid
+EOF
+touch /run/udhcpd.leases
+udhcpd /etc/udhcpd.conf 2>/run/udhcpd.err
+telnetd -b 192.168.77.1 -p 23 -l /bin/sh
+mkdir -p /run/www
+echo "E5 standalone Linux: telnet 192.168.77.1 (or the USB serial console)." > /run/www/index.html
+echo "Auto reboot to Android after 600s unless /run/stay exists." >> /run/www/index.html
+httpd -p 192.168.77.1:80 -h /run/www
+mkdir -p /dev/pts
+setsid sh -c 'exec sh </dev/ttyGS0 >/dev/ttyGS0 2>&1' &
+log "stage=ready standalone"
+persist
+while :; do
+    dmesg > /run/www/dmesg.txt 2>/dev/null
+    cat /proc/modules > /run/www/modules.txt 2>/dev/null
+    sleep 5
+done

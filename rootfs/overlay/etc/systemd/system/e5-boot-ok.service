@@ -1,0 +1,16 @@
+[Unit]
+Description=Re-arm the bootloader slot for e5-linux
+Documentation=https://github.com/ (see docs/FINDINGS.md section 1)
+# Deliberately gated on the graphical session, not on basic.target: refilling
+# LK's try counter is the thing that keeps the device on Linux, so it must only
+# happen once there is a working system to come back to.
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/e5-boot-ok
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,30 @@
+# e5-linux: build outputs, device dumps and vendor blobs are never committed.
+# The two reference checkouts used while bringing this up are not part of the repo.
+mu300-linux/
+kernel_sprd_ums9158/
+
+# build trees / outputs
+out_linux/
+out_modules/
+work/
+*.img
+*.dtb
+*.dtbo
+*.ko
+!boot/*.ko
+
+# device dumps and Android runtime subsets (extracted from *your* device)
+dumps/
+stock-img/
+kernel_probe/
+log-img/
+logs/
+android-subset/
+refer/
+firmware/
+busybox
+
+# rootfs build products
+rootfs/*.tar
+rootfs/*.tar.gz
+rootfs/*.ext4

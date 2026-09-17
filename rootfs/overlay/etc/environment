@@ -1,0 +1,6 @@
+# Software rendering: the UMS9621 GPU has no mainline Mesa driver.
+LIBGL_ALWAYS_SOFTWARE=1
+MESA_LOADER_DRIVER_OVERRIDE=kms_swrast
+GALLIUM_DRIVER=llvmpipe
+# The E5's panel is 480x320; do not let Qt pick a scale factor that does not fit.
+QT_AUTO_SCREEN_SCALE_FACTOR=0

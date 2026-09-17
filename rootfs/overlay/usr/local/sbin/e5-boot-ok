@@ -1,0 +1,17 @@
+#!/bin/sh
+# Re-arm slot b so the next reboot comes back here.
+#
+# boot/init leaves LK's try counter for slot b at whatever the flash-time
+# bootloader_control said, and skips the restore-slot-a step when
+# /etc/e5linux/default-boot is "linux".  That means the counter is only ever
+# refilled from userspace -- and only once the system is demonstrably usable,
+# which is what makes this safe: a kernel that panics or a session that never
+# starts does not re-arm anything, so the tries run out and LK boots Android.
+set -e
+misc=$(cat /run/e5linux/misc-dev 2>/dev/null)
+trial=/run/e5linux/misc-bc-slot-b-trial.bin
+[ -n "$misc" ] || { echo "e5-boot-ok: no misc device recorded"; exit 0; }
+[ -f "$trial" ] || { echo "e5-boot-ok: no $trial"; exit 0; }
+dd if="$trial" of="$misc" bs=1 seek=2048 conv=notrunc status=none
+sync
+echo "e5-boot-ok: slot b re-armed on $misc"

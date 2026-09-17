@@ -1,0 +1,54 @@
+# Modules the e5-linux initramfs must load that Android does NOT load in its
+# first stage.  Android brings these up from its second-stage init, so they are
+# absent from boot/module-order.stock.
+#
+# --- battery / charger -------------------------------------------------------
+# aw32257_charger is the AW322xx charger driver (it registers the power supply
+# literally named "aw322xx_charger" and matches compatible "awinic,aw322xx_chg",
+# see drivers/power/supply/aw32257_charger.c).  The board's DT puts it on i2c2 at
+# address 0x6a, and -- through the "vddvbus" regulator its child node declares --
+# the USB controller node lists it as a devicetree supplier:
+#
+#   $ ls /sys/bus/platform/devices/64a00000.usb/
+#   supplier:i2c:2-006a -> .../i2c:2-006a--platform:64a00000.usb
+#
+# fw_devlink enforces supplier readiness *before* a probe function is entered, so
+# while 2-006a has no driver the USB controller can never probe:
+#
+#   platform 64a00000.usb: DEFERDBG: supplier 2-006a not ready
+#   probe of 64a00000.usb returned -517
+#
+# The only visible symptom is that /sys/class/udc stays empty, i.e. no USB
+# network and no serial console.  It is the charger driver that unblocks USB.
+#
+# --- display -----------------------------------------------------------------
+# Same story as the charger: sprd_vpu_pw_domain.ko is the genpd provider for the
+# VPU/display power domain, and while it is absent the DPU, DSI and GSP platform
+# devices never probe -- there is no /dev/dri at all, only /sys/class/drm/version.
+# artifacts_e5/diagnostics_2026-09-10.md section 2 works through this on the
+# Android port: the four devices that never recover are
+# 30130000.sprd-gsp, 31000000.dpu, 31300000.dsi, 31300000.dphy, and installing
+# the provider turns all four green.  The DPU and DSI drivers themselves are
+# built in (CONFIG_DRM_SPRD_DPU0=y, CONFIG_DRM_SPRD_DSI=y), so the power domain
+# has to be loaded first, before the DRM core and GSP modules that depend on it.
+#
+# --- USB ---------------------------------------------------------------------
+# Order follows the probe chain the kernel port documents:
+# extcon-gpio -> typec -> hsphy -> musb (artifacts_e5/driver_gap_2026-09-12.md).
+# gen-module-order.py additionally pulls in each module's own dependencies.
+sprd_vpu_pw_domain.ko
+sprd-drm.ko
+sprd-gsp.ko
+sprd_battery_info.ko
+ump96xx_fuel_gauge.ko
+aw32257_charger.ko
+sprd-charger-manager.ko
+extcon-usb-gpio.ko
+sc27xx_typec.ko
+sprd_tcpm.ko
+sprd-bc1p2.ko
+phy-sprd-qogirn6lite.ko
+musb_hdrc.ko
+musb_sprd.ko
+sprd_usbm.ko
+sprd_usbpinmux.ko

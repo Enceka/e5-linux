@@ -1,0 +1,15 @@
+[Unit]
+Description=Compressed swap on zram
+DefaultDependencies=no
+After=swap.target
+Before=sysinit.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/e5-zram
+ExecStop=/sbin/swapoff /dev/zram0
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,13 @@
+#!/bin/sh
+# The E5 has 1.5 GiB of RAM and Plasma Mobile is not small, so a compressed swap
+# device is not optional.  zram is built into the kernel (CONFIG_ZRAM=y), so this
+# needs no module load.
+set -e
+size=${E5_ZRAM_SIZE:-768M}
+[ -e /sys/block/zram0 ] || exit 0
+if ! swapon --show=NAME --noheadings 2>/dev/null | grep -q zram0; then
+    echo "$size" > /sys/block/zram0/disksize 2>/dev/null || exit 0
+    mkswap /dev/zram0 >/dev/null
+    swapon -p 100 /dev/zram0
+fi
+echo "e5-zram: $(swapon --show=NAME,SIZE --noheadings 2>/dev/null | tr -s ' ')"

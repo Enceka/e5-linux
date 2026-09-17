@@ -1,0 +1,135 @@
+#!/bin/bash
+# Mobile data on the E5's baseband, without Android RIL: AT commands on
+# /dev/stty_nr1, data over sipa_eth<cid-1> (raw IP, NOARP), address from
+# AT+CGCONTRDP.  The modem itself is booted by e5-vendor.service (Android's
+# modem_control in a chroot) -- this only drives the radio and the bearer.
+# usage: mobile-data up | down | status | watch | sim-reset
+set -uo pipefail
+DEV=${E5_AT_DEV:-/dev/stty_nr1}
+CID=${E5_CID:-1}
+IFACE=${E5_IFACE:-sipa_eth$((CID - 1))}
+CONF=/etc/e5/mobile-data.conf
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+APN=${APN:-3gnet}
+
+at() {
+    local cmd=$1 t=${2:-5} line
+    [ -c "$DEV" ] || return 1
+    exec 3<>"$DEV"
+    while IFS= read -r -t 0.2 line <&3; do :; done
+    printf '%s\r' "$cmd" >&3
+    local end=$((SECONDS + t))
+    while [ $SECONDS -lt $end ]; do
+        IFS= read -r -t 1 line <&3 || continue
+        line=${line%$'\r'}
+        [ -z "$line" ] && continue
+        echo "$line"
+        case "$line" in OK|ERROR|+CME\ ERROR*|+CMS\ ERROR*|CONNECT*|NO\ CARRIER) break ;; esac
+    done
+    exec 3>&-
+}
+
+radio_on() {
+    at 'AT+CFUN?' | grep -q '+CFUN: 1' && return 0
+    at 'AT+SFUN=2' 10 >/dev/null
+    at 'AT+SFUN=4' 40 >/dev/null
+}
+
+wait_registered() {
+    local n
+    for n in $(seq 1 30); do
+        at 'AT+CEREG?' | grep -qE '\+CEREG: [0-9],(1|5)' && return 0
+        [ $((n % 5)) -eq 0 ] && radio_on
+        sleep 2
+    done
+    return 1
+}
+
+up() {
+    [ -c "$DEV" ] || { echo "no AT channel $DEV (is e5-vendor.service running?)" >&2; exit 3; }
+    rm -f /run/e5-mobile-data-down
+    stty -F "$DEV" raw -echo 2>/dev/null || true
+    radio_on
+    wait_registered || { echo "not registered on the network" >&2; exit 1; }
+    at "AT+CGDCONT?" | grep -q "CGDCONT: $CID," ||
+        at "AT+CGDCONT=$CID,\"IPV4V6\",\"$APN\"" >/dev/null
+    at "AT+CGACT?" | grep -q "+CGACT: $CID,1" || at "AT+CGACT=1,$CID" 30 >/dev/null
+    local rdp addrmask ip4 mask dns1 dns2 prefix
+    rdp=$(at "AT+CGCONTRDP=$CID" 6 | grep '^+CGCONTRDP:' | head -1)
+    addrmask=$(echo "$rdp" | cut -d, -f4 | tr -d '"')
+    ip4=$(echo "$addrmask" | cut -d. -f1-4)
+    mask=$(echo "$addrmask" | cut -d. -f5-8)
+    dns1=$(echo "$rdp" | cut -d, -f6 | tr -d '"')
+    dns2=$(echo "$rdp" | cut -d, -f7 | tr -d '"')
+    [ -n "$ip4" ] || { echo "no IPv4 address from AT+CGCONTRDP" >&2; exit 1; }
+    at "AT+CGDATA=\"M-ETHER\",$CID" 10 | grep -q CONNECT || true
+    prefix=$(python3 -c "import ipaddress,sys;print(ipaddress.IPv4Network('0.0.0.0/'+sys.argv[1]).prefixlen)" "$mask" 2>/dev/null || echo 32)
+    ip link set "$IFACE" up
+    ip addr flush dev "$IFACE"
+    ip addr add "$ip4/$prefix" dev "$IFACE"
+    ip route replace default dev "$IFACE" metric 100
+    printf 'nameserver %s\n' "$dns1" > /etc/resolv.conf
+    [ -n "$dns2" ] && printf 'nameserver %s\n' "$dns2" >> /etc/resolv.conf
+    local op
+    op=$(at 'AT+COPS?' | sed -n 's/^+COPS: [0-9],[0-9],"\([^"]*\)".*/\1/p')
+    echo "mobile data up on $IFACE ($ip4/$prefix, $op)"
+}
+
+down() {
+    touch /run/e5-mobile-data-down
+    ip route del default dev "$IFACE" 2>/dev/null || true
+    ip addr flush dev "$IFACE" 2>/dev/null || true
+    ip link set "$IFACE" down 2>/dev/null || true
+    at "AT+CGACT=0,$CID" 10 >/dev/null || true
+}
+
+status() {
+    echo "channel: $DEV  interface: $IFACE"
+    at 'AT+CFUN?' 2>/dev/null | head -1
+    at 'AT+CPIN?' 2>/dev/null | head -1
+    at 'AT+CEREG?' 2>/dev/null | grep CEREG | head -1
+    at 'AT+COPS?' 2>/dev/null | grep COPS | head -1
+    at 'AT+CSQ' 2>/dev/null | grep CSQ | head -1
+    ip -br addr show "$IFACE" 2>/dev/null
+    ip route show default 2>/dev/null | head -3
+}
+
+sim_reset() {
+    stty -F "$DEV" raw -echo 2>/dev/null || true
+    at 'AT+SFUN=5' 20; at 'AT+SFUN=3' 10; sleep 2; at 'AT+SFUN=2' 10; at 'AT+SFUN=4' 40
+    local n
+    for n in $(seq 1 30); do at 'AT+CPIN?' | grep -q READY && break; sleep 2; done
+    at 'AT+CPIN?'
+}
+
+# The modem firmware resets itself now and then; it comes back with the radio off
+# and no PDP context, so check the bearer and rebuild it when it is gone.
+watch() {
+    local fails=0
+    while :; do
+        sleep 30
+        [ -e /run/e5-mobile-data-down ] && continue
+        if ! at 'AT+CEREG?' 2>/dev/null | grep -qE '\+CEREG: [0-9],(1|5)'; then
+            fails=$((fails + 1))
+        elif ! ip -br addr show "$IFACE" 2>/dev/null | grep -q 'UP'; then
+            fails=$((fails + 1))
+        else
+            fails=0
+        fi
+        if [ $fails -ge 2 ]; then
+            echo "watcher: bearer lost, reconnecting"
+            up || true
+            fails=0
+        fi
+    done
+}
+
+case "${1:-}" in
+    up) up ;;
+    down) down ;;
+    status) status ;;
+    sim-reset) sim_reset ;;
+    watch) watch ;;
+    *) echo "usage: mobile-data up|down|status|watch|sim-reset" >&2; exit 2 ;;
+esac

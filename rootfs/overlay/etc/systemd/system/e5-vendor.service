@@ -1,0 +1,19 @@
+[Unit]
+Description=E5 baseband bring-up (Android modem_control in a chroot)
+# The CP firmware is loaded by Android's modem_control, whose task name the vendor
+# modem_loader driver checks; there is no mainline way to do this.
+DefaultDependencies=no
+After=local-fs.target systemd-udevd.service
+Before=sysinit.target
+ConditionPathExists=/opt/e5/android/vendor/bin/modem_control
+
+[Service]
+Type=simple
+ExecStart=/opt/e5/vendor-start.sh
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/var/log/e5-vendor.log
+StandardError=append:/var/log/e5-vendor.log
+
+[Install]
+WantedBy=sysinit.target

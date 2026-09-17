@@ -755,3 +755,96 @@ Persistence is in two places:
   `boot/stage-modules.sh` picks up every `.ko` in `out_linux`, so a rebuilt
   `boot-linux-slotb.img` carries 66 modules instead of 64 and loads them in
   dependency order (`matrix-keymap.ko` before `sprd_keypad.ko`).
+
+## 13. Baseband internet: Android's modem_control in a chroot
+
+The vendor kernel already carries the whole SIPC/SIPA modem stack: the modules are
+loaded (`sipc_core`, `sipa_core`, `sipa_eth`, `sipa_usb`, `sprd_modem_loader`, `sipx`,
+`spool`, `spipe`, `unisoc_mailbox`, `trusty_log`, ...), the char devices exist --
+`/dev/modem` is char 481 and the AT channels are `/dev/stty_nr0..31`, char 489, as
+`/proc/devices` confirms -- and `/sys/class/` has `sipa`, `sipa_eth`, `sprd-sipc`,
+`sprd-sipx`, `ext_modem`.  Every one of those channels still fails with ENODEV,
+because that is only the *transport*: the CP (baseband) firmware has never been
+started.
+
+### Who has to start it, and why it is Android's job
+
+`sprd_modem_loader` (`drivers/unisoc_platform/modem/modem_loader/sprd_modem_loader.c`)
+is a char device with `MODEM_START`/`MODEM_STOP`/`MODEM_GET_LOAD_INFO`/... ioctls, and
+its ioctl path compares the *calling task's name*:
+
+    if (strcmp(current->comm, modem->rd_lock_name) != 0) { ... return -EPERM; }
+
+so the loader only serves a task literally called `modem_control`.  That is Android's
+`/vendor/bin/modem_control`, and it needs more than the binary: bionic (it is an
+Android ELF), the property area (it reads `ro.vendor.radio.modemtype` to learn the
+modem configuration) and `libkernelbootcp.trusty.so` (it reloads `pm_sys` and the
+modem through the Trusty `kernelbootcp` TA).  The E5 therefore gets the same
+treatment as the MU300 port: extract the Android vendor subset and run
+`modem_control` in a chroot.
+
+### Getting the subset out of a production Android
+
+`rootfs/extract-android-vendor.sh` does it, and the trick is that the E5's Android is
+a *production* build: `ro.build.type=user`, `ro.debuggable=0`, no `su` anywhere in
+PATH and `adb root` answers "adbd cannot run as root in production builds".  What
+saves it is Magisk -- `/debug_ramdisk/su -c id` returns `uid=0(root)` -- which is
+what the flashing scripts have been using all along.
+
+49 MiB comes out: `/apex/com.android.runtime` (linker64 + bionic), `/system/lib64`,
+`/vendor/bin/{modem_control,cp_diskserver,refnotify}` with their vendor libs, the
+`/vendor/etc/modem_*.xml` files `modem_control` parses, `vendor/etc/ueventd.rc`, and
+the one thing no partition has: the *live* `/dev/__properties__` area (1.4 MiB of
+tmpfs that Android's init builds at boot).
+
+### Four requirements, each discovered by failure
+
+| symptom | cause | fix |
+|---|---|---|
+| `modem_ctrl_int_modem_type: ro.vendor.radio.modemtype not_find`, then `can't get modem type!`, and nothing else happens | the subset was unpacked from a tarball built on macOS, so `property_info` was owned by uid 501.  bionic's `PropertyInfoAreaFile::LoadPath()` returns false unless `st_uid == 0 && st_gid == 0`, and one false there leaves the *entire* property system uninitialised -- `getprop` then prints nothing at all | `chown -R root:root` in `vendor-start.sh` |
+| `modem_control` sleeps in a nanosleep loop and never opens a device | liblog retries `connect(/dev/socket/logdw)` forever; there is no logd on Linux | `logdw.py`: a 40-line Python `SOCK_DGRAM` sink bound at `/dev/socket/logdw` |
+| the modem loader still refuses | `modem_control` drops to uid `system` (1000), while devtmpfs hands every node over as `root:root` 0660, and `/dev/block/by-name` does not exist at all | `node-perms.sh` applies Android's own `/vendor/etc/ueventd.rc` (path, mode, user, group) to the nodes that exist, and the by-name links are rebuilt from each partition's `PARTNAME` |
+| nothing boots even so | the driver checks the task name | `exec chroot .../android /vendor/bin/modem_control` -- directly, never through `linker64` -- with a bind-mounted copy of `/proc/cmdline` whose `androidboot.slot_suffix` is forced to `_a` (LK passes `_b` for the trial slot, and the `_a` images are the ones Android itself uses) |
+
+With those in place the modem log (through the logdw sink) goes `Modem Alive` /
+`CH Alive`, dmesg prints `modem modem@0: modem_control modem run = 1!`, and
+`/dev/stty_nr1` stops returning ENODEV and starts blocking on read, which is what an
+AT channel is supposed to do.
+
+### The data path: AT on /dev/stty_nr1, data on sipa_eth0
+
+`rootfs/overlay/opt/e5/mobile-data` implements up/down/status/watch/sim-reset with
+nothing but shell and the AT channel:
+
+    AT+SFUN=2                        SIM on
+    AT+SFUN=4                        protocol stack on;  +CFUN: 0 becomes +CFUN: 1
+    AT+CEREG?                        +CEREG: 2,1,"5104","059FA02D",7   (LTE registered)
+    AT+COPS?                         46001 (China Unicom), CSQ 52
+    AT+CGDCONT=1,"IPV4V6","3gnet"   APN from /etc/e5/mobile-data.conf
+    AT+CGACT=1,1                     activate the default bearer
+    AT+CGCONTRDP=1                   3gnet.MNC006.MCC460.GPRS,
+                                     10.105.136.142/255.0.0.0,
+                                     DNS 58.240.57.33 and 221.6.4.66
+    AT+CGDATA="M-ETHER",1            -> CONNECT: the bearer lands on sipa_eth0
+
+then `ip link set sipa_eth0 up`, `ip addr add <address>/<prefix from the mask>`
+(`sipa_eth0` is raw IP and NOARP), `ip route replace default dev sipa_eth0`, and
+`/etc/resolv.conf` gets the two DNS servers (`resolvectl` is not installed on this
+image).
+
+Verified on the device: `busybox wget http://deb.debian.org/debian/dists/trixie/Release`
+returns the real index (`Origin: Debian`, `Suite: stable`, `Version: 13.7`) with the
+USB LAN having no route to the internet -- the traffic left through the baseband.  The
+carrier also assigns a `2408:893a:...` IPv6 address; there is no IPv6 default route
+configured yet.
+
+Three units carry it: `e5-vendor.service` (`Before=sysinit.target`, runs
+`vendor-start.sh`, and `ConditionPathExists=/opt/e5/android/vendor/bin/modem_control`
+so a fresh image without the proprietary subset still boots), `e5-mobile-data.service`
+(oneshot, `mobile-data up`) and `e5-mobile-data-watch.service` (`mobile-data watch`,
+which rebuilds the bearer when a modem reset drops it).  Checked across a reboot:
+all three `active`, `sipa_eth0` UP with a fresh address, wget works.
+
+The subset is proprietary and is not in this repository (`work/` is gitignored);
+`rootfs/extract-android-vendor.sh` reproduces it from the device, and the overlay
+carries everything else.

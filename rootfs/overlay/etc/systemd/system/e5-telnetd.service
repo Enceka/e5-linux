@@ -1,0 +1,14 @@
+[Unit]
+Description=BusyBox telnetd on the USB management LAN
+After=systemd-networkd.service
+# Pulled in by the NetworkManager drop-in (50-e5-networkd.conf) together with
+# systemd-networkd, because the overlay travels into the initramfs as plain files and
+# cannot carry enable symlinks.
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/busybox telnetd -F -p 23 -l /bin/login
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

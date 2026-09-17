@@ -244,6 +244,41 @@ IdleAction all to ignore -- this port has no usable suspend/resume either, so no
 should try.  Verified with busctl get-property: HandlePowerKey = "ignore",
 IdleAction = "ignore".
 
+### 6.3 Session, keys, and which kernel Image to flash
+
+Three symptoms turned out to be one cause, and one of them was self-inflicted:
+
+* The panel showed the SDDM **greeter** (its theme is what looks like a boot logo)
+  instead of Plasma Mobile, and the **power and volume keys did nothing**.  Both are
+  the same failure: when the autologin session fails, SDDM falls back to the greeter,
+  and in an X11 greeter the keys go nowhere -- they are wired to gpio-keys, not to the
+  console.  The kernel does deliver them: /proc/bus/input/devices shows gpio-keys with
+  KEY_VOLUMEDOWN (114), KEY_VOLUMEUP (115) and KEY_POWER (116).
+* The autologin session was failing because **KWin could not keep /dev/dri/card0**.
+  With the Image this work had rebuilt (Homebrew clang 23, plus CONFIG_DEVMEM for a
+  watchdog experiment that turned out to be a dead end) the log reads
+  "kwin_wayland_drm: failed to open drm device at /dev/dri/card0 / No suitable DRM
+  devices have been found", and KWin's clients then abort with
+  "no Qt platform plugin could be initialized".
+
+So the boot image now carries the **original Image** again (work/Image, sha256
+c1ab1905...) with the new ramdisk: 64 modules, the NCM gadget, and the overlay.  The
+same three checks then pass: kwin_wayland + plasmashell run, /sys/kernel/debug/dri/0/state
+says allocated by = kwin_wayland, and the keys have a compositor to talk to.
+CONFIG_DEVMEM stays in the fragment only because boot/init logs the SoC watchdog
+registers; without it that log line is just skipped.
+
+### 6.4 Telnet on the management LAN
+
+The full system had no remote shell (the initramfs telnetd only exists on the
+standalone path, and there is no sshd in the image).  The initramfs now copies its
+static arm64 busybox into the real root as /usr/local/bin/busybox, and
+e5-telnetd.service runs busybox telnetd -p 23 -l /bin/login from it -- no package has
+to exist in the Debian image.  The unit is pulled in by the same NetworkManager
+drop-in as systemd-networkd (the overlay cannot carry enable symlinks).  Verified from
+the host: 192.168.77.1:23 answers with a telnet banner and the host holds a DHCP lease
+on 192.168.77.92.
+
 ## 7. What actually happened: the boot campaign
 
 Five trial boots on 2026-09-17. Each one flashes `boot_b` plus the 32-byte

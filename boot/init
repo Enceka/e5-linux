@@ -308,6 +308,14 @@ if [ -n "$rootdir" ]; then
         done
         log "stage=overlay-applied files=$applied"
     fi
+    # The initramfs busybox is a static arm64 binary and doubles as the userspace
+    # busybox for the management LAN (e5-telnetd.service runs telnetd from it), so no
+    # extra package has to exist in the Debian image.
+    if [ -x /bin/busybox ]; then
+        mkdir -p /newroot/usr/local/bin
+        cp /bin/busybox /newroot/usr/local/bin/busybox 2>/dev/null && chmod 0755 /newroot/usr/local/bin/busybox
+        log "stage=busybox-installed $(ls -l /newroot/usr/local/bin/busybox 2>/dev/null | awk '{print $5}')"
+    fi
     log "stage=switch-root root=$rootdir init=$init os=$(sed -n 's/^PRETTY_NAME=//p' /newroot/etc/os-release)"
     persist
     # Stop the persist loop and the safety timer by pid before handing over: the

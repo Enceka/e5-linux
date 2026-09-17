@@ -13,7 +13,7 @@ Linux boots on the Rongyue E5 and is reachable.  Verified on the device:
 | initramfs | 60 modules, dependency-ordered, `loaded=60 failed=0`, nothing left in `devices_deferred` |
 | USB | gadget is **NCM + CDC-ACM** (0525:a4a1); usb0 = 192.168.77.1/24 with a DHCP server (systemd-networkd), so the host gets a lease -- docs/FINDINGS.md section 6.1 |
 | power | `battery/status = Charging` (`aw32257_charger` + `sc27xx-fgu` + `sprd-charger-manager`) |
-| display | `/dev/dri/card0` + `card0-DSI-1` (480x320 ST7365P panel); KWin modesets it (active plane `320x480` AR24, `allocated by = kwin_wayland`) |
+| display | /dev/dri/card0 + card0-DSI-1 (480x320 ST7365P); KWin modesets it (plane allocated by = kwin_wayland) |
 | session | SDDM autologins `e5` into `plasma-mobile.desktop`; `kwin_wayland` (DRM backend) + `plasmashell` + `plasma-welcome` run on llvmpipe |
 | re-arm | `e5-boot-ok.service` refills slot b's try counter from inside Linux (`misc` byte-verified) |
 | Wi-Fi | driver packaged and **loading on the device** (63/63 modules incl. sprd_wlan_combo, wcn_bsp, cfg80211); the chip still fails to power on because its DT firmware path is a wcnmodem partition this device does not have -- docs/FINDINGS.md section 8 |

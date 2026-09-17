@@ -630,3 +630,61 @@ DEBUG_INFO_BTF are already off in kernel/e5-linux.fragment (so no pahole is need
 and arm64 needs no objtool.  The exact environment is recorded in work/build6.sh;
 a full Image + modules build takes about twenty minutes on an M-series host with -j8.
 
+
+## 11. What the phone session costs, and what to run instead
+
+Measured on the device (`free -m`, `ps -eo rss,pcpu,comm`), Plasma Mobile 6.3.6 on
+llvmpipe with 36 running user units:
+
+| | total | used | free | buff/cache | available | zram |
+|---|---|---|---|---|---|---|
+| before | 1450 | 1288 | 93 | 387 | 162 | 719 / 767 used |
+| after trimming | 1450 | 926 | 354 | 394 | 524 | 590 / 767 used |
+
+The single largest item was not the shell.  `plasma-settings` -- the phone settings
+app -- was running as an XDG autostart unit
+(`app-org.kde.mobile.plasmasettings@....service`) and held **356 MB**.  Behind it:
+plasmashell 228, maliit-keyboard 93, kwin_wayland 62, kded6 45, xwaylandvideobridge
+40, powerdevil 38, Discover's notifier 36, kdeconnectd 36, xdg-desktop-portal 36, the
+polkit agent 34, kactivitymanagerd 33, gmenudbusmenuproxy 32, xembedsniproxy 32,
+ksmserver 32.  (RSS double-counts shared Qt libraries, but the ranking is what
+matters.)  zram was 94 % full, so the session was also paying compression CPU for
+every page fault -- which is the real symptom: not the number, the thrashing.
+
+What was turned off (live, and therefore already inside the rootfs image, whose
+loop file is the persistent root):
+
+| change | how |
+|---|---|
+| settings app, Discover notifier, KDE Connect | `home/e5/.config/autostart/*.desktop` with `Hidden=true`, carried in the overlay so it survives a re-image |
+| gmenudbusmenuproxy, xembedsniproxy, xwaylandvideobridge, kaccess | `systemctl --user mask` -- X11-only helpers on a Wayland phone; the instance already running was killed by pid |
+
+That is ~360 MB released, and more usefully `available` 162 -> 524 MB.  What is left
+is the shell itself: plasmashell 254 MB and kwin_wayland 87 MB, with plasmashell at
+39 % CPU.  On llvmpipe every Qt Quick frame is rasterised on the CPU, and no Mesa
+driver exists for this GPU; the DRM work in section 8 is unrelated to that (the panel
+is a plain DSI framebuffer driven through DRM planes).
+
+Lighter shells, all present in trixie for arm64 (checked against
+packages.debian.org/trixie/arm64):
+
+| option | shape | note |
+|---|---|---|
+| Phosh (`phosh`, `phoc`, `squeekboard`) | GTK4 shell + wlroots compositor | the phone stack Debian itself ships for mobile; no KDE/Qt daemon fleet, and phoc can run with `WLR_RENDERER=pixman` |
+| Sxmo (`sxmo-utils`) | sway + dmenu-style menus and gestures | smallest sensible phone UX, but a menu-first interaction that has to be learned |
+| sway + `wvkbd` + `waybar` | hand-rolled | ~120-200 MB and full control, at the cost of assembling the UX |
+| cage / labwc / weston | kiosk or bare wlroots | single-app or bare desktop; useful as a cheap renderer test |
+| LXQt (`lxqt-session`) | Qt desktop | lighter than Plasma, but not a touch UI |
+
+The renderer matters more than the shell on this board: every wlroots compositor
+(phoc, sway, labwc, cage) runs without GL under `WLR_RENDERER=pixman`, so a
+GTK4/wlroots stack is the natural next step -- which is why `docs/STATUS.md` keeps
+Plasma Mobile as the fallback rather than the target.
+
+Getting there: the device has no route off itself except the USB LAN, the host does.
+For a handful of packages, fetch the arm64 `.deb`s on the host and `dpkg -i` them on
+the device (it is aarch64, so the unpack and the maintainer scripts are native).  For
+a stack like Phosh (100+ packages) let apt resolve instead: run a small HTTP proxy on
+the host, point the device at it with `Acquire::http::Proxy` in
+`/etc/apt/apt.conf.d/`, and the dependency walk stays on the device where it is
+correct.

@@ -17,6 +17,7 @@ Linux boots on the Rongyue E5 and is reachable.  Verified on the device:
 | session | SDDM autologins `e5` into `plasma-mobile.desktop`; `kwin_wayland` (DRM backend) + `plasmashell` + `plasma-welcome` run on llvmpipe |
 | re-arm | `e5-boot-ok.service` refills slot b's try counter from inside Linux (`misc` byte-verified) |
 | Wi-Fi | driver packaged and **loading on the device** (63/63 modules incl. sprd_wlan_combo, wcn_bsp, cfg80211); the chip still fails to power on because its DT firmware path is a wcnmodem partition this device does not have -- docs/FINDINGS.md section 8 |
+| session cost | Plasma Mobile, measured: 1288 MB used of 1450 before trimming, 926 MB after (zram 719 -> 590 of 767 used), `available` 162 -> 524 MB. The 356 MB `plasma-settings` autostart and the X11-only helpers are off -- docs/FINDINGS.md section 11 |
 | session lifetime | **fixed.** The ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it, pmic_timeout 300) took a session from 295 s to 10+ min and stable -- docs/FINDINGS.md section 9 |
 
 Root filesystem: Debian 13 (trixie) arm64 with **Plasma Mobile 6.3.6**, 1518
@@ -89,7 +90,14 @@ Three things bite in that chroot, all of them environment leakage from Android:
    keyboard, so touch is the only input.  There is also no pixel-level proof of what
    the panel shows: `spectacle` inside the session, dumped over the serial console,
    would settle both at once.
-5. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
+5. **The session's memory.**  After section 11's trimming, Plasma Mobile leaves
+   524 MB available, which works but is not comfortable: plasmashell and kwin still
+   spend a CPU core on software rasterisation.  If the device is to be pleasant, the
+   next step is a wlroots/GTK4 shell (Phosh, or Sxmo if the odd interaction is
+   acceptable) with `WLR_RENDERER=pixman`, keeping Plasma Mobile as the fallback
+   session in `/usr/share/wayland-sessions`.  Packages come from the host, which has
+   the network the device does not.
+6. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
    into `misc` from inside the running system (byte-compared), so rebooting returns
    to Linux instead of Android.
 

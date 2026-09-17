@@ -26,7 +26,9 @@ run 'grep -q "^en_US.UTF-8" /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/
 
 echo "=== user ==="
 run 'id e5 >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo,video,render,input,audio,netdev e5
-     echo "e5:e5" | chpasswd
+     # numeric on purpose: the 9-key keypad (docs/FINDINGS.md section 12) is the only
+     # keyboard on the device, and it types digits
+     echo "e5:123456" | chpasswd
      echo "root:root" | chpasswd
      echo "e5 ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/10-e5
      chmod 0440 /etc/sudoers.d/10-e5

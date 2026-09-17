@@ -315,6 +315,13 @@ if [ -n "$rootdir" ]; then
         mkdir -p /newroot/usr/local/bin
         cp /bin/busybox /newroot/usr/local/bin/busybox 2>/dev/null && chmod 0755 /newroot/usr/local/bin/busybox
         log "stage=busybox-installed $(ls -l /newroot/usr/local/bin/busybox 2>/dev/null | awk '{print $5}')"
+    # Powerdevil controls the panel backlight through sysfs; the default 0600 leaves
+    # it with EACCES ("Error EACCES(-13): Permission denied opening ...") and no
+    # brightness or screen-off action.  This is a phone with exactly one seat, so
+    # opening the attribute up is the pragmatic fix.
+    for bl in /sys/class/backlight/*/brightness /sys/class/backlight/*/bl_power; do
+        [ -e "$bl" ] && chmod 0666 "$bl" 2>/dev/null && log "stage=backlight-perm $bl"
+    done
     fi
     log "stage=switch-root root=$rootdir init=$init os=$(sed -n 's/^PRETTY_NAME=//p' /newroot/etc/os-release)"
     persist

@@ -1,0 +1,12 @@
+[Unit]
+Description=E5 power key (panel off/on and lock; suspend is unusable here)
+After=multi-user.target
+ConditionPathExists=/dev/input/event0
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/e5/powerkey.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target

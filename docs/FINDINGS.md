@@ -975,3 +975,54 @@ helpers stay masked (they are X11-only), and the 240 MB `plasma-settings` proces
 showed up in `ps` was phosh launching it *on demand* (its scope says "Application
 launched by phosh"), not an autostart leftover -- `systemctl --user unmask` after
 checking, so the on-screen Settings button keeps working.
+
+## 17. Removing KDE, and the trap that made the 4 GiB zram keep coming back
+
+With Phosh working, the KDE/Plasma stack was purged (`~n^plasma`, `^kwin`, `^kde`,
+`^libkf`, `^kf6`, `^kscreen`, `^maliit`, `^breeze`, `^powerdevil`, `^kactivity`,
+`^polkit-kde`, `^ksmserver`, `^systemsettings`, `^kglobalaccel`, `^kio`, then
+`apt-get autoremove --purge`).  `/` went from 4.6 GiB used (962 MiB free) to **4.0 GiB
+used / 1.6 GiB free**, `plasmashell` is gone, and `/usr/share/wayland-sessions/` now
+holds exactly `phosh.desktop`.
+
+Measured on the same rootfs, same panel, `free -m`, three minutes after boot:
+
+| session | used | available | zram used | biggest process |
+|---|---|---|---|---|
+| Plasma Mobile as found | 1288 | 162 | 719 MB | plasma-settings 356 MB |
+| Plasma Mobile, after the section 11 trim | 926 | 524 | 590 MB | plasmashell 254 MB |
+| Plasma Mobile, second measurement (section 16, before the purge) | 1032 | 418 | 120 MB | plasmashell 368 MB / 56 % CPU |
+| Phosh, before the purge | 732 | 718 | 1 MB | phosh 75 MB, phoc 19 % CPU |
+| **Phosh, KDE purged** | **707** | **743** | 6.5 MB | phosh 71 MB, phoc 10.5 % CPU |
+
+So Phosh costs about 325 MB less than the same-rootfs Plasma Mobile, and its
+compositor burns about half the CPU (both are software-rendered: `WLR_RENDERER=pixman`
+for phoc, llvmpipe for kwin).
+
+### The trap: the initramfs overlay is copied over the rootfs on *every* boot
+
+The 4 GiB zram kept reverting to 768 MB after each reboot, and the reason is structural:
+`boot-linux-slotb.img` carries a 25-file overlay that `boot/init` copies into `/newroot`
+on every boot, and `/usr/local/sbin/e5-zram` is one of those files.  Editing the rootfs
+copy therefore lasts exactly until the next boot -- and the same is true of every path
+the overlay mentions (`etc/environment`, `etc/sddm.conf.d/*`, `etc/systemd/system/*`,
+the firmware files, ...).  Two ways out, and both are used here:
+
+* put the setting somewhere the overlay does *not* mention -- the zram size now lives in
+  `/etc/systemd/system/e5-zram.service.d/10-e5-4g.conf` (a drop-in directory, not a file
+  in the overlay), which sets `E5_ZRAM_SIZE=4G` and resets zram0 to zstd before the
+  stock script runs;
+* or reflash the rebuilt image, which is what `boot-linux-slotb.img` (66 modules, 26
+  overlay files including all of the above) is for.
+
+### The power button
+
+Two independent pieces are in play, and only one of them was wrong:
+
+* logind must not touch the key, or the device powers off the moment it is pressed --
+  `HandlePowerKey=ignore` / `HandlePowerKeyLongPress=ignore` were already in place
+  (section 6.2);
+* `gnome-settings-daemon`'s `power-button-action` was `suspend`, and this device has no
+  working suspend, so pressing the key did nothing visible.  It is now `nothing`, which
+  leaves the key to phosh itself (short press locks/unlocks, long press opens the power
+  menu).  Confirming that with a real press is the one open item.

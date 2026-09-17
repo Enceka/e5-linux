@@ -25,9 +25,10 @@ Linux boots on the Rongyue E5 and is reachable.  Verified on the device:
 | session cost | **Phosh is ~200 MB lighter than the trimmed Plasma Mobile**: 723 used / 727 available, against 926 / 524 for Plasma (which itself came down from 1288 / 162 before section 11's trim) |
 | session lifetime | **fixed.** The ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it, pmic_timeout 300) took a session from 295 s to 10+ min and stable -- docs/FINDINGS.md section 9 |
 
-Root filesystem: Debian 13 (trixie) arm64 with **Plasma Mobile 6.3.6**, 1518
-packages installed and configured.  `plasma-mobile.desktop` and
-`plasma.desktop` are both present in `/usr/share/wayland-sessions`.
+Root filesystem: Debian 13 (trixie) arm64, originally Plasma Mobile 6.3.6 (1518
+packages).  **KDE has since been purged** -- `/usr/share/wayland-sessions/` holds only
+`phosh.desktop`, and the rootfs has 1.6 GiB free instead of 962 MiB -- docs/FINDINGS.md
+section 17.  Phosh (0.46.0) is the session; the comparison table in that section is why.
 
 ## How the root filesystem is built
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=E5 mobile data (AT commands + sipa_eth0 bearer)
+After=e5-vendor.service network-pre.target
+Wants=e5-vendor.service
+Before=network.target
+ConditionPathExists=/dev/stty_nr1
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/e5/mobile-data up
+ExecStop=/opt/e5/mobile-data down
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target

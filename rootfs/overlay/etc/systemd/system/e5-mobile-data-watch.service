@@ -1,0 +1,13 @@
+[Unit]
+Description=E5 mobile data watchdog (reconnect after a modem reset)
+After=e5-mobile-data.service
+Requires=e5-mobile-data.service
+
+[Service]
+Type=simple
+ExecStart=/opt/e5/mobile-data watch
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

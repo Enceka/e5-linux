@@ -18,6 +18,7 @@ Linux boots on the Rongyue E5 and is reachable.  Verified on the device:
 | display | /dev/dri/card0 + card0-DSI-1 (480x320 ST7365P); KWin modesets it (plane allocated by = kwin_wayland) |
 | session | SDDM autologins `e5` into `plasma-mobile.desktop`; `kwin_wayland` (DRM backend) + `plasmashell` + `plasma-welcome` run on llvmpipe |
 | re-arm | `e5-boot-ok.service` refills slot b's try counter from inside Linux (`misc` byte-verified) |
+| baseband | **mobile data works.** Android's `modem_control` runs in a chroot (`e5-vendor.service`, ~50 MiB vendor subset at `/opt/e5/android`), then AT on `/dev/stty_nr1` + `sipa_eth0` takes it online; verified with `wget` to deb.debian.org and across a reboot -- docs/FINDINGS.md section 13 |
 | Wi-Fi | driver packaged and **loading on the device** (63/63 modules incl. sprd_wlan_combo, wcn_bsp, cfg80211); the chip still fails to power on because its DT firmware path is a wcnmodem partition this device does not have -- docs/FINDINGS.md section 8 |
 | session cost | Plasma Mobile, measured: 1288 MB used of 1450 before trimming, 926 MB after (zram 719 -> 590 of 767 used), `available` 162 -> 524 MB. The 356 MB `plasma-settings` autostart and the X11-only helpers are off -- docs/FINDINGS.md section 11 |
 | session lifetime | **fixed.** The ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it, pmic_timeout 300) took a session from 295 s to 10+ min and stable -- docs/FINDINGS.md section 9 |
@@ -105,7 +106,16 @@ Three things bite in that chroot, all of them environment leakage from Android:
    new `boot-linux-slotb.img` has to be flashed only for a machine that has never been
    through this.  A press test from the user is the one thing left to confirm: the
    device registers the events, the shell has to act on them.
-7. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
+7. **Sharing the baseband with the host, and IPv6.**  `sipa_eth0` carries the
+   device's own traffic; the USB LAN clients still cannot route through it because
+   neither `nft` nor `iptables` is installed on the image (fetch the packages, add
+   the masquerade/MSS rules MU300 uses, or install `nftables` -- the device has a
+   route to the internet of its own now).  The carrier also hands out a
+   `2408:893a:...` IPv6 address that is not routed yet.
+8. **Phosh** is now a plain `apt-get install` away: the baseband gives the device
+   the internet it never had, so the 100+ package mobile shell no longer needs the
+   host as a proxy.  Keep `plasma-mobile.desktop` as the fallback session.
+9. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
    into `misc` from inside the running system (byte-compared), so rebooting returns
    to Linux instead of Android.
 

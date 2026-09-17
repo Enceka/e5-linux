@@ -52,3 +52,40 @@ musb_hdrc.ko
 musb_sprd.ko
 sprd_usbm.ko
 sprd_usbpinmux.ko
+
+# --- Wi-Fi / WCN --------------------------------------------------------------
+# sprd_wlan_combo.ko is the fullmac cfg80211 driver for the Unisoc WCN combo chip
+# (sc2332/sc2355; the board's own DT wires sc2355 over SDIO as
+# "sprd,sc2355-sdio-wifi"), and wcn_bsp.ko is the sprdwcn bus + SDIO glue it sits
+# on.  Both are built by the E5 defconfig this project builds from --
+# CONFIG_UNISOC_WCN_BSP=m and CONFIG_UNISOC_WLAN_COMBO=m in
+# arch/arm64/configs/e5_rongyue_defconfig, and their Kconfig is reachable
+# (drivers/unisoc_platform/Kconfig sources sprdwcn/Kconfig and
+# sprd_wlan_combo/Kconfig) -- but both are absent from module-order.stock for
+# exactly the reason the charger and the display power domain were: Android loads
+# Wi-Fi from its *second* stage, and the stock list is only the first stage.
+# Nothing in the initramfs or in the Debian root filesystem ever insmods them, so
+# no WCN device is probed and Linux has no Wi-Fi.  The failure is silent, like the
+# other two: loading the driver is what makes it visible.
+#
+# gen-module-order.py resolves the closure, so the top-level driver is enough:
+# cfg80211 comes in with it (CONFIG_CFG80211=m), while the SDIO/MMC core the bus
+# needs is built in (CONFIG_MMC=y, CONFIG_MMC_SDHCI=y).
+#
+# Loading the modules is necessary but not sufficient.  wcn_bsp.ko's boot code
+# request_firmware()s wcnmodem.bin and a per-board set of .ini files
+# (wifi_board_config*.ini, connectivity_configure*.ini,
+# connectivity_calibration*.ini, tsx_data), and reads the factory MAC from
+# /mnt/vendor/wifimac.txt.  Those live on the Android vendor side; they have to be
+# copied into the root filesystem (see docs/FINDINGS.md section 8) or the driver
+# probes and then fails to boot the chip.
+wcn_bsp.ko
+sprd_wlan_combo.ko
+
+# --- PMIC watchdog -------------------------------------------------------------
+# The other half of the watchdog: on Android, sprd-pmic-wdt is bound to the PMIC's
+# watchdog child (64400000.spi:pmic@0:watchdog@40), and LK arms that one too ("dswdt
+# was enabled by miscdata", androidboot.dswdten=enabled).  It was never staged here,
+# so nothing on the Linux side ever touched it.  It also gives systemd a watchdog
+# device to hold and ping (see rootfs/overlay/etc/systemd/system.conf.d).
+sprd_pmic_wdt.ko

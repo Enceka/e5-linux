@@ -130,6 +130,11 @@ def main():
     ap.add_argument('--module-order', type=Path, default=HERE / 'module-order.txt')
     ap.add_argument('--init', type=Path, default=HERE / 'init')
     ap.add_argument('--busybox', required=True, type=Path, help='static arm64 busybox')
+    ap.add_argument('--overlay', type=Path,
+                    help='rootfs overlay tree to embed in the initramfs as e5-overlay/ '
+                         '(firmware, factory data, systemd units); boot/init copies it into '
+                         'the initramfs root before the module pass and into the real root '
+                         'before switch_root')
     ap.add_argument('--cmdline', default=BOOT_CMDLINE.decode())
     ap.add_argument('--out', required=True, type=Path)
     a = ap.parse_args()
@@ -164,6 +169,21 @@ def main():
         if ko is None or not ko.exists():
             sys.exit('missing module %s (looked in %s)' % (name, a.modules))
         files['linux-modules/' + name] = (ko.read_bytes(), stat.S_IFREG | 0o644)
+
+    overlay_files = 0
+    if a.overlay and a.overlay.is_dir():
+        dirs.add('e5-overlay')
+        for path in sorted(a.overlay.rglob('*')):
+            if any(part.startswith('.') for part in path.relative_to(a.overlay).parts):
+                continue
+            name = 'e5-overlay/' + str(path.relative_to(a.overlay))
+            if path.is_dir():
+                dirs.add(name)
+            elif path.is_file():
+                files[name] = (path.read_bytes(),
+                               stat.S_IFREG | (path.stat().st_mode & 0o777))
+                overlay_files += 1
+    print('overlay: %d files from %s' % (overlay_files, a.overlay))
 
     cpio = bytearray()
     ino = 1
@@ -222,6 +242,7 @@ def main():
         'cmdline': a.cmdline,
         'misc_slot_a_hex': slot_a_bc.hex(),
         'misc_slot_b_trial_hex': slot_b_bc.hex(),
+        'overlay_files': overlay_files,
         'persist_log_offset': PERSIST_LOG_OFFSET,
     }
     a.out.with_suffix('.json').write_text(json.dumps(manifest, indent=2) + '\n')

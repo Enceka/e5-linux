@@ -22,10 +22,11 @@ support in it), rebuilt as a general-purpose Linux kernel by
 > The driver does not share a name with the hardware it drives, and while it is
 > missing the charger also blocks USB entirely — `fw_devlink` inspects the USB
 > controller's devicetree suppliers before its probe function runs, and the
-> charger is one of them (`docs/FINDINGS.md` section 7.2). `boot/init` reboots
-> back to Android after 5 minutes unless you create `/run/stay`; do not leave a
-> Linux session unattended — the modem is not brought up and nothing is watching
-> the PM.
+> charger is one of them (`docs/FINDINGS.md` section 7.2). A real session also has
+> to be kept alive: `boot/init` reboots back to Android after ten minutes unless you
+> create `/run/stay`, and a session currently dies on its own after roughly five
+> minutes in a silent reset (`docs/FINDINGS.md` section 9). Do not leave a Linux
+> session unattended — the modem is not brought up and nothing is watching the PM.
 
 ## Why this is not a copy of mu300-linux
 
@@ -55,14 +56,18 @@ channels that survive a failed boot.
 | Ramdisk in boot.img (LK's generic ramdisk path) | ✅ verified in the stock LK log |
 | `boot_b` trial + one-shot slot arming in `misc` | ✅ **boots** |
 | Rollback to Android when Linux never reaches userspace | ✅ verified — the device lands back on slot a |
-| Initramfs: 56 dependency-ordered modules, USB ECM + ACM console | ✅ |
-| **Linux boots on the device** | ✅ **56/56 modules load, nothing left deferred** |
-| USB gadget network (`192.168.77.1`) + root shell over telnet | ✅ **verified live** |
+| Initramfs: 60 dependency-ordered modules, USB ECM + ACM console | ✅ |
+| **Linux boots on the device** | ✅ **60/60 modules load, nothing left deferred** |
+| USB gadget network (NCM, 192.168.77.1, DHCP via systemd-networkd) | ✅ verified live: host gets 192.168.77.x, ping 0% loss |
 | Battery charging under Linux | ✅ **verified — `battery/status = Charging`** |
-| DRM/KMS display (`/dev/dri/card0`, 480x320 DSI panel) | ✅ driver brings it up; a compositor still has to modeset |
-| Debian 13 + Plasma Mobile root filesystem | ⏳ building |
-| Touch panel under Linux | ⏳ `tlsc6x.ko` loads, not yet exercised |
-| Wi-Fi / modem / audio | ✗ no mainline driver, no UCM port |
+| DRM/KMS display (`/dev/dri/card0`, 480x320 DSI panel) | ✅ KWin modesets it (active plane `320x480`, `allocated by = kwin_wayland`) |
+| Debian 13 + Plasma Mobile root filesystem | ✅ 1518 packages, SDDM autologins `plasma-mobile.desktop` |
+| Plasma Mobile session (KWin DRM backend + llvmpipe) | ✅ `kwin_wayland` and `plasmashell` run; the panel is being scanned out |
+| Re-arm from inside Linux (`e5-boot-ok`) | ✅ verified, `misc` byte-compared |
+| Touch panel under Linux | ⏳ `tlsc6x_touch` registers as `event1`, not yet exercised |
+| Wi-Fi | ⏳ **driver packaged and loading** (sprd_wlan_combo, wcn_bsp, cfg80211 all insmod on the device); the chip fails to power on because its DT firmware path is a wcnmodem partition this device lacks -- docs/FINDINGS.md section 8 |
+| Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
+| Modem / audio | ✗ not attempted, no UCM port |
 
 ## Repository layout
 
@@ -152,7 +157,8 @@ is not the expected slot-a state.
 
 With no root filesystem installed yet, the device comes up as a standalone Linux:
 telnet `192.168.77.1` (or the USB CDC-ACM console) — and reboots back to Android
-after 5 minutes, or if the kernel panics. To boot the Linux image already in
+after ten minutes (the safety timer, which a real session stops), or if the kernel
+panics. To boot the Linux image already in
 `boot_b` again without reflashing:
 
 ```sh

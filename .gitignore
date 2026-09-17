@@ -28,3 +28,8 @@ busybox
 rootfs/*.tar
 rootfs/*.tar.gz
 rootfs/*.ext4
+
+# WCN factory data pulled off the device by rootfs/pull-wcn-firmware.sh (vendor
+# blobs, never committed; the firmware/ rule above already covers /lib/firmware)
+rootfs/overlay/mnt/vendor/wifimac.txt
+rootfs/overlay/mnt/vendor/btmac.txt

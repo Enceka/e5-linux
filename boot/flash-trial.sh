@@ -27,7 +27,7 @@ adb push "$IMG" /data/local/tmp/e5-boot.img
 adb push "$BC_B" /data/local/tmp/e5-bc-b.bin
 [ "$(su_do 'sha256sum /data/local/tmp/e5-boot.img' | cut -d' ' -f1)" = "$EXP" ] || { echo "pushed image hash mismatch" >&2; exit 1; }
 
-echo "writing boot_b ($(stat -c %s "$IMG") bytes)"
+echo "writing boot_b ($(wc -c < "$IMG") bytes)"
 su_do 'dd if=/data/local/tmp/e5-boot.img of=/dev/block/by-name/boot_b bs=4M && sync'
 got=$(su_do 'sha256sum /dev/block/by-name/boot_b' | cut -d' ' -f1)
 [ "$got" = "$EXP" ] || { echo "boot_b verify failed ($got); slot a is still active" >&2; exit 1; }

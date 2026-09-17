@@ -11,9 +11,13 @@ Linux boots on the Rongyue E5 and is reachable.  Verified on the device:
 | kernel | `5.15.211-g94401422a7df`, from `e5_rongyue_defconfig` + `kernel/e5-linux.fragment` |
 | boot | slot b, armed through the 32-byte `bootloader_control` in `misc`; falls back to Android when it fails |
 | initramfs | 60 modules, dependency-ordered, `loaded=60 failed=0`, nothing left in `devices_deferred` |
-| USB | gadget enumerates as `0525:a4a1`, `usb0` = 192.168.77.1, root shell over telnet |
+| USB | gadget is **NCM + CDC-ACM** (0525:a4a1); usb0 = 192.168.77.1/24 with a DHCP server (systemd-networkd), so the host gets a lease -- docs/FINDINGS.md section 6.1 |
 | power | `battery/status = Charging` (`aw32257_charger` + `sc27xx-fgu` + `sprd-charger-manager`) |
-| display | `/dev/dri/card0` + `card0-DSI-1` (480x320 ST7365P panel); needs a compositor to modeset |
+| display | `/dev/dri/card0` + `card0-DSI-1` (480x320 ST7365P panel); KWin modesets it (active plane `320x480` AR24, `allocated by = kwin_wayland`) |
+| session | SDDM autologins `e5` into `plasma-mobile.desktop`; `kwin_wayland` (DRM backend) + `plasmashell` + `plasma-welcome` run on llvmpipe |
+| re-arm | `e5-boot-ok.service` refills slot b's try counter from inside Linux (`misc` byte-verified) |
+| Wi-Fi | driver packaged and **loading on the device** (63/63 modules incl. sprd_wlan_combo, wcn_bsp, cfg80211); the chip still fails to power on because its DT firmware path is a wcnmodem partition this device does not have -- docs/FINDINGS.md section 8 |
+| session lifetime | **fixed.** The ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it, pmic_timeout 300) took a session from 295 s to 10+ min and stable -- docs/FINDINGS.md section 9 |
 
 Root filesystem: Debian 13 (trixie) arm64 with **Plasma Mobile 6.3.6**, 1518
 packages installed and configured.  `plasma-mobile.desktop` and
@@ -51,43 +55,48 @@ Three things bite in that chroot, all of them environment leakage from Android:
 
 ## Next steps
 
-1. **Finish publishing the image, then boot it.**
-   `rootfs/device-finalize.sh` got as far as the shrink step before its remote
-   shell was killed; the last few cache entries were removed but the image was
-   never copied into place, and the build filesystem may still be loop mounted.
-   `rootfs/device-publish.sh` does the rest -- drop the remaining cache entries,
-   unmount, and `cp` the image to `/data/e5linux/rootfs.ext4` -- and it is meant
-   to be started with `setsid nohup` so that losing the adb connection does not
-   kill it, which is exactly what happened the first time:
+1. **Wi-Fi: satisfy the DT firmware path.**  The packaging half is done and verified:
+   the WCN modules are in boot/module-order.extra, stage-modules.sh stages 63 of them,
+   they load into the flashed kernel (stage=modules-done loaded=63 failed=0) and the
+   driver probes sprd-marlin3.  It then powers the chip back down and returns -ENODEV
+   because sprd,btwf-file-name in the DT is /dev/block/by-name/wcnmodem, and this
+   device has no such partition.  Next: create that path (a loop device backed by the
+   wcnmodem.bin the image already carries) and provide
+   /vendor/firmware/gnssmodem.bin, both from the overlay; then watch dmesg for the
+   chip booting and ip link for wlan0.
+2. **The five-minute reset is fixed** by staging sprd_pmic_wdt.ko (PMIC watchdog,
+   pmic_timeout 300 with the driver feeding it); a session now runs 10+ minutes where
+   it used to die at 295 s (docs/FINDINGS.md section 9).  Two loose ends worth
+   remembering: the feed is inside the driver, not systemd, so there is still no
+   /dev/watchdog and the RuntimeWatchdogSec drop-in stays inert; and if a future
+   change makes that driver fail to probe, the 295 s reset comes straight back.
+3. **Verify the standalone path's logging.**  In the switch_root path the persistent
+   block always ends at `stage=switch-root` by design -- the writer is the initramfs
+   `init`, and `switch_root` replaces it (the last run's block reads `uptime=14.74`,
+   `loaded=60 failed=0`, `switch-root root=/disk init=/lib/systemd/systemd`, which is
+   as far as it can go).  In the *standalone* path `init` keeps running, and there the
+   block used to stop after its first write: `persist()`'s stamp lived *inside* the
+   lock directory, so `rmdir` could not release it and every later call returned early
+   (`docs/FINDINGS.md` §4).  `boot/init` now keeps the stamp beside the lock and
+   releases both with `rm -rf`, and stops the persist loop and the safety timer by pid
+   (`jobs -p` does list them in busybox ash -- checked -- but two explicit pids say
+   what is meant).  Check it with a boot that has no root filesystem available (rename
+   `rootfs.ext4`): the block should keep getting rewritten every fifteen seconds until
+   the ten-minute timer fires, and `cat /run/stages` inside the session should show
+   `stage=timer-reboot` before it does.
+4. **Touch, and pixels.**  `tlsc6x_touch` is registered as an input device (`event1`)
+   and the panel is modeset, but nothing has been touched -- the device has no
+   keyboard, so touch is the only input.  There is also no pixel-level proof of what
+   the panel shows: `spectacle` inside the session, dumped over the serial console,
+   would settle both at once.
+5. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
+   into `misc` from inside the running system (byte-compared), so rebooting returns
+   to Linux instead of Android.
 
-   ```
-   adb push rootfs/device-publish.sh /data/local/tmp/
-   adb shell su -c 'setsid nohup sh /data/local/tmp/device-publish.sh \
-       >/data/local/tmp/device-publish.log 2>&1 </dev/null &'
-   ```
-
-   At the end of the session the device had also disappeared from USB entirely
-   (`adb devices` empty, nothing in `lsusb`), so check that it is reachable
-   before anything else.  Nothing on the device is armed for Linux: `misc`
-   points at slot a and the device boots Android, so it is safe to leave.
-2. **Boot it.**  `boot/install-rootfs.sh` (or `work/doflash.sh`) arms slot b and
-   reboots.  `boot/init` finds the image, loop mounts it, and `switch_root`s.
-   Expect `stage=switch-root` in the persistent log.
-3. **See whether Plasma Mobile comes up.**  This is the open risk: the UMS9621
-   GPU has no mainline Mesa driver, so everything renders with llvmpipe.  If the
-   session fails, the fallbacks to try, in order:
-   * `KWIN_COMPOSE=Q` / a software scene backend,
-   * `QT_QUICK_BACKEND=software`,
-   * and if KWin simply will not composite without GL, Phosh instead -- its
-     wlroots compositor has a **pixman (pure CPU) renderer** (`WLR_RENDERER=pixman`)
-     and would avoid GL completely.
-4. **Touch.**  `tlsc6x.ko` loads but has not been exercised; the device has no
-   keyboard, so touch is the only input.
-5. **Re-arm behaviour.**  `e5-boot-ok.service` is gated on `graphical.target`:
-   until a session actually starts, slot b is not re-armed and the try counter
-   runs out, so the device returns to Android by itself.
-6. **The 300 s mystery.**  An earlier Linux session rebooted with no record in the
-   persistent block after 14 s.  The block stopped because `persist()`'s lock can
-   wedge (`boot/init` now expires it after two minutes) and the timer is now ten
-   minutes and logs its decision to `/dev/kmsg`.  Worth confirming that a Linux
-   session now survives unattended.
+Operationally, the recipe that works from a macOS host with no network on the device
+is: rebuild the boot image locally with `boot/build-boot-image.py` (stock `boot_b`
+dump + the kernel `Image` and modules taken from the ramdisk already on the device),
+flash with `boot/flash-trial.sh`, and drive the running system over the USB CDC-ACM
+console (`/dev/cu.usbmodemE5LINUX3`, `115200`, login `root`/`root`) -- or telnet to
+`192.168.77.1` once the gadget is up on Linux.  A slot-b trial is one attempt: the
+counter runs out, and the next reset lands back in Android.

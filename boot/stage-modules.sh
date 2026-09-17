@@ -39,10 +39,19 @@ while IFS= read -r f; do
 done < <(find "$O" -name '*.ko' -type f)
 echo "staged $n modules into the depmod tree"
 
-for f in modules.builtin modules.builtin.modinfo modules.order; do
+# Module.symvers is what the depmod-free fallback uses to know which module
+# exports a symbol; depmod itself works it out from the .ko files.
+for f in modules.builtin modules.builtin.modinfo modules.order Module.symvers; do
     if [ -f "$O/$f" ]; then cp "$O/$f" "$MODDIR/$f"; fi
 done
-depmod -b "$DEST/.depmod" "$REL" 2>&1 | head -5 || true
+if command -v depmod >/dev/null 2>&1; then
+    depmod -b "$DEST/.depmod" "$REL" 2>&1 | head -5 || true
+else
+    # No kmod on this host (macOS): depmod's rule, derived from Module.symvers
+    # plus each module's undefined symbols.
+    echo "depmod not found -- module dependencies from boot/gen-modules-dep.py"
+    python3 "$HERE/gen-modules-dep.py" "$MODDIR" > "$MODDIR/modules.dep"
+fi
 
 # 2. dependency closure, dependency-first
 python3 "$HERE/gen-module-order.py" "$MODDIR/modules.dep" \

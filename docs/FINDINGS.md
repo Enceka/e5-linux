@@ -147,6 +147,32 @@ only archives ylog after a *successful* boot). Three channels are used:
 
 `tools/collect-logs.sh` pulls all three after the device is back in Android.
 
+**In the switch_root path the block deliberately ends at `stage=switch-root`, and
+that is not a bug.** The writer is the initramfs `init`; `switch_root` replaces
+PID 1 and the initramfs goes away with it, so there is nothing left to write the
+block. A block whose last stage is `stage=switch-root` therefore says the session got
+all the way into the real root filesystem — which is exactly what the last run
+recorded (`uptime=14.74`, `loaded=60 failed=0`, `default-boot-linux (slot a restore
+skipped)`, `switch-root root=/disk init=/lib/systemd/systemd`). The last line
+`boot/init` writes before handing over, `stage=switch-root-jobs-killed`, is only in
+`/run/stages` inside the running system (`cat /run/stages`), never in this block.
+Anything that happens after switch_root has to be logged from userspace: the block
+cannot see it, so it cannot diagnose a session that dies later (see §9).
+
+**In the standalone path — no root filesystem, `init` keeps running — the block used
+to stop after its first successful write.** `persist()` takes a `/run/persist.lock`
+directory so the periodic loop cannot race the caller, and it recorded the timestamp
+*inside* that directory (`/run/persist.lock/stamp`) and released it with
+`rmdir /run/persist.lock`. `rmdir` cannot remove a directory that holds a file, so
+the release always failed; from then on every call either returned because the lock
+looked younger than the two-minute staleness limit or, past that limit, failed to
+re-create it. The lock-expiry logic could not save it either — the age test reads the
+lock *path* itself (`cat /run/persist.lock`, a directory, always empty), and the
+expiry's `rmdir` fails for the same reason. `boot/init` now keeps the stamp beside the
+lock (`/run/persist.stamp`) and releases both with `rm -rf`. Note the contrast with
+the campaign's run 1, which used an older `init` with no locking at all and did keep
+writing every fifteen seconds right up to `uptime=276.28`.
+
 ## 5. Device-alive risks specific to this hardware
 
 * ~~**Charging has no driver path.**~~ **Superseded — see §7.2.** The E5 charges
@@ -181,6 +207,42 @@ was a few seconds slower than stock, and the four `musb_sprd` fixes
 **VERIFIED** (§7): `/sys/class/udc/musb-hdrc.1.auto/state` reads `configured`,
 the host enumerates `0525:a4a1 Linux-USB Ethernet Gadget`, the initramfs udhcpd
 hands out `192.168.77.4/24`, and telnet to `192.168.77.1` gives a root shell.
+
+### 6.1 NCM instead of ECM, and a DHCP server that actually runs
+
+The gadget originally spoke CDC-ECM.  macOS does bind it (it shows up as an
+Ethernet interface), but nothing served DHCP on a normal boot: the initramfs udhcpd
+only runs on the standalone path, and on the switch_root path init just does
+ifconfig usb0 up, so the host sat on a 169.254 link-local address forever.  Two
+changes:
+
+* the configfs function is now **ncm.usb0** (the kernel already had
+  CONFIG_USB_CONFIGFS_NCM=y and CONFIG_USB_F_NCM=y; only the initramfs script named
+  ecm.usb0), which is also the protocol macOS handles best.  The CDC-ACM console is
+  unchanged, and it is still the channel this work is driven over.
+* usb0 is configured by systemd-networkd -- Address=192.168.77.1/24 plus
+  DHCPServer=yes, in /etc/systemd/network/10-e5-usb0.network, with NetworkManager
+  told to leave the interface alone.  networkd is pulled in by a drop-in on
+  NetworkManager.service rather than by enabling it, because the overlay travels
+  into the initramfs as plain files and cannot carry symlinks.
+
+Result on hardware: the device reports usb0 UP 192.168.77.1/24 with networkd active
+and State: routable (configured), the Mac gets 192.168.77.92 by DHCP, and
+ping 192.168.77.1 is 0% loss.  (There is no sshd in the image, so the LAN is ICMP/HTTP
+for now; the serial console is still the shell.)
+
+### 6.2 The power key used to power the device off
+
+Symptom: the screen goes dark and pressing power does not bring it back -- and the
+device disappears from USB entirely.  Cause: systemd-logind's default
+HandlePowerKey=poweroff.  Plasma Mobile drives the key itself, but logind saw it
+first, so "wake the screen" was executed as "power off".
+
+/etc/systemd/logind.conf.d/10-e5-power.conf now sets HandlePowerKey,
+HandlePowerKeyLongPress, HandleSuspendKey, HandleHibernateKey, HandleLidSwitch and
+IdleAction all to ignore -- this port has no usable suspend/resume either, so nothing
+should try.  Verified with busctl get-property: HandlePowerKey = "ignore",
+IdleAction = "ignore".
 
 ## 7. What actually happened: the boot campaign
 
@@ -284,3 +346,252 @@ still leaves a log, does not work on this platform — the eMMC partitions are n
 in `/sys/class/block` yet and the discovery came up empty for twenty seconds.
 The authoritative attempt stays after the module pass; the early one is best
 effort. `boot/init` now does both.
+
+## 8. Wi-Fi: the driver is in the tree and builds, but nothing ships it
+
+`lsmod` under Linux has no Wi-Fi module and there is no `wlan0` — not because the
+hardware has no driver, but because the driver was never put into the initramfs.
+
+The hardware is a Unisoc WCN combo chip (sc2332/sc2355 family); the board's own DT
+wires it up over SDIO as `sprd,sc2355-sdio-wifi`. Both halves of the driver are in
+the kernel tree e5-linux builds from:
+
+| module | source | config in `e5_rongyue_defconfig` |
+|---|---|---|
+| `wcn_bsp.ko` | `drivers/unisoc_platform/sprdwcn/` — sprdwcn bus plus the `sdio/sdiohal_*` glue | `CONFIG_UNISOC_WCN_BSP=m` (line 758) |
+| `sprd_wlan_combo.ko` | `drivers/unisoc_platform/sprd_wlan_combo/` — fullmac cfg80211 WLAN driver | `CONFIG_UNISOC_WLAN_COMBO=m` (line 762) |
+
+The Kconfig is reachable — `drivers/unisoc_platform/Kconfig` sources both
+sub-Kconfigs and `drivers/Kconfig` sources that file — so `make Image modules dtbs`
+really does build both `.ko` files, and `CONFIG_CFG80211=m` is present for the
+fullmac glue. The `.ko` files are in the kernel build output; they are simply not in
+`boot/module-order.txt`, which is the only list `boot/stage-modules.sh` packs into
+the initramfs.
+
+That they are second-stage on Android is visible on the running device:
+
+    # ls /vendor/lib/modules | grep -iE "wcn|wlan|cfg80211"
+    cfg80211.ko
+    sprd_wlan_combo.ko
+    wcn_bsp.ko
+
+and a first-stage device check says the rest of the path is intact: the SDIO
+controllers inside the SoC (`22200000.sdio`, `22210000.sdio`) *do* defer early on
+their PMIC power domain -- `probe of 22210000.sdio returned -517` at 1.33 s, before
+any module is loaded -- but by `uptime=14.74`, when the initramfs writes its last log
+block, `/sys/kernel/debug/devices_deferred` is empty, so the PMIC driver from the
+module pass is what unblocks them. Wi-Fi is missing its driver, not its bus.
+
+**Why they were missing is the same story as section 7.2.** `module-order.stock` is
+Android's *first-stage* `modules.load`. Android brings Wi-Fi up from its second stage
+(`modprobe`, out of `/vendor/lib/modules`), so the WCN modules are not in that
+83-entry list — and because the initramfs uses `insmod` with a fixed order, there is
+no modprobe afterwards to pull them in either. The result is a silent gap: the
+modules are built, nothing loads them, and the only symptom is that Wi-Fi does not
+exist. The charger (`aw32257_charger.ko`, section 7.2) and the display power domain
+(`sprd_vpu_pw_domain.ko`) were the same shape of bug.
+
+The fix is two lines in `boot/module-order.extra`:
+
+    wcn_bsp.ko
+    sprd_wlan_combo.ko
+
+`boot/gen-module-order.py` resolves the closure, so `cfg80211.ko` is pulled in
+automatically and the SDIO/MMC core the bus needs is built in (`CONFIG_MMC=y`,
+`CONFIG_MMC_SDHCI=y`). The kernel modules then have to be rebuilt and restaged
+(`kernel/build-linux.sh`, `boot/stage-modules.sh`, then the boot image). No `.ko`
+files were on the macOS host used for this session, so the entries are in place but
+**UNVERIFIED on hardware**.
+
+### 8.1 Loading the modules is necessary, not sufficient
+
+`drivers/unisoc_platform/sprdwcn/boot/wcn_boot.c` and `wcn_integrate_boot.c` take the
+WCN core out of reset with `request_firmware()`, so the chip only boots if these are
+where the Linux firmware loader looks (`/lib/firmware` in the root filesystem):
+
+    wcnmodem.bin
+    gnssmodem.bin
+    wifi_board_config*.ini
+    connectivity_configure*.ini
+    connectivity_calibration*.ini
+    tsx_data
+
+and the driver additionally reads factory data from Android paths that have no
+Debian equivalent:
+
+    /mnt/vendor/wifimac.txt                              (factory MAC)
+    /mnt/vendor/wcn/connectivity_calibration_bak.ini
+    /productinfo/wcn/tsx_bt_data.txt
+    /data/vendor/wifi/wifimac_temp.txt
+
+Read out of the running Android, these are the files that actually exist on this
+device and where they live:
+
+| file | location on Android | note |
+|---|---|---|
+| `wcnmodem.bin` | `/odm/firmware/wcnmodem.bin` | 947 KiB, the WCN firmware |
+| `gnssmodem.bin` | `/odm/firmware/gnssmodem.bin` | 596 KiB, requested during WCN boot too |
+| `wifi_board_config*.ini` | `/odm/firmware/` and `/odm/etc/` | `.ini`, `.xpe.ini`, `_aa.ini`, `_aa.xpe.ini` — the board variants all ship |
+| `tsx_data` | `/vendor/firmware/tsx_data` | the only `tsx`-ish file on the vendor image |
+| factory MAC | `/mnt/vendor/wifimac.txt` | `fc:b5:85:d0:9d:47` on this unit |
+| calibration dir | `/mnt/vendor/wcn/` | empty on Android too; the driver *writes* `connectivity_calibration_bak.ini` there, so it has to exist and be writable |
+
+`/odm` is an `erofs` logical partition inside `super` (`/dev/block/dm-0`) and
+`/vendor` likewise, so the blobs cannot just be mounted from Linux the way
+`userdata` can. They have to be pulled off the device from Android and shipped inside
+the `rootfs.ext4` (put them in `/lib/firmware`) — the same reasoning as section 2,
+just for firmware rather than the root filesystem. `/mnt/vendor` is different: that is
+plain **`/dev/block/mmcblk0p1`, ext4, 5.3 MiB**, so a Linux boot can mount it
+read-only at `/mnt/vendor` directly and get `wifimac.txt` (and `btmac.txt`) from the
+real partition instead of a copy. The `calinv` partition (`mmcblk0p69`) mounts too,
+but it is empty — it is not where the calibration lives.
+
+One thing works in our favour: the same code waits for a filesystem to appear before
+giving up ("request_firmware keep waiting for file system ready, the max waiting time
+is 80s"), which is why loading the WCN modules from the initramfs — where
+`/lib/firmware` does not exist yet — is still workable: the driver retries until the
+Debian root filesystem is mounted.
+
+`rootfs/pull-wcn-firmware.sh` does the copy: it stages `/odm/firmware`'s WCN set,
+`/vendor/firmware/tsx_data` and the `/mnt/vendor` factory files into
+`rootfs/overlay/lib/firmware/` and `rootfs/overlay/mnt/vendor/` (which
+`device-finalize.sh` then applies like any other overlay file), skipping paths that
+do not exist. They are vendor blobs and stay out of the repository. On this unit
+`tsx_data` is skipped: `/vendor/firmware/tsx_data` is a symlink to
+`/mnt/vendor/productinfo/wcn/tsx_bt_data.txt` and that target is a dangling link even
+under Android, whose Wi-Fi works regardless -- so it is not fatal, but it also cannot
+be copied.
+
+### 8.2 Verified on the device
+
+The packaging fix works.  Built from the tree and listed in
+boot/module-order.extra, the WCN stack loads on a real boot:
+
+    stage=modules-done loaded=63 failed=0
+    sprd_wlan_combo      2510848  0
+    cfg80211              888832  1 sprd_wlan_combo
+    wcn_bsp               430080  1 sprd_wlan_combo
+
+and the driver probes the chip: marlin_probe: device node name: sprd-marlin3, the DT
+supplies (avdd12, avdd33, dcxo18) resolve, and the WCN bus channels come up.  The
+firmware is reachable because the initramfs now carries the rootfs overlay and
+materialises it *before* the module pass
+(stage=overlay-early files=21 firmware=6), so request_firmware() finds wcnmodem.bin
+without waiting for the real root filesystem.
+
+### 8.3 The next blocker: the driver reads its firmware from a partition
+
+The chip still does not come up, and this is why.  The WCN base driver takes the
+BT/Wi-Fi firmware from a path in the device tree, not from the firmware loader:
+
+    /proc/device-tree/sprd-marlin3/sprd,btwf-file-name  = /dev/block/by-name/wcnmodem
+    /proc/device-tree/sprd-marlin3/sprd,gnss-file-name  = /vendor/firmware/gnssmodem.bin
+
+and this device has **no partition named wcnmodem** -- the GPT has no wcn* name at
+all.  wcn_boot.c opens that path with filp_open() and reads the firmware out of it,
+so the boot ends with the chip being powered back down
+
+    WCN BASEwifipa 3v3 0 ... avdd12 power disable ... marlin chip en pull down
+    sprd-wlan: failed to power on WCN!
+    probe of sprd-marlin3:wlan returned 19 after 60553796 usecs
+
+i.e. -ENODEV after the driver's 80-second retry window.  (supply dvdd12 not found,
+using dummy regulator is benign; the other three supplies resolve.)
+
+The path is what has to be satisfied, and it can be satisfied from userspace: point
+/dev/block/by-name/wcnmodem at a loop device backed by the wcnmodem.bin this image
+already carries, and provide /vendor/firmware/gnssmodem.bin.  Both belong in the
+overlay, which boot/init already knows how to apply.
+
+### 8.4 What to look at when it is tried
+
+    dmesg | grep -iE "wcn|wlan|sdio"      # probe, firmware load, chip boot
+    lsmod | grep -E "wcn_bsp|sprd_wlan_combo"
+    ip link                               # wlan0 should appear
+    cat /sys/class/net/wlan0/address      # factory MAC, or random if unset
+
+
+## 9. The five-minute reset: the PMIC watchdog, not a panic
+
+**Solved.** A Linux session used to die about five minutes in, silently, and it looked
+like a panic.  It never was one: the bootloader arms the *PMIC* watchdog as well as the
+SoC one, and the driver that feeds it was built but never staged into the initramfs.
+
+Measured on the device with the host doing *nothing at all* -- no serial console
+opened, no adb, no reads -- using only the bootloader log:
+
+    LK hands over to Linux      21:21:27
+    LK runs again (the reset)   21:26:22       295 s
+
+and the reset leaves no console output, no pstore record and is classified by LK as a
+reset (ANA_REG_GLB_POR_OFF_FLAG:0x0).  With nobody reading the serial port a real panic
+would look identical, which is why this stayed a mystery.
+
+The answer is in the PMIC watchdog driver's own probe message, once it is loaded:
+
+    [   13.489569] calling  init_module+0x0/0xfe8 [sprd_pmic_wdt]
+    [   13.490350] sprd pmic wdt:pmic_timeout 300,feed 250
+    [   13.501574] probe of 64400000.spi:pmic@0:watchdog@40 returned 0
+
+pmic_timeout 300 -- a 300 second timeout, matching the ~295 s observed -- and Android
+binds that same driver to that same device
+(64400000.spi:pmic@0:watchdog@40 under /sys/bus/platform/drivers/sprd-pmic-wdt), which
+is why Android survives an armed PMIC watchdog and Linux did not.  Our initramfs had
+sprd_pmic_wdt.ko built (out_linux/drivers/watchdog/sprd_pmic_wdt.ko) but never listed
+in boot/module-order.txt, so nothing ever loaded it and nothing fed the watchdog LK
+had armed.
+
+The fix is that one entry in boot/module-order.extra, and the result is visible
+directly:
+
+    before:  session dead at 295 s, every boot
+    after:   uptime 10 min and still running, Plasma Mobile up (load average ~8)
+
+### 9.1 What it was not
+
+* **Not a panic or an oops.**  Nothing reaches ttyGS0 (a kernel console), pstore stays
+  empty, and LK reports a reset rather than a power-off.
+* **Not the harness or this session's tooling.**  The 295 s figure came from a boot
+  with the host doing nothing; the 300 s cap on a host tool call only kills the shell
+  on the *host*.
+* **Not the initramfs safety timer.**  It sleeps 600 s and is stopped before
+  switch_root (a session records stage=switch-root-jobs-killed persist=189 timer=190);
+  firing would log stage=timer-reboot first.
+* **Not the SoC watchdog driver.**  sprd_wdt_fiq does probe (641e0000.watchdog), but
+  reading its registers through /dev/mem shows CTRL = 0x4 -- the counter-enable bit is
+  clear, so it was never counting -- and disarming it explicitly changed nothing: the
+  session still died at 295 s.  boot/init now only *logs* those registers, as a
+  diagnostic, and CONFIG_DEVMEM=y (kernel/e5-linux.fragment) stays for that.
+* **Not the PMIC monitor register LK prints.**  ANA_REG_GLB_WDG_RST_MONITOR reads 0x0
+  after the reset; that register tracks a different watchdog state than the PMIC
+  watchdog driver's own timeout.
+
+## 10. Building the kernel on macOS with clang
+
+The kernel does build on a macOS arm64 host with Homebrew's LLVM, and the result is
+loadable on the device: the modules built this way carry the same vermagic as the
+ones in the running kernel
+(5.15.211-g94401422a7df SMP preempt mod_unload modversions aarch64) and the same
+module_layout CRC (0x78fb914d), which is what makes "build the modules only, keep the
+flashed kernel" work.
+
+What macOS lacks is the Linux tooling *around* the compiler.  Each gap is a host-side
+workaround; the kernel tree is never modified, so setlocalversion still yields
+5.15.211-g94401422a7df (no -dirty suffix):
+
+| gap | workaround |
+|---|---|
+| /usr/bin/make is GNU 3.81, the build wants 3.82+ | brew install make -> work/bin/make -> gmake 4.4 |
+| BSD sed -i and cp -T in merge_config.sh | brew install gnu-sed coreutils, their gnubin dirs first in PATH |
+| no <elf.h> | glibc's elf.h in work/hostinc/ (this tree's modpost has its own ELF parser and needs only the header) |
+| no <asm/types.h> for host tools (Linux hosts get it from linux-libc-dev) | work/hostinc/asm/* -> symlinks to the kernel's include/uapi/asm-generic/* |
+| Darwin declares uuid_t (sys/unistd.h -> sys/_types/_uuid_t.h, used by gethostuuid.h) which collides with the uuid_t in scripts/mod/file2alias.c | both SDK headers stubbed in work/hostinc/ |
+| no depmod (kmod is Linux-only) | boot/gen-modules-dep.py: depmod's rule, derived from Module.symvers plus each module's undefined symbols; boot/stage-modules.sh uses it when depmod is missing |
+
+The last one reproduces depmod's answer rather than approximating it -- both find
+sprd-drm.ko -> ocp2131.ko, sprd-gsp.ko, and the WCN entry comes out as
+sprd_wlan_combo.ko -> wcn_bsp.ko, sipc-core.ko, cfg80211.ko.  CONFIG_DEBUG_INFO and
+DEBUG_INFO_BTF are already off in kernel/e5-linux.fragment (so no pahole is needed)
+and arm64 needs no objtool.  The exact environment is recorded in work/build6.sh;
+a full Image + modules build takes about twenty minutes on an M-series host with -j8.
+

@@ -1,0 +1,11 @@
+[Match]
+Name=usb0
+
+[Network]
+# The management LAN the initramfs also sets up.  Until now nothing served DHCP on a
+# normal (non-standalone) boot, so the host only ever saw a link-local address.  Using
+# networkd here rather than NetworkManager keeps it dependency-free: systemd's DHCP
+# server is built in, while NM's "shared" method needs dnsmasq.
+Address=192.168.77.1/24
+DHCPServer=yes
+IPv6AcceptRA=no

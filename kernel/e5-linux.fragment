@@ -12,10 +12,10 @@
 CONFIG_DEVTMPFS=y
 CONFIG_DEVTMPFS_MOUNT=y
 
-# --- configfs: the initramfs builds its own USB gadget (ECM + ACM) through it
+# --- configfs: the initramfs builds its own USB gadget (NCM + ACM) through it
 CONFIG_CONFIGFS_FS=y
 
-# --- USB gadget: ECM network + CDC-ACM console, built in so the console does not
+# --- USB gadget: NCM network + CDC-ACM console, built in so the console does not
 #     depend on module load order. musb itself stays a module (stock order).
 CONFIG_USB_LIBCOMPOSITE=y
 CONFIG_USB_U_ETHER=y
@@ -211,3 +211,20 @@ CONFIG_LEGACY_PTYS=y
 # --- SELinux stays built in (the vendor tree expects it) but is disabled from
 #     the kernel command line; no policy is shipped in the Linux rootfs
 CONFIG_DEFAULT_SECURITY_DAC=y
+
+# --- watchdog -----------------------------------------------------------------
+# The bootloader hands over with the SoC watchdog armed (LK logs "wdt was enabled
+# by miscdata" and passes sprdboot.wdten=e551 / dswdten=enabled), and this tree's
+# sprd_wdt_fiq driver only ever loads a new timeout from paths Android drives -- the
+# driver's own .start/.set_timeout are the only writers of the load registers.  So
+# nothing under Linux re-arms it and it fires roughly five minutes into every
+# session (docs/FINDINGS.md section 9, measured at 295 s with the host idle).
+#
+# This one turned out not to be what fires (its counter-enable bit is clear -- see
+# docs/FINDINGS.md section 9; the PMIC watchdog is the one that reset the machine).
+# CONFIG_DEVMEM stays anyway: /dev/mem is what makes the watchdog registers readable
+# from the initramfs for diagnostics like that.  Android's defconfig turns it off and
+# nothing else here uses it.  Patching drivers/watchdog/*.c instead would dirty the
+# kernel tree, and setlocalversion then appends -dirty, which changes the release
+# string the modules must match.
+CONFIG_DEVMEM=y

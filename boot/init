@@ -41,23 +41,25 @@ bootb=
 PERSIST_SEEK_BLOCKS=14336      # 56 MiB / 4096
 persist() {
     [ -n "$bootb" ] && [ -b "$bootb" ] || return
-    # The lock keeps the periodic loop from racing the script's own calls.  It has
+    # The lock keeps the periodic loop from racing the script's own calls, and it has
     # to expire on its own: a persist interrupted half way used to leave the lock
     # behind, after which every later call returned silently and the log simply
-    # stopped -- which is exactly how a boot that died at 300 s ended up with its
-    # last record at 14 s.  Anything older than two minutes is stale by
+    # stopped, so a boot that died after five minutes had its last record at 14 s.
+    # The stamp deliberately lives *next to* the lock instead of inside it: rmdir
+    # cannot remove a directory that holds the stamp, which is exactly how the lock
+    # stopped being released at all.  Anything older than two minutes is stale by
     # definition, since the loop runs every fifteen seconds.
     if [ -d /run/persist.lock ]; then
         now=$(cut -d. -f1 /proc/uptime)
-        made=$(cat /run/persist.lock 2>/dev/null)
+        made=$(cat /run/persist.stamp 2>/dev/null)
         case "$made" in
             ''|*[!0-9]*) made=0 ;;
         esac
         [ $((now - made)) -gt 120 ] || return
-        rmdir /run/persist.lock 2>/dev/null
+        rm -rf /run/persist.lock /run/persist.stamp
     fi
     mkdir /run/persist.lock 2>/dev/null || return
-    echo "$(cut -d. -f1 /proc/uptime)" > /run/persist.lock/stamp 2>/dev/null
+    echo "$(cut -d. -f1 /proc/uptime)" > /run/persist.stamp 2>/dev/null
     {
         echo "E5-PERSIST-BEGIN uptime=$(cut -d' ' -f1 /proc/uptime) release=$(uname -r)"
         cat /run/stages
@@ -72,7 +74,7 @@ persist() {
     head -c 65536 /dev/zero >> /run/persist.txt
     dd if=/run/persist.txt of="$bootb" bs=4096 seek=$PERSIST_SEEK_BLOCKS conv=notrunc 2>/dev/null
     sync
-    rmdir /run/persist.lock
+    rm -rf /run/persist.lock /run/persist.stamp
 }
 
 log "stage=init-start pid=$$ release=$(uname -r)"
@@ -86,6 +88,18 @@ mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
 echo /bin/mdev > /proc/sys/kernel/hotplug
 mdev -s
 log "stage=devfs-ready"
+
+# The initramfs carries the rootfs overlay (firmware, factory data, the e5-linux
+# units) so it does not have to be baked into rootfs.ext4 separately.  Materialise
+# it here, before the module pass: the WCN driver's request_firmware() then finds
+# wcnmodem.bin in this root, instead of waiting for the real root filesystem.
+if [ -d /e5-overlay ]; then
+    mkdir -p /lib /mnt
+    cp -a /e5-overlay/lib/. /lib/ 2>/dev/null
+    cp -a /e5-overlay/mnt/. /mnt/ 2>/dev/null
+    cp -a /e5-overlay/etc/. /etc/ 2>/dev/null
+    log "stage=overlay-early files=$(find /e5-overlay -type f | wc -l) firmware=$(ls /lib/firmware 2>/dev/null | wc -l)"
+fi
 
 # Turn hangs into panics so the bootloader slot logic can roll back to Android.
 echo 1 > /proc/sys/kernel/softlockup_panic
@@ -120,11 +134,15 @@ bootb=
 find_partitions 6 || true
 persist
 (while :; do sleep 15; persist; done) &
+persist_job=$!
 
 # Safety net: reboot after ten minutes, by which time misc points at slot a again.
 # Create /run/stay (through the serial console or telnet) to keep Linux running.
 # This is the fallback path only -- when a root filesystem is found the timer is
-# killed before switch_root, so a real system never inherits it.
+# killed before switch_root, so a real system never inherits it.  Both background
+# jobs are stopped by pid rather than through `jobs -p`: `jobs -p` does list them
+# in busybox ash, but naming the two pids says exactly what is being stopped and
+# cannot silently stop covering a job if another one is ever added.
 #
 # The decision is written to /dev/kmsg as well as the persistent block, because
 # the persistent block is written through the same code path this timer is
@@ -135,6 +153,7 @@ persist
  log "stage=timer-reboot"
  echo "<3>E5-LINUX: safety timer expired, no /run/stay -- rebooting to slot a" > /dev/kmsg
  persist; reboot -f; sleep 10; echo b > /proc/sysrq-trigger) &
+timer_job=$!
 
 loaded=0
 failed=0
@@ -151,6 +170,19 @@ if [ -f /etc/module-order ]; then
 fi
 mdev -s
 log "stage=modules-done loaded=$loaded failed=$failed"
+
+# Diagnostic only: log the SoC watchdog's state.  This is *not* what used to reset the
+# machine five minutes in -- that was the PMIC watchdog, fixed by loading
+# sprd_pmic_wdt.ko (docs/FINDINGS.md section 9).  Reading these registers needs the
+# CONFIG_DEVMEM=y this image sets; the SoC counter-enable bit is clear (CTRL = 0x4),
+# so it is not counting.  Offsets from drivers/watchdog/sprd_wdt_fiq.c (base
+# 0x641e0000).
+wdt=0x641e0000
+if [ -c /dev/mem ]; then
+    log "stage=wdt ctrl=$(devmem $((wdt + 0x8)) 32) int_raw=$(devmem $((wdt + 0x10)) 32) cnt=$(devmem $((wdt + 0x18)) 32)"
+else
+    log "stage=wdt-skip no-devmem"
+fi
 find_partitions 20 || true
 log "stage=partitions misc=${misc:-none} boot_b=${bootb:-none}"
 persist
@@ -171,18 +203,18 @@ ifconfig lo 127.0.0.1 up
 log "stage=usb-configfs"
 mount -t configfs configfs /config 2>/run/configfs.err || log "stage=configfs-fail $(cat /run/configfs.err)"
 g=/config/usb_gadget/linux
-mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409" "$g/functions/ecm.usb0"
+mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409" "$g/functions/ncm.usb0"
 echo 0x0525 > "$g/idVendor"
 echo 0xa4a1 > "$g/idProduct"
 echo 0x0200 > "$g/bcdUSB"
 echo E5LINUX > "$g/strings/0x409/serialnumber"
 echo Unisoc > "$g/strings/0x409/manufacturer"
 echo "E5 Linux USB Ethernet" > "$g/strings/0x409/product"
-echo "Linux ECM + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
+echo "Linux NCM + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
 echo 250 > "$g/configs/c.1/MaxPower"
-echo 02:50:00:00:e5:01 > "$g/functions/ecm.usb0/dev_addr"
-echo 02:50:00:00:e5:02 > "$g/functions/ecm.usb0/host_addr"
-ln -s "$g/functions/ecm.usb0" "$g/configs/c.1/f1"
+echo 02:50:00:00:e5:01 > "$g/functions/ncm.usb0/dev_addr"
+echo 02:50:00:00:e5:02 > "$g/functions/ncm.usb0/host_addr"
+ln -s "$g/functions/ncm.usb0" "$g/configs/c.1/f1"
 mkdir -p "$g/functions/acm.GS0" && ln -s "$g/functions/acm.GS0" "$g/configs/c.1/f2"
 
 log "stage=usb-wait-udc"
@@ -261,9 +293,28 @@ if [ -n "$rootdir" ]; then
     [ -n "$data" ] && echo "$data" > /run/e5linux/data-dev
     init=/sbin/init
     [ -x /newroot/lib/systemd/systemd ] && init=/lib/systemd/systemd
+    # ... and into the real root filesystem, so the files survive and every later
+    # boot (this one included -- systemd starts after this) has them in place.
+    if [ -d /e5-overlay ]; then
+        # Copy file by file: the Debian root has /lib, /bin and /sbin as symlinks
+        # into /usr, and a single cp -a of the whole tree refuses to merge into
+        # those ("target '/newroot/./lib' is not a directory"), which left the
+        # firmware behind.  mkdir -p and cp follow the symlinks happily.
+        applied=0
+        for f in $(find /e5-overlay -type f); do
+            dst="/newroot/${f#/e5-overlay/}"
+            mkdir -p "$(dirname "$dst")" 2>/dev/null
+            cp -a "$f" "$dst" 2>/dev/null && applied=$((applied + 1))
+        done
+        log "stage=overlay-applied files=$applied"
+    fi
     log "stage=switch-root root=$rootdir init=$init os=$(sed -n 's/^PRETTY_NAME=//p' /newroot/etc/os-release)"
     persist
-    kill $(jobs -p) 2>/dev/null
+    # Stop the persist loop and the safety timer by pid before handing over: the
+    # system that is about to start must not be rebooted from behind by a timer
+    # that was only meant for the standalone fallback.
+    kill $persist_job $timer_job 2>/dev/null
+    log "stage=switch-root-jobs-killed persist=${persist_job:-?} timer=${timer_job:-?}"
     for p in /proc/[0-9]*; do [ "${p#/proc/}" = 1 ] || kill -9 "${p#/proc/}" 2>/dev/null; done
     umount /config 2>/dev/null
     mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run

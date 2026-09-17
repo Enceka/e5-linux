@@ -10,7 +10,9 @@ Linux boots on the Rongyue E5 and is reachable.  Verified on the device:
 |---|---|
 | kernel | `5.15.211-g94401422a7df`, from `e5_rongyue_defconfig` + `kernel/e5-linux.fragment` |
 | boot | slot b, armed through the 32-byte `bootloader_control` in `misc`; falls back to Android when it fails |
-| initramfs | 60 modules, dependency-ordered, `loaded=60 failed=0`, nothing left in `devices_deferred` |
+| input | **the 9-key keypad works.** `sprd-keypad` is input2/event2 with KEY_1..KEY_9, KEY_0, `*` `#`; power and volume keys are in `gpio-keys` (input0) -- docs/FINDINGS.md section 12 |
+| swap | 4 GiB zram with zstd (was 768 MB lzo-rle), `swappiness=100`, `page-cluster=0` |
+| initramfs | 66 modules, dependency-ordered, `loaded=60 failed=0`, nothing left in `devices_deferred` |
 | USB | gadget is **NCM + CDC-ACM** (0525:a4a1); usb0 = 192.168.77.1/24 with a DHCP server (systemd-networkd), so the host gets a lease -- docs/FINDINGS.md section 6.1 |
 | power | `battery/status = Charging` (`aw32257_charger` + `sc27xx-fgu` + `sprd-charger-manager`) |
 | display | /dev/dri/card0 + card0-DSI-1 (480x320 ST7365P); KWin modesets it (plane allocated by = kwin_wayland) |
@@ -97,7 +99,13 @@ Three things bite in that chroot, all of them environment leakage from Android:
    acceptable) with `WLR_RENDERER=pixman`, keeping Plasma Mobile as the fallback
    session in `/usr/share/wayland-sessions`.  Packages come from the host, which has
    the network the device does not.
-6. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
+6. **The keypad driver is in the initramfs now** (`boot/module-order.extra`,
+   66 modules), but the running device gets it from the root filesystem
+   (`/lib/modules/.../sprd_keypad.ko` + `/etc/modules-load.d/e5-keypad.conf`), so the
+   new `boot-linux-slotb.img` has to be flashed only for a machine that has never been
+   through this.  A press test from the user is the one thing left to confirm: the
+   device registers the events, the shell has to act on them.
+7. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
    into `misc` from inside the running system (byte-compared), so rebooting returns
    to Linux instead of Android.
 

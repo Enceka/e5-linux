@@ -1026,3 +1026,46 @@ Two independent pieces are in play, and only one of them was wrong:
   working suspend, so pressing the key did nothing visible.  It is now `nothing`, which
   leaves the key to phosh itself (short press locks/unlocks, long press opens the power
   menu).  Confirming that with a real press is the one open item.
+
+## 18. The power key: the kernel was fine, the session was not
+
+Pressing every key on the device while both `gpio-keys` (event0) and the keypad
+(event2) were being logged shows the whole input path works:
+
+| evidence | value |
+|---|---|
+| `gpio-49` ("Power Key") level samples | 9 of 380 at `lo` -- i.e. it really changes |
+| `gpio-52` ("Volume Up Key") | 3 samples at `hi` (idle `lo`) |
+| `gpio-191` ("Volume Down Key") | 4 samples at `lo` |
+| events on event0 | `KEY_POWER` (116) 12x, `KEY_VOLUMEDOWN` (114) 6x, `KEY_VOLUMEUP` (115) 8x, `KEY_F1` (59) 6x |
+
+and `/sys/kernel/debug/gpio` shows the lines claimed by the driver with interrupts
+(`gpio-49 | Power Key | in hi IRQ ACTIVE LOW`, `gpio-52 | Volume Up Key | in lo IRQ`,
+`gpio-191 | Volume Down Key | in hi IRQ ACTIVE LOW`), all four marked `wakeup-source` in
+the DT.
+
+### Why nothing happened anyway
+
+1. logind must ignore the key, or a press powers the device off -- `HandlePowerKey=ignore`
+   (section 6.2).
+2. phosh does not act on `KEY_POWER` itself.
+3. `gnome-settings-daemon`'s `power-button-action` was `suspend`, and **suspend does not
+   work on this board**: `rtcwake -m mem -s 15` returns 0, but the kernel log shows
+   `sipa 25220000.sipa: thread prepare suspend err` on every attempt -- the modem's data
+   path refuses to suspend, so the PM core aborts and resumes immediately.
+4. With gsd set to `nothing` instead (to stop the failing suspends) *nobody* handled the
+   key -- which is the state the user found: gsd's 300 s idle blank had turned the panel
+   off (`bl_power=4`) and no key could turn it back on.
+
+### What runs now
+
+`e5-powerkey.service` (`/opt/e5/powerkey.py`, 60 lines of Python) reads
+`/dev/input/event0` and gives the key phone semantics without suspend:
+
+* short `KEY_POWER` -> panel off (`bl_power=1`) + `loginctl lock-sessions`;
+* any other key, or a touch on event1 -> panel on (`bl_power=0`).
+
+alongside two settings: a logind drop-in `HandlePowerKey=lock` (for sessions that do
+implement logind locking) and `sleep-inactive-ac-type=nothing` so gsd stops trying to
+suspend every idle period.  The panel is `sprd_backlight`, whose `bl_power` and
+`brightness` were already opened to the session in `boot/init`.

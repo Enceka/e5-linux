@@ -1,9 +1,11 @@
 [Unit]
-Description=E5 power key (panel off/on and lock; suspend is unusable here)
+Description=E5 power key (lock + panel; suspend is unusable on this board)
 After=multi-user.target
 ConditionPathExists=/dev/input/event0
 
 [Service]
+User=e5
+Environment=XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 ExecStart=/usr/bin/python3 /opt/e5/powerkey.py
 Restart=always
 RestartSec=3

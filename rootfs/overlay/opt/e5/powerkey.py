@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Phone-style power key for the E5.
+"""Phone-style power key for the E5 (no suspend: the modem refuses it).
 
-Suspend is not usable on this board -- the modem data path refuses it
-('sipa 25220000.sipa: thread prepare suspend err'), and phosh does not act on
-KEY_POWER itself -- so the key is handled here: a short press turns the panel off
-(bl_power=1) and asks logind to lock the session; a touch or any other key turns it
-back on.  gpio-keys is /dev/input/event0 and the panel is the sprd backlight.
+Runs as the session user so it can talk to the session bus.  A short KEY_POWER press
+locks the session (phosh's lock screen, via org.gnome.ScreenSaver) and turns the panel
+off; a touch on event1 or any other key turns the panel back on.  Every step is logged
+so a press can be verified from the journal.
 """
 import glob
 import os
 import select
 import struct
 import subprocess
+import sys
 
 KEYS = '/dev/input/event0'
 TOUCH = '/dev/input/event1'
@@ -19,20 +19,39 @@ KEY_POWER = 116
 BL = glob.glob('/sys/class/backlight/*/bl_power')[0]
 
 
-def panel(on):
+def log(msg):
+    print(msg, flush=True)
+
+
+def panel(off):
     try:
         with open(BL, 'w') as f:
-            f.write('0' if on else '1')
+            f.write('1' if off else '0')
+        log('panel off' if off else 'panel on')
     except OSError as exc:
-        print('panel:', exc)
+        log('panel error: %s' % exc)
 
 
-def is_off():
+def locked():
     try:
         with open(BL) as f:
-            return f.read().strip() == '1'
+            return f.read().strip() != '0'
     except OSError:
         return False
+
+
+def lock_session():
+    for cmd in (['gdbus', 'call', '--session', '--dest', 'org.gnome.ScreenSaver',
+                 '--object-path', '/org/gnome/ScreenSaver',
+                 '--method', 'org.gnome.ScreenSaver.Lock'],
+                ['loginctl', 'lock-sessions']):
+        try:
+            res = subprocess.run(cmd, capture_output=True, timeout=5)
+            log('%s -> rc=%d %s' % (cmd[0], res.returncode, res.stderr.decode().strip()[:80]))
+            if res.returncode == 0:
+                return
+        except Exception as exc:
+            log('%s -> %s' % (cmd[0], exc))
 
 
 fds = {}
@@ -40,24 +59,25 @@ for path in (KEYS, TOUCH):
     try:
         fds[os.open(path, os.O_RDONLY | os.O_NONBLOCK)] = path
     except OSError as exc:
-        print('open', path, exc)
+        log('open %s: %s' % (path, exc))
 if not fds:
-    raise SystemExit('no input devices')
+    sys.exit('no input devices')
 
-panel(True)
-print('powerkey: watching', ', '.join(fds.values()))
+panel(False)
+log('watching %s' % ', '.join(fds.values()))
 while True:
     ready, _, _ = select.select(list(fds), [], [])
     for fd in ready:
         data = os.read(fd, 24 * 64)
         for off in range(0, len(data) - 23, 24):
             _, _, typ, code, val = struct.unpack_from('qqHHi', data, off)
-            power = fds[fd] == KEYS and code == KEY_POWER
-            if typ == 1 and val == 1:
-                if power and not is_off():
-                    subprocess.run(['loginctl', 'lock-sessions'], check=False)
+            if val != 1:
+                continue
+            if fds[fd] == KEYS and code == KEY_POWER:
+                if locked():
                     panel(False)
-                elif is_off():
+                else:
+                    lock_session()
                     panel(True)
-            elif is_off() and fds[fd] == TOUCH and typ == 3:
-                panel(True)
+            elif locked():
+                panel(False)

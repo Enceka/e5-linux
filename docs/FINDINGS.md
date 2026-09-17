@@ -1069,3 +1069,25 @@ alongside two settings: a logind drop-in `HandlePowerKey=lock` (for sessions tha
 implement logind locking) and `sleep-inactive-ac-type=nothing` so gsd stops trying to
 suspend every idle period.  The panel is `sprd_backlight`, whose `bl_power` and
 `brightness` were already opened to the session in `boot/init`.
+
+### Pending verification (blocked by the USB link)
+
+The first `e5-powerkey.service` (system unit, root, panel toggle only) was deployed and
+ran; the improved one -- `User=e5` with `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` so it
+can call phosh's `org.gnome.ScreenSaver.Lock`, plus a journal line per press -- was written
+and pushed, but the deploy command did not complete: the USB gadget keeps re-enumerating
+(`--- lost /dev/cu.usbmodemE5LINUX3 ---` in the console log, telnet refused for minutes at
+a time), which also explains the flaky command channel throughout this section.
+
+To finish it once the link is steady (or from the serial console):
+
+    cd / && tar -xf /tmp/pwr3.tar            # or re-push work/e5-pwr2.tar
+    systemctl daemon-reload && systemctl restart e5-powerkey.service
+    journalctl -u e5-powerkey -f             # press the key: expect 'lock ... rc=0'
+    sudo -u e5 env XDG_RUNTIME_DIR=/run/user/1000 \
+        DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+        gdbus call --session --dest org.gnome.ScreenSaver \
+        --object-path /org/gnome/ScreenSaver --method org.gnome.ScreenSaver.Lock
+
+Pressing the power key should then show phosh's lock screen, and a touch should bring the
+panel back; the journal line makes it verifiable without guessing at the display.

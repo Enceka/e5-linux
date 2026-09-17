@@ -4,13 +4,17 @@ After=e5-vendor.service network-pre.target
 Wants=e5-vendor.service
 Before=network.target
 ConditionPathExists=/dev/stty_nr1
+# the modem can still be booting when this runs, so retry instead of failing
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/e5/mobile-data up
 ExecStop=/opt/e5/mobile-data down
-TimeoutStartSec=240
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=20
 
 [Install]
 WantedBy=multi-user.target

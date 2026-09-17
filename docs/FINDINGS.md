@@ -848,3 +848,46 @@ all three `active`, `sipa_eth0` UP with a fresh address, wget works.
 The subset is proprietary and is not in this repository (`work/` is gitignored);
 `rootfs/extract-android-vendor.sh` reproduces it from the device, and the overlay
 carries everything else.
+
+## 14. 5G NR: what the device does, and what the network is not offering
+
+The modem is the NR variant, and that is visible in three independent places:
+`modem_control` logs `modem type is nr` and loads `nr_modem`/`nr_phy`/`nr_fixnv`/
+`nr_runtimenv`; Android's property area (which we copy) carries
+`ro.vendor.radio.modemtype=nr`; and `AT+SPRAT?` answers `+SPRAT: LTE 16` -- the
+camped RAT, not the capability.  That command is read-only on every AT channel this
+image exposes (`AT+SPRAT=<n>` is always `+CME ERROR: 4`), and
+`NSACFG`/`SNRCFG`/`SBAND`/`MODE`/`SYSMODE`/`E5GOPT`/`WS46` do not exist at all, so
+nothing user-space can flip the RAT over AT.
+
+The same SIM in the same spot on Android (fully booted, China Unicom 46001, LTE band 1,
+RSRP -90):
+
+    gsm.network.type=LTE,Unknown
+    getRilDataRadioTechnology=14(LTE)
+    mCellInfo=[CellInfoLte{... mEarfcn=100 mBands=[1] ...}, CellInfoLte{...}, CellInfoLte{...}]
+    CellSignalStrengthLte ... CellConfigLte :{ isEndcAvailable = false }
+
+No `CellInfoNr` anywhere, and `isEndcAvailable=false`: at that location the network
+offers neither NR SA nor EN-DC, so there is nothing for the modem to camp on.  Android's
+own configuration is 5G-ready (`ro.telephony.default_network=26`, i.e.
+NR_LTE_TDSCDMA_GSM, and `persist.radio.is_vonr_enabled_0=true`), which is the point: the
+Linux side is not missing a switch that would light up 5G here.
+
+What *was* wrong on the Linux side is which slot's modem images get loaded.
+`modem_control` takes the slot from the bootloader's slot suffix, and LK spells it
+`sprdboot.slot_suffix=_b` -- not `androidboot.slot_suffix`, which is what the MU300
+recipe rewrites.  A slot-b Linux trial therefore booted slot b's firmware and NV
+(`nr_phy_b`, `nr_fixnv1_b`, `nr_deltanv_b`).  Android runs from slot a, and slot a is
+where its RIL configured the modem, so `vendor-start.sh` now rewrites the suffix to `_a`
+and, belt and braces, points the `_b` device names at the `_a` partitions.
+`/etc/e5/modem-slot` containing `current` opts out.  Whatever Android achieves with NR
+(its RIL writes modem NV through `cp_diskserver`) is then the configuration Linux boots
+with.
+
+To re-check after the network or the SIM changes, on either system:
+
+* Linux: `mobile-data status` prints `+CEREG: ...` with the AcT decoded --
+  `LTE`, `NR (5G SA)` (11) or `LTE+NR (EN-DC/NSA)` (13) -- plus the raw `+SPRAT?`.
+* Android: `getprop gsm.network.type` and
+  `dumpsys telephony.registry | grep -E 'CellInfoNr|accessNetworkTechnology'`.

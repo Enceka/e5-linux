@@ -9,6 +9,7 @@ DEV=${E5_AT_DEV:-/dev/stty_nr1}
 CID=${E5_CID:-1}
 IFACE=${E5_IFACE:-sipa_eth$((CID - 1))}
 CONF=/etc/e5/mobile-data.conf
+AT_LOCK=/run/e5-at.lock
 # shellcheck disable=SC1090
 [ -r "$CONF" ] && . "$CONF"
 APN=${APN:-3gnet}
@@ -16,6 +17,11 @@ APN=${APN:-3gnet}
 at() {
     local cmd=$1 t=${2:-5} line
     [ -c "$DEV" ] || return 1
+    # One AT channel, several callers (the oneshot unit, the watcher, a human on
+    # telnet).  Without this they steal each other's responses and a perfectly
+    # good activation looks like "no IPv4 address from AT+CGCONTRDP".
+    exec 9>"$AT_LOCK"
+    flock -w 30 9 2>/dev/null || true
     exec 3<>"$DEV"
     while IFS= read -r -t 0.2 line <&3; do :; done
     printf '%s\r' "$cmd" >&3
@@ -27,7 +33,11 @@ at() {
         echo "$line"
         case "$line" in OK|ERROR|+CME\ ERROR*|+CMS\ ERROR*|CONNECT*|NO\ CARRIER) break ;; esac
     done
-    exec 3>&-
+    # close both fds for real (a subshell close would not release the flock), but
+    # only if they are open -- otherwise the shell complains about fd 3/9
+    [ -e /proc/self/fd/3 ] && exec 3>&-
+    [ -e /proc/self/fd/9 ] && exec 9>&-
+    return 0
 }
 
 radio_on() {
@@ -38,7 +48,8 @@ radio_on() {
 
 wait_registered() {
     local n
-    for n in $(seq 1 30); do
+    # the first registration after a cold modem boot can take a minute or two
+    for n in $(seq 1 60); do
         at 'AT+CEREG?' | grep -qE '\+CEREG: [0-9],(1|5)' && return 0
         [ $((n % 5)) -eq 0 ] && radio_on
         sleep 2
@@ -55,9 +66,13 @@ up() {
     at "AT+CGDCONT?" | grep -q "CGDCONT: $CID," ||
         at "AT+CGDCONT=$CID,\"IPV4V6\",\"$APN\"" >/dev/null
     at "AT+CGACT?" | grep -q "+CGACT: $CID,1" || at "AT+CGACT=1,$CID" 30 >/dev/null
-    local rdp addrmask ip4 mask dns1 dns2 prefix
-    rdp=$(at "AT+CGCONTRDP=$CID" 6 | grep '^+CGCONTRDP:' | head -1)
-    addrmask=$(echo "$rdp" | cut -d, -f4 | tr -d '"')
+    local rdp addrmask ip4 mask dns1 dns2 prefix n
+    # the context can take a moment to acquire its address after CGACT
+    for n in 1 2 3 4 5 6; do
+        rdp=$(at "AT+CGCONTRDP=$CID" 6 | grep '^+CGCONTRDP:' | head -1)
+        addrmask=$(echo "$rdp" | cut -d, -f4 | tr -d '"')
+        case "$addrmask" in ""|0.0.0.0*) sleep 3 ;; *) break ;; esac
+    done
     ip4=$(echo "$addrmask" | cut -d. -f1-4)
     mask=$(echo "$addrmask" | cut -d. -f5-8)
     dns1=$(echo "$rdp" | cut -d, -f6 | tr -d '"')
@@ -84,11 +99,29 @@ down() {
     at "AT+CGACT=0,$CID" 10 >/dev/null || true
 }
 
+# AcT as +CEREG/+COPS report it (3GPP 27.007: 7 is E-UTRA, 11 is NR SA,
+# 13 is E-UTRA-NR dual connectivity).
+act_name() {
+    case "$1" in
+        0) echo GSM;; 2) echo UTRAN;; 3) echo TD-SCDMA;; 4) echo CDMA2000;;
+        5|6) echo CDMA2000-EVDO;; 7) echo LTE;; 9|10) echo LTE-CA;;
+        11) echo "NR (5G SA)";; 13) echo "LTE+NR (EN-DC/NSA)";;
+        *) echo "AcT $1";;
+    esac
+}
+
 status() {
+    local cereg act spr
     echo "channel: $DEV  interface: $IFACE"
     at 'AT+CFUN?' 2>/dev/null | head -1
     at 'AT+CPIN?' 2>/dev/null | head -1
-    at 'AT+CEREG?' 2>/dev/null | grep CEREG | head -1
+    cereg=$(at 'AT+CEREG?' 2>/dev/null | grep CEREG | head -1)
+    if [ -n "$cereg" ]; then
+        act=$(echo "$cereg" | sed 's/.*,//')
+        echo "$cereg   -> $(act_name "$act")"
+    fi
+    spr=$(at 'AT+SPRAT?' 2>/dev/null | grep SPRAT | head -1)
+    [ -n "$spr" ] && echo "$spr   -> camped RAT (read-only on this AT set)"
     at 'AT+COPS?' 2>/dev/null | grep COPS | head -1
     at 'AT+CSQ' 2>/dev/null | grep CSQ | head -1
     ip -br addr show "$IFACE" 2>/dev/null
@@ -107,6 +140,9 @@ sim_reset() {
 # and no PDP context, so check the bearer and rebuild it when it is gone.
 watch() {
     local fails=0
+    # a boot where the modem was not ready yet leaves the bearer down and the
+    # oneshot unit failed; repair it here rather than waiting for the first check
+    [ -e /run/e5-mobile-data-down ] || up || true
     while :; do
         sleep 30
         [ -e /run/e5-mobile-data-down ] && continue

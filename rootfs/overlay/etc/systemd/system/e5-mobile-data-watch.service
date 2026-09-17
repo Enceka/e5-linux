@@ -1,13 +1,15 @@
 [Unit]
 Description=E5 mobile data watchdog (reconnect after a modem reset)
+# deliberately not Requires=: this unit has to run even when the oneshot above
+# failed, because repairing that is exactly its job
 After=e5-mobile-data.service
-Requires=e5-mobile-data.service
+ConditionPathExists=/dev/stty_nr1
 
 [Service]
 Type=simple
 ExecStart=/opt/e5/mobile-data watch
 Restart=always
-RestartSec=10
+RestartSec=15
 
 [Install]
 WantedBy=multi-user.target

@@ -1118,3 +1118,12 @@ Deliberately **not** installed, with reasons worth writing down:
   (section 8, still blocked).
 * anything that plays audio is questionable until the amplifier path is verified -- the
   MU300 port found its AW883xx silent on I2C, and this board has not been checked.
+
+### Default passwords
+
+`e5` / **123456** and `root` / `root` (`e5` has NOPASSWD sudo).  The user password is
+numeric on purpose: the 9-key keypad is the only keyboard on the device and it types
+digits, so that is what unlocks phosh's lock screen.  The root one is unchanged, and
+`rootfs/device-finalize.sh` -- which creates both accounts when a rootfs is built -- now
+writes 123456 as well, so a rebuilt image matches the running device.  Verified by
+logging in over telnet as `e5`/`123456`.

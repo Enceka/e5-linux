@@ -1091,3 +1091,30 @@ To finish it once the link is steady (or from the serial console):
 
 Pressing the power key should then show phosh's lock screen, and a touch should bring the
 panel back; the journal line makes it verifiable without guessing at the display.
+
+## 19. Phosh needs GNOME apps -- purging KDE took the only settings app with it
+
+Phosh ships no applications of its own beyond the shell, the OSK and the compositor, so
+after the KDE purge the app grid held little more than a terminal: the only "Settings" on
+the device had been KDE's `plasma-settings`, and it went with the rest of Plasma.
+
+The phone-shaped set that belongs with Phosh was installed with `--no-install-recommends`
+(`/` went to 4.4 GiB used, 1.2 GiB free):
+
+| package | what it is |
+|---|---|
+| `phosh-mobile-settings` | Phosh's own phone settings (`mobi.phosh.MobileSettings`) |
+| `gnome-control-center` | the general GNOME settings app (`org.gnome.Settings`) |
+| `gnome-calculator`, `gnome-clocks`, `gnome-characters` | the usual small GNOME apps |
+| `foot` | terminal (already there) |
+
+Deliberately **not** installed, with reasons worth writing down:
+
+* `gnome-calls` / `chatty` (calls and SMS) need ModemManager and a RIL on top of the
+  modem.  This port drives the modem directly over AT (`docs` sections 13/14); there is
+  no RIL, so a dialer would have nothing to talk to.
+* `epiphany-browser` (WebKit) and `nautilus` are the obvious next apps when there is
+  space and appetite; the baseband gives them a working network, unlike Wi-Fi
+  (section 8, still blocked).
+* anything that plays audio is questionable until the amplifier path is verified -- the
+  MU300 port found its AW883xx silent on I2C, and this board has not been checked.

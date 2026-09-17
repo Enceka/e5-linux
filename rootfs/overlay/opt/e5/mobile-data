@@ -86,6 +86,25 @@ up() {
     ip route replace default dev "$IFACE" metric 100
     printf 'nameserver %s\n' "$dns1" > /etc/resolv.conf
     [ -n "$dns2" ] && printf 'nameserver %s\n' "$dns2" >> /etc/resolv.conf
+    # share the bearer with the USB LAN clients: this image has nftables (no
+    # iptables) and sipa_eth0 is a raw-IP link, so clamp the MSS as well
+    sysctl -qw net.ipv4.ip_forward=1
+    if command -v nft >/dev/null 2>&1; then
+        nft -f - <<NFT
+table ip e5_nat
+delete table ip e5_nat
+table ip e5_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "$IFACE" masquerade
+    }
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        tcp flags syn tcp option maxseg size set rt mtu
+    }
+}
+NFT
+    fi
     local op
     op=$(at 'AT+COPS?' | sed -n 's/^+COPS: [0-9],[0-9],"\([^"]*\)".*/\1/p')
     echo "mobile data up on $IFACE ($ip4/$prefix, $op)"
@@ -93,6 +112,7 @@ up() {
 
 down() {
     touch /run/e5-mobile-data-down
+    nft delete table ip e5_nat 2>/dev/null || true
     ip route del default dev "$IFACE" 2>/dev/null || true
     ip addr flush dev "$IFACE" 2>/dev/null || true
     ip link set "$IFACE" down 2>/dev/null || true

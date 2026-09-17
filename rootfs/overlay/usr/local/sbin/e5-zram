@@ -7,6 +7,8 @@ size=${E5_ZRAM_SIZE:-4G}
 comp=${E5_ZRAM_COMP:-zstd}
 [ -e /sys/block/zram0 ] || exit 0
 if ! swapon --show=NAME --noheadings 2>/dev/null | grep -q zram0; then
+    # a zram device that already carries a size refuses a new one until reset
+    echo 1 > /sys/block/zram0/reset 2>/dev/null || true
     echo "$comp" > /sys/block/zram0/comp_algorithm 2>/dev/null || true
     echo "$size" > /sys/block/zram0/disksize 2>/dev/null || exit 0
     mkswap /dev/zram0 >/dev/null

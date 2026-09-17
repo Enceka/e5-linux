@@ -16,12 +16,13 @@ Linux boots on the Rongyue E5 and is reachable.  Verified on the device:
 | USB | gadget is **NCM + CDC-ACM** (0525:a4a1); usb0 = 192.168.77.1/24 with a DHCP server (systemd-networkd), so the host gets a lease -- docs/FINDINGS.md section 6.1 |
 | power | `battery/status = Charging` (`aw32257_charger` + `sc27xx-fgu` + `sprd-charger-manager`) |
 | display | /dev/dri/card0 + card0-DSI-1 (480x320 ST7365P); KWin modesets it (plane allocated by = kwin_wayland) |
-| session | SDDM autologins `e5` into `plasma-mobile.desktop`; `kwin_wayland` (DRM backend) + `plasmashell` + `plasma-welcome` run on llvmpipe |
+| session | SDDM autologins `e5` into **`phosh.desktop`**: phoc (`WLR_RENDERER=pixman`, DRM owner) + phosh + phosh-osk-stub. `plasma-mobile.desktop` is still installed and selectable -- docs/FINDINGS.md section 16 |
+| NAT | `mobile-data up` installs an nftables `masquerade` on `sipa_eth0` plus MSS clamping, so USB LAN clients share the bearer; verified from a network namespace (10.99.0.2 -> internet) -- docs/FINDINGS.md section 15 |
 | re-arm | `e5-boot-ok.service` refills slot b's try counter from inside Linux (`misc` byte-verified) |
 | baseband | **mobile data works, on 5G NR SA.** Android's `modem_control` runs in a chroot (`e5-vendor.service`, ~50 MiB vendor subset at `/opt/e5/android`), then AT on `/dev/stty_nr1` + `sipa_eth0` takes it online; `+CEREG: ...,11` (NR SA) after the user camped n78 from Android, and the bearer does ~50 Mbit/s -- docs/FINDINGS.md sections 13 and 14 |
 | apt | the image points at the Nanjing University mirror over **http** (TLS handshakes hang on this bearer): ~8 MB/s, which is what makes installing Phosh practical |
 | Wi-Fi | driver packaged and **loading on the device** (63/63 modules incl. sprd_wlan_combo, wcn_bsp, cfg80211); the chip still fails to power on because its DT firmware path is a wcnmodem partition this device does not have -- docs/FINDINGS.md section 8 |
-| session cost | Plasma Mobile, measured: 1288 MB used of 1450 before trimming, 926 MB after (zram 719 -> 590 of 767 used), `available` 162 -> 524 MB. The 356 MB `plasma-settings` autostart and the X11-only helpers are off -- docs/FINDINGS.md section 11 |
+| session cost | **Phosh is ~200 MB lighter than the trimmed Plasma Mobile**: 723 used / 727 available, against 926 / 524 for Plasma (which itself came down from 1288 / 162 before section 11's trim) |
 | session lifetime | **fixed.** The ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it, pmic_timeout 300) took a session from 295 s to 10+ min and stable -- docs/FINDINGS.md section 9 |
 
 Root filesystem: Debian 13 (trixie) arm64 with **Plasma Mobile 6.3.6**, 1518
@@ -119,7 +120,16 @@ Three things bite in that chroot, all of them environment leakage from Android:
    stays in `/usr/share/wayland-sessions` as the fallback.  Earlier note: the baseband gives the device
    the internet it never had, so the 100+ package mobile shell no longer needs the
    host as a proxy.  Keep `plasma-mobile.desktop` as the fallback session.
-9. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
+9. **Wi-Fi is the one thing still blocked**, and the next steps for it are unchanged:
+   the DT wants `/dev/block/by-name/wcnmodem`, which this device does not have, so the
+   chip powers back down.  A loop device backed by the `wcnmodem.bin` the image already
+   carries is the plan (docs/FINDINGS.md section 8).
+10. **IPv6** is live but unrouted: the carrier hands out a `2408:893a:...` address and
+   there is an RA default route, yet nothing is configured to prefer or use it.
+11. **Physical keys under Phosh**: the 9-key pad and the power/volume keys produce input
+   events (section 12); which of them phosh acts on is worth checking with the user, now
+   that a session that understands KEY_POWER/KEY_BACK is running.
+12. **Re-arm behaviour** is verified: `e5-boot-ok` wrote the slot-b trial block back
    into `misc` from inside the running system (byte-compared), so rebooting returns
    to Linux instead of Android.
 

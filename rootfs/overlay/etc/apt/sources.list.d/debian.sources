@@ -1,0 +1,14 @@
+Types: deb
+# Debian 13 trixie from the Nanjing University mirror, over http: TLS on this
+# bearer is unreliable (handshakes hang), while plain http is fast, and the
+# mirror's Packages index is the same either way.
+URIs: http://mirror.nju.edu.cn/debian
+Suites: trixie trixie-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+
+Types: deb
+URIs: http://mirror.nju.edu.cn/debian-security
+Suites: trixie-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp

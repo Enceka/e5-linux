@@ -29,6 +29,20 @@ for u in /sys/class/block/mmcblk0p*/uevent; do
   ln -sfn "/dev/$d" "/dev/block/$d"
   [ -n "$n" ] && ln -sfn "/dev/$d" "/dev/block/by-name/$n"
 done
+# modem_control takes the slot from the *current* boot slot, so a slot-b trial loads
+# slot b's modem firmware and NV (nr_phy_b, nr_fixnv1_b, nr_deltanv_b).  Android runs
+# from slot a, and slot a is where its RIL configured the modem -- including whatever
+# NR/5G settings exist.  Point the _b names at the _a devices unless
+# /etc/e5/modem-slot says "current".
+modem_slot=$(cat /etc/e5/modem-slot 2>/dev/null || echo a)
+if [ "$modem_slot" = "a" ]; then
+  for p in nr_modem nr_phy nr_deltanv nr_fixnv1 nr_fixnv2; do
+    if [ -e "/dev/block/by-name/${p}_a" ] && [ -e "/dev/block/by-name/${p}_b" ]; then
+      ln -sfn "/dev/block/by-name/${p}_a" "/dev/block/by-name/${p}_b"
+    fi
+  done
+  echo "stage=modem-slot a (Android's own images; _b names remapped)"
+fi
 /opt/e5/node-perms.sh 2>/dev/null || true
 chmod 0666 /sys/power/wake_lock /sys/power/wake_unlock 2>/dev/null || true
 
@@ -50,11 +64,20 @@ mountpoint -q "$A/sys" || mount -t sysfs sysfs "$A/sys"
 mountpoint -q "$A/dev" || mount --rbind /dev "$A/dev"
 
 echo "stage=cmdline"
+# LK's bootargs carry the slot as Unisoc spells it -- sprdboot.slot_suffix=_b -- and
+# this is also what modem_control reads: with _b it loads the *other* slot's modem
+# images and NV (nr_phy_b, nr_fixnv1_b, nr_deltanv_b) instead of the ones Android
+# itself runs.  Rewrite both spellings, and add them if the source has neither.
 src=/proc/cmdline
-grep -q androidboot.slot_suffix /proc/cmdline ||
+grep -qE '(android|sprd)boot\.slot_suffix' /proc/cmdline ||
     [ ! -r /proc/device-tree/chosen/bootargs ] || src=/proc/device-tree/chosen/bootargs
-tr -d '\000' < "$src" | sed 's/androidboot.slot_suffix=_b/androidboot.slot_suffix=_a/' \
+tr -d '\000' < "$src" |
+    sed -e 's/sprdboot\.slot_suffix=_b/sprdboot.slot_suffix=_a/' \
+        -e 's/androidboot\.slot_suffix=_b/androidboot.slot_suffix=_a/' \
     > /run/e5-cmdline.android
+grep -qE '(android|sprd)boot\.slot_suffix' /run/e5-cmdline.android ||
+    printf ' androidboot.slot_suffix=_a sprdboot.slot_suffix=_a\n' >> /run/e5-cmdline.android
+chmod 0666 /sys/devices/platform/soc/*/*sipa-dele*/sipa_dele_reset 2>/dev/null || true
 mountpoint -q "$A/proc/cmdline" || mount --bind /run/e5-cmdline.android "$A/proc/cmdline"
 
 echo "stage=exec"

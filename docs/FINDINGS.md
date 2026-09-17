@@ -919,3 +919,59 @@ So the RAT preference lives in the modem NV, written there by Android's RIL, and
 Linux port inherits it as long as it boots slot a's modem firmware and NV.  There is no
 AT-side switch to set it (and none is missing): `mobile-data status` now decodes the AcT
 so the camped RAT is visible at a glance -- `LTE`, `NR (5G SA)` or `LTE+NR (EN-DC)`.
+
+## 15. Sharing the baseband with the USB LAN (NAT), and why apt uses http
+
+`mobile-data up` now also forwards: `net.ipv4.ip_forward=1` plus an nftables table
+(`e5_nat`) with `oifname sipa_eth0 masquerade` and the usual MSS clamp -- this image has
+nftables, not iptables, and it had to be installed.
+
+Installing it is where the mirror came in.  The device reaches the internet only through
+its own bearer now, and the official `deb.debian.org` index is ~15 MB: apt worked but
+crawled, and any **https** fetch hangs (`openssl s_client` to :443 times out at every
+MTU from 1500 down to 1200, while :80 is fine), so the sources are the Nanjing
+University mirror over **http** (`rootfs/overlay/etc/apt/sources.list.d/debian.sources`)
+-- 8 MB/s, which is what made the Phosh install take a minute instead of an hour.
+
+Verification without a second machine: a network namespace with a veth pair
+(`10.99.0.2` -> `10.99.0.1` on the E5) exercises forwarding *and* masquerade, because
+that source address is not local to the E5.  `busybox wget` from inside the namespace
+returns the real Debian `Release` file, so a USB client behind `usb0` gets the same
+treatment.  (`ip netns` + `veth` both work in this kernel.)
+
+## 16. Phosh replaces Plasma Mobile as the session
+
+    apt-get install phosh phoc phosh-osk-stub squeekboard foot
+    # phosh 0.46.0-3+deb13u1, phoc 0.46.0-1, phosh-osk-stub 0.46.0-1
+
+Phosh's compositor is wlroots, so `/etc/environment` gained `WLR_RENDERER=pixman` --
+phoc then never touches GL, which is the point on this board.  SDDM still autologins
+`e5`; the session is now `phosh.desktop` and `plasma-mobile.desktop` is untouched, so
+switching back is one line.
+
+Three traps, all of them silent:
+
+1. SDDM reads `/etc/sddm.conf` and *then* `/etc/sddm.conf.d/*`, but a value present in
+   both is not simply overridden by the drop-in: editing `sddm.conf.d/10-e5.conf` alone
+   kept the old session.  The authoritative place turned out to be the main
+   `/etc/sddm.conf`.
+2. `/var/lib/sddm/state.conf` remembers the *last* session and wins over the
+   configuration for autologin (`Session=/usr/share/wayland-sessions/plasma-mobile.desktop`).
+   Both files have to agree.
+3. Restarting `sddm` does not stop the old session's processes: the Plasma session kept
+   running (kscreenlocker_g 173 MB, plasmashell 108 MB, kwin_wayland, kded6, ...)
+   alongside phoc.  Only a reboot cleared them -- and the reboot is what proved the
+   configuration, so it was the right move anyway.
+
+Measured, same device, same panel, `free -m`:
+
+| session | used | available | notes |
+|---|---|---|---|
+| Plasma Mobile, after the section 11 trim | 926 | 524 | kwin + plasmashell on llvmpipe |
+| Phosh | 723 | 727 | phoc + phosh + phosh-osk-stub, `plasmashell` 0 |
+
+About 200 MB more headroom, and neither session needed the other's daemons: the KDE
+helpers stay masked (they are X11-only), and the 240 MB `plasma-settings` process that
+showed up in `ps` was phosh launching it *on demand* (its scope says "Application
+launched by phosh"), not an autostart leftover -- `systemctl --user unmask` after
+checking, so the on-screen Settings button keeps working.

@@ -688,3 +688,70 @@ a stack like Phosh (100+ packages) let apt resolve instead: run a small HTTP pro
 the host, point the device at it with `Acquire::http::Proxy` in
 `/etc/apt/apt.conf.d/`, and the dependency walk stays on the device where it is
 correct.
+
+zram itself was 768 MB of lzo-rle and 94 % full.  It is now 4 GiB of zstd
+(`E5_ZRAM_SIZE` / `E5_ZRAM_COMP` in `rootfs/overlay/usr/local/sbin/e5-zram`), with
+`vm.swappiness=100` and `vm.page-cluster=0`
+(`rootfs/overlay/etc/sysctl.d/10-e5-zram.conf`): swapping earlier costs less than
+letting the anonymous set grow until the session has to reclaim synchronously, and one
+page at a time is the cheap case for a random-access device.  4 GiB is an overcommit on
+a 1.45 GiB machine and that is fine -- only the *compressed* pages occupy RAM, so what
+matters is the ratio (zstd has lz4/zstd selected as active: `[zstd]` in
+`/sys/block/zram0/comp_algorithm`), not the nominal size.
+
+## 12. The 9-key keypad: a driver that was never staged
+
+The board is a 5G feature phone, so most of its input is a numeric keypad plus a
+back key, not the touch panel.  The keypad is a plain matrix keypad on the SoC's AON
+keypad controller, and it is in the running device tree:
+
+    /proc/device-tree/soc/aon/keypad@641B0000
+      compatible = "sprd,sc9860-keypad", status = "okay"
+      keypad,num-rows / keypad,num-columns / debounce-interval / linux,keymap
+
+and the platform device exists (`641b0000.keypad`).  Nothing was bound to it, and
+nothing said so: no dmesg line, no failed probe, no input device.  `waiting_for_supplier`
+on the device is stale -- the AON clock gate it waits for probed normally
+(`ums9621-clk 64900000.aonapb-gate: clock probe`, and the consumer devlink
+`platform:64900000.aonapb-gate--platform:641b0000.keypad` is there).  The reason is the
+same one that hid the charger, the display power domain and the WCN drivers:
+
+    CONFIG_KEYBOARD_SPRD=m
+
+and `sprd_keypad.ko` is not in Android's first-stage module list, so neither the
+initramfs nor the Debian root filesystem ever loads it.  An unbound platform device is
+invisible; loading the driver is what makes it appear.
+
+The fix is two modules, built from the same tree and configuration as the flashed
+kernel (section 10's `LLVM=1` invocation, `make M=drivers/input/keyboard modules`),
+plus its dependency:
+
+| module | config | why |
+|---|---|---|
+| `sprd_keypad.ko` | `CONFIG_KEYBOARD_SPRD=m` | the matrix keypad driver |
+| `matrix-keymap.ko` | `CONFIG_INPUT_MATRIXKMAP=m` | `depends=matrix-keymap`, parses `linux,keymap` |
+
+`vermagic=5.15.211-g94401422a7df SMP preempt mod_unload modversions aarch64` and the
+module CRCs match the flashed kernel, so no kernel change and no reflash are needed.
+After `insmod` on the running system, /proc/bus/input/devices goes from two devices to
+three:
+
+    N: Name="sprd-keypad"   H: Handlers=kbd event2   B: KEY=...ffc (KEY_1..KEY_9, KEY_0, * #)
+
+The two devices that were already there are worth restating: `gpio-keys` (input0) holds
+**the power and volume keys** -- its KEY bitmap decodes to KEY_VOLUMEDOWN, KEY_VOLUMEUP
+and KEY_POWER -- and `tlsc6x_touch` is input1.  So the physical keys were always
+generating events; what was missing was (a) the keypad driver and (b) anything in the
+session that acts on KEY_POWER, which logind was told to ignore (section 6.2).
+
+Persistence is in two places:
+
+* the running rootfs -- `matrix-keymap.ko` and `sprd_keypad.ko` under
+  `/lib/modules/$(uname -r)/kernel/drivers/input/`, `depmod -a`, and
+  `/etc/modules-load.d/e5-keypad.conf`, so systemd's modules-load stage insmods them
+  early on every boot (verified: both listed in `lsmod` after
+  `systemctl restart systemd-modules-load`);
+* the boot image -- both names are in `boot/module-order.extra`, and
+  `boot/stage-modules.sh` picks up every `.ko` in `out_linux`, so a rebuilt
+  `boot-linux-slotb.img` carries 66 modules instead of 64 and loads them in
+  dependency order (`matrix-keymap.ko` before `sprd_keypad.ko`).

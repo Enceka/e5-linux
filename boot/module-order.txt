@@ -62,3 +62,5 @@ wcn_bsp.ko
 cfg80211.ko
 sprd_wlan_combo.ko
 sprd_pmic_wdt.ko
+matrix-keymap.ko
+sprd_keypad.ko

@@ -89,3 +89,25 @@ sprd_wlan_combo.ko
 # so nothing on the Linux side ever touched it.  It also gives systemd a watchdog
 # device to hold and ping (see rootfs/overlay/etc/systemd/system.conf.d).
 sprd_pmic_wdt.ko
+
+# --- physical keys -------------------------------------------------------------
+# The board is a 5G feature phone, so most of its input is a 9-key pad, not touch.
+# The pad is a plain matrix keypad on the SoC's AON keypad controller:
+#
+#   /proc/device-tree/soc/aon/keypad@641B0000  compatible "sprd,sc9860-keypad"
+#   status "okay", keypad,num-rows/num-columns, debounce-interval, linux,keymap
+#
+# and it is present in the running DT (platform device 641b0000.keypad, with the
+# aon clock gate 64900000.aonapb-gate as its devlink supplier).  It has no driver
+# because CONFIG_KEYBOARD_SPRD is =m, and the module is not in Android's
+# first-stage list -- the same story as the charger, the display power domain and
+# the WCN drivers.  An unbound node is silent: dmesg says nothing at all.  Adding
+# the module turns /proc/bus/input/devices from two devices (gpio-keys,
+# tlsc6x_touch) into three:
+#
+#   N: Name="sprd-keypad"   H: Handlers=kbd event2    B: KEY=...fc (1-9, 0, * #)
+#
+# gpio-keys (input0) is where the power and volume keys already live; see
+# docs/FINDINGS.md section 12.
+sprd_keypad.ko
+matrix-keymap.ko

@@ -891,3 +891,31 @@ To re-check after the network or the SIM changes, on either system:
   `LTE`, `NR (5G SA)` (11) or `LTE+NR (EN-DC/NSA)` (13) -- plus the raw `+SPRAT?`.
 * Android: `getprop gsm.network.type` and
   `dumpsys telephony.registry | grep -E 'CellInfoNr|accessNetworkTechnology'`.
+
+### Confirmed: NR SA runs on the Linux side
+
+After the user restarted the baseband from Android and locked it to band n78, Android
+reported:
+
+    gsm.network.type=NR_SA
+    accessNetworkTechnology=NR
+    CellInfoNr ... mRegistered=YES mCellConnectionStatus=1
+                 mNrArfcn=627264 mBands=[78] mNrFrequencyRange=3 ssRsrp=-100
+    gsm.version.baseband=5G_MODEM_V2_23B_W24.16.1_P1|ums9621_modem
+    persist.vendor.modem.nr.enable=1
+
+and after rebooting into Linux the same modem -- booting the slot-a images and NV, per
+the remap above -- camped the same way with no further configuration:
+
+    +CEREG: 2,1,"DE0400","005BE001",11      AcT 11 = NR SA
+    +COPS: 0,2,"46001",11                    China Unicom, NR
+    +SPRAT: LTE 32                            (the numeric field moved 16 -> 32
+                                               together with the camped RAT; the name
+                                               token stays "LTE", so do not trust it)
+    sipa_eth0 UP 10.131.171.189/8             bearer built on the NR link
+    busybox wget http://mirror.nju.edu.cn/... 9.6 MB in 1.5 s (~50 Mbit/s)
+
+So the RAT preference lives in the modem NV, written there by Android's RIL, and the
+Linux port inherits it as long as it boots slot a's modem firmware and NV.  There is no
+AT-side switch to set it (and none is missing): `mobile-data status` now decodes the AcT
+so the camped RAT is visible at a glance -- `LTE`, `NR (5G SA)` or `LTE+NR (EN-DC)`.

@@ -99,6 +99,31 @@ work list.
   exactly this reason.  `/etc/sddm.conf` currently wins over `/etc/sddm.conf.d/`, which
   is the only reason autologin kept working.
 
+- **GPU: the kernel side already works, userspace is the whole gap (2026-09-18).**
+  The DT node is `gpu@23140000` with `compatible = "sprd,mali-natt"`, and ARM's
+  vendor kbase driver is built in (`CONFIG_MALI_MIDGARD=y`,
+  `CONFIG_MALI_PLATFORM_NAME="qogirn6l"`).  It binds:
+  `/sys/bus/platform/drivers/mali/23140000.gpu` exists, `/dev/mali0` is there, and
+  dmesg from a boot that showed it reports `Kernel DDK version r41p0-01eac0` and
+  `GPU identified as 0x1 arch 9.0.9 r0p1` -- arch 9 is **Valhall**, i.e. a Mali-G57
+  class part, with IRQ 63 live.  So nothing is missing on the kernel side.
+  What is missing is a GL/EGL implementation Debian can use: Mesa speaks panfrost
+  and lima, never kbase.  Two routes:
+  * **Vendor blobs (fastest, recommended first).**  Android's `/vendor` carries
+    ARM's libmali built for this exact GPU *and* this exact kbase (r41p0).  Pull it
+    from Android (the partition is erofs inside `super`, so it cannot be mounted
+    from Linux -- same constraint as the WCN firmware in section 8), stage it into
+    the rootfs, and point EGL at it.  No kernel change at all.
+  * **Panfrost (mainline, no blobs).**  `CONFIG_DRM_PANFROST=y` is already set and
+    panfrost does support Valhall.  But it cannot bind while kbase owns
+    `sprd,mali-natt`, and the node describes its power and DVFS with vendor syscons
+    (`sprd,gpu-apb-syscon`, `top_dvfs_cfg`, `dcdc_gpu_voltage*`) rather than the
+    generic `clocks`/`power-domains`/`operating-points` panfrost wants.  That is a
+    DT port, not a config flip.
+
+  Worth doing because it is what makes the 0.75 output scale affordable: at that
+  scale the compositor rasterises 273k pixels per frame on the CPU.
+
 ## Next (后续要做)
 
 - **Calls and SMS** need a RIL: this port drives the modem over raw AT

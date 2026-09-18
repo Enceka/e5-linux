@@ -16,9 +16,12 @@ def load(path):
         elif typ == b'IEND':
             break
         pos += 12 + ln
-    assert bd == 8 and ct == 2, (bd, ct)
+    # colour type 2 is RGB, 6 is RGBA (grim produces RGBA when the compositor
+    # has an alpha channel); both are 8 bits per channel and filter identically.
+    assert bd == 8 and ct in (2, 6), (bd, ct)
     raw = zlib.decompress(idat)
-    bpp, stride = 3, w*3
+    bpp = 3 if ct == 2 else 4
+    stride = w * bpp
     out = bytearray(h*stride)
     prev = bytearray(stride)
     p = 0
@@ -42,12 +45,13 @@ def load(path):
                 line[i] = (line[i] + pr) & 255
         out[y*stride:(y+1)*stride] = line
         prev = line
-    return w, h, out
+    return w, h, out, bpp
 
 def main():
     path = sys.argv[1]
     cols = int(sys.argv[2]) if len(sys.argv) > 2 else 106
-    w, h, px = load(path)
+    w, h, px, bpp = load(path)
+    stride = w * bpp
     rows = max(1, int(cols * h / w / 2.1))
     ramp = ' .:-=+*#%@'
     print('image %dx%d -> %dx%d' % (w, h, cols, rows))
@@ -58,9 +62,9 @@ def main():
             y0, y1 = ry*h//rows, max(ry*h//rows+1, (ry+1)*h//rows)
             tot = n = 0
             for y in range(y0, y1):
-                base = y*w*3
+                base = y*stride
                 for x in range(x0, x1):
-                    i = base + x*3
+                    i = base + x*bpp
                     tot += (px[i]*299 + px[i+1]*587 + px[i+2]*114)//1000
                     n += 1
             v = tot//max(n,1)

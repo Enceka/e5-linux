@@ -43,13 +43,6 @@ work list.
   `KEY_POWER`; the lock call was removed because the screen could no longer be
   woken while locked.  Confirm the wake path before adding anything back.
 
-- **The keypad's confirm key.**  It emits `KEY_SELECT` (0x161 in the DT keymap), which
-  nothing in the session handles, and phosh's lock screen wants `KP_Enter` instead
-  (measured -- `docs/FINDINGS.md` 12.1).  `udev`/hwdb cannot remap it: the matrix
-  keypad driver implements no scancode map (`EVIOCSKEYCODE` is `EINVAL`), so this needs
-  a small uinput re-emitter, or a driver that grows `getkeycode`/`setkeycode`.
-  Until then the lock screen can only be unlocked with
-  `loginctl unlock-session` from the management LAN.
 
 ### Traps found the hard way
 

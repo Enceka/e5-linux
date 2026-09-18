@@ -793,7 +793,7 @@ Persistence is in two places:
   `boot-linux-slotb.img` carries 66 modules instead of 64 and loads them in
   dependency order (`matrix-keymap.ko` before `sprd_keypad.ko`).
 
-### 12.1 The confirm key is KEY_SELECT, and hwdb cannot remap it (2026-09-18)
+### 12.1 The confirm key is KEY_SELECT: what it broke, and the remap that fixes it
 
 The keypad's devicetree keymap (`/proc/device-tree/soc/aon/keypad@641B0000/linux,keymap`,
 20 entries of `(row << 24) | (col << 16) | keycode`) decodes to:
@@ -809,19 +809,8 @@ The keypad's devicetree keymap (`/proc/device-tree/soc/aon/keypad@641B0000/linux
 | 3,6 | 0x37 | KEY_KPASTERISK |
 
 Nothing in the session handles KEY_SELECT, so on the phosh lock screen the PIN could be
-typed but never submitted.  The obvious fix -- `KEYBOARD_KEY_161=enter` in
-`/etc/udev/hwdb.d/` -- **cannot work here**: udev's `keyboard` builtin applies those
-mappings with `EVIOCSKEYCODE`, and this keypad implements no scancode map at all:
-
-    tools/keycode-query.py /dev/input/event2 0x161
-      OSError: [Errno 22] Invalid argument        (evdev: dev->getkeycode == NULL)
-
-`/dev/input/event0` (gpio-keys) answers the same way, so it is the driver class, not
-this device.  The confirm key therefore has to be translated in userspace -- a uinput
-re-emitter that turns KEY_SELECT into whatever the consumer expects;
-`tools/key-inject.py` is exactly that mechanism, driven by hand.
-
-What the consumer expects was measured with it, on a locked session:
+typed but never submitted.  What the lock screen does want was measured by injecting
+keys with `tools/key-inject.py`, on a locked session:
 
     tools/key-inject.py 1 2 3 4 5 6 enter     -> LockedHint stays yes
     tools/key-inject.py 1 2 3 4 5 6 kpenter   -> LockedHint: no    (unlocked)
@@ -829,6 +818,38 @@ What the consumer expects was measured with it, on a locked session:
 phosh's lock screen unlocks on **KP_Enter**, not on Return, and the PIN is checked by
 PAM -- a wrong one leaves `phosh[..]: pam_unix(phosh:auth): authentication failure`
 in the journal (that is how the "123" typed by an earlier test showed up).
+
+The fix is the ordinary one -- a udev/hwdb key remap, applied by udev's `keyboard`
+builtin at device-add time, so it is in the kernel's scancode table and costs no
+latency at all:
+
+    # rootfs/overlay/etc/udev/hwdb.d/61-e5-keypad.hwdb
+    evdev:input:b0000v0000p0000e0000*
+     KEYBOARD_KEY_8=kpenter
+
+The subtlety is the *scancode*: it is the matrix scan code, not the keycode the key
+produces.  The keypad is a 4x7 matrix, so `row_shift = 3` and the confirm key
+(row 1, col 0) is `(1 << 3) | 0 = 8`.  evdev's `EVIOCSKEYCODE` indexes
+`input_dev->keycode[]`, whose size is `rows * cols = 28`; an index of 353 (the
+keycode) is out of range and comes back `EINVAL` -- which is exactly the mistake that
+made an earlier version of this section claim the device "cannot be remapped at all".
+It can, and `tools/keycode-query.py` shows it (`--from`/`--to`-style read and write,
+with `INPUT_KEYMAP_BY_INDEX`):
+
+    tools/keycode-query.py /dev/input/event2 0x0 0x8 0x9
+      0x000 -> 158 (BACK)
+      0x008 -> 353 (SELECT)      <- the confirm key
+      0x009 -> 105 (LEFT)
+    tools/keycode-query.py /dev/input/event2 0x8=96
+      set 0x008 -> 96 (KP_ENTER)
+    # after udevadm hwdb --test / systemd-hwdb update / udevadm trigger:
+      0x008 -> 96 (KP_ENTER)
+
+`systemd-hwdb-update.service` (WantedBy=sysinit.target) recompiles
+`/etc/udev/hwdb.bin` at boot when the file is newer, so this survives without an
+explicit `systemd-hwdb update`.  A userspace uinput re-emitter was the working plan
+before this; it is not needed, and it would have added a process and a second
+keyboard device to the session.
 
 ## 13. Baseband internet: Android's modem_control in a chroot
 

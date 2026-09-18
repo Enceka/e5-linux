@@ -20,11 +20,28 @@ at() {
     # One AT channel, several callers (the oneshot unit, the watcher, a human on
     # telnet).  Without this they steal each other's responses and a perfectly
     # good activation looks like "no IPv4 address from AT+CGCONTRDP".
-    exec 9>"$AT_LOCK"
+    exec 9>"$AT_LOCK" 2>/dev/null || return 1
     flock -w 30 9 2>/dev/null || true
-    exec 3<>"$DEV"
+    # Opening the AT channel can fail while the modem is being reset, or while
+    # something else still holds it.  If it does, say so once and give up.
+    # Without this the printf below runs with fd 3 closed, and a caller that
+    # retries turns one failure into a busy loop -- this actually happened:
+    # 644260 "Bad file descriptor" lines in a single second at boot, which
+    # journald suppressed (hiding the cause) while it burned a core.  The sleep
+    # caps the damage if a caller still insists on spinning.
+    if ! exec 3<>"$DEV" 2>/dev/null; then
+        echo "at: cannot open $DEV" >&2
+        exec 9>&- 2>/dev/null
+        sleep 1
+        return 1
+    fi
     while IFS= read -r -t 0.2 line <&3; do :; done
-    printf '%s\r' "$cmd" >&3
+    if ! printf '%s\r' "$cmd" >&3 2>/dev/null; then
+        echo "at: $DEV went away mid-command" >&2
+        exec 3>&- 2>/dev/null
+        exec 9>&- 2>/dev/null
+        return 1
+    fi
     local end=$((SECONDS + t))
     while [ $SECONDS -lt $end ]; do
         IFS= read -r -t 1 line <&3 || continue

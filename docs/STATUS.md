@@ -43,12 +43,13 @@ work list.
   5 GHz with no manual step.  Bluetooth gets as far as a live link -- the chip
   answers the whole HCI init sequence, `hci0` exists with a real BD address and
   sane ACL/SCO MTUs, `MARLIN_BLUETOOTH` powers on cleanly -- but
-  `hciconfig hci0 up` ends in `Can't init device hci0: Invalid argument`.  Next:
-  the vendor-side init Android performs from its BT HAL, i.e. the
-  `bt_configure_pskey*.ini` / `bt_configure_rf*.ini` pair (the vendor's board set
-  for this exact board is `connconfig/marlin3_lite/ums9621_1h10/`, and it is *not*
-  what `rootfs/pull-wcn-firmware.sh` copies today), or a baud-rate switch that
-  `btattach` does not do.  Then the two older items: association and DHCP measured
+  `hciconfig hci0 up` ends in `Can't init device hci0: Invalid argument`, and
+  btmon puts the blame on the last command of that sequence: the chip refuses
+  `Write Default Link Policy Settings` with `0x12` after advertising hold/sniff/
+  park support, and the kernel treats that as fatal.  Next: make that one request
+  tolerant (a quirk, or clamp the policy to `HCI_LP_RSWITCH`), or keep the kernel
+  out and let userspace own the setup through a raw attach.  Section 8.6 has the
+  btmon trace and the reasoning.  Then the two older items: association and DHCP measured
   12.4 Mbit/s over 5 GHz against 199 Mbit/s over the USB LAN (~3 % of the
   433 Mbit/s negotiated), and `wlan0` comes up on a per-boot random MAC while
   `/mnt/vendor/wifimac.txt` is readable.

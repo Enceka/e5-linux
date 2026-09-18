@@ -1,0 +1,58 @@
+diff --git a/drivers/input/keyboard/sprd_keypad.c b/drivers/input/keyboard/sprd_keypad.c
+index 0ad9ba1e7..276f0a4ac 100644
+--- a/drivers/input/keyboard/sprd_keypad.c
++++ b/drivers/input/keyboard/sprd_keypad.c
+@@ -103,6 +103,24 @@ static void sprd_keypad_disable(struct sprd_keypad_data *data)
+ 	clk_disable_unprepare(data->rtc);
+ }
+ 
++/*
++ * e5-linux: report one key, plus BackSpace for the back key.
++ *
++ * The keypad's back key is the phone's only "back" affordance, but nothing in a
++ * text entry reacts to KEY_BACK -- so on the lock screen the PIN could not be
++ * corrected, and a terminal has no delete key at all.  Reporting BackSpace next
++ * to it makes the one key do both: entries ignore KEY_BACK, phosh (and anything
++ * else that navigates) ignores BackSpace.
++ */
++static void sprd_keypad_report(struct sprd_keypad_data *data, unsigned short key,
++			       int value)
++{
++	input_report_key(data->input_dev, key, value);
++	if (key == KEY_BACK)
++		input_report_key(data->input_dev, KEY_BACKSPACE, value);
++	input_sync(data->input_dev);
++}
++
+ static irqreturn_t sprd_keypad_handler(int irq, void *id)
+ {
+ 	struct platform_device *pdev = id;
+@@ -123,16 +141,14 @@ static irqreturn_t sprd_keypad_handler(int irq, void *id)
+ 			col = SPRD_KPD_INTX_COL(i, key_status);
+ 			row = SPRD_KPD_INTX_ROW(i, key_status);
+ 			key = keycodes[MATRIX_SCAN_CODE(row, col, row_shift)];
+-			input_report_key(data->input_dev, key, 1);
+-			input_sync(data->input_dev);
++			sprd_keypad_report(data, key, 1);
+ 			dev_dbg(dev, "%dD\n", key);
+ 		}
+ 		if (SPRD_KPD_RELEASE_INTX(i, int_status)) {
+ 			col = SPRD_KPD_INTX_COL(i, key_status);
+ 			row = SPRD_KPD_INTX_ROW(i, key_status);
+ 			key = keycodes[MATRIX_SCAN_CODE(row, col, row_shift)];
+-			input_report_key(data->input_dev, key, 0);
+-			input_sync(data->input_dev);
++			sprd_keypad_report(data, key, 0);
+ 			dev_dbg(dev, "%dU\n", key);
+ 		}
+ 	}
+@@ -316,6 +332,9 @@ static int sprd_keypad_probe(struct platform_device *pdev)
+ 		goto err_free;
+ 	}
+ 
++	/* the back key also reports BackSpace -- see sprd_keypad_report() */
++	input_set_capability(data->input_dev, EV_KEY, KEY_BACKSPACE);
++
+ 	rows = cols = 0;
+ 	row_shift = get_count_order(data->num_cols);
+ 	keycodes = data->input_dev->keycode;

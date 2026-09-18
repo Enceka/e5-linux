@@ -229,6 +229,10 @@ done
 log "stage=udc udc=${udc:-none} available=$(ls /sys/class/udc 2>/dev/null | tr '\n' ',')"
 persist
 if [ -n "$udc" ]; then
+    # ADB is *not* added here on purpose: FunctionFS cannot be bound without a daemon
+    # already holding ep0 (the composite bind fails and the board loses USB entirely, no
+    # network and no console).  adbd lives in the rootfs, so e5-adbd.service adds the
+    # function, starts adbd and only then rebinds the UDC -- see docs/FINDINGS.md 21.
     echo "$udc" > "$g/UDC"
     log "stage=usb-bind-done rc=$?"
 fi

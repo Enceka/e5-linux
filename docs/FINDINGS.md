@@ -538,6 +538,43 @@ The path is what has to be satisfied, and it can be satisfied from userspace: po
 already carries, and provide /vendor/firmware/gnssmodem.bin.  Both belong in the
 overlay, which boot/init already knows how to apply.
 
+**Correction (2026-09-18): the partition path is a fallback, and it is not what was
+wrong.**  `wcn_boot.c` tries the firmware loader first:
+
+```c
+    if (marlin_dev->is_btwf_in_sysfs) {
+        err = marlin_download_from_partition();
+        return err;
+    }
+    pr_info("marlin %s from /system/etc/firmware/ start!\\n", __func__);
+    err = request_firmware(&firmware, "wcnmodem.bin", NULL);
+    if (err < 0) {
+        pr_err("no find wcnmodem.bin errno:(%d)(ignore!!)\\n", err);
+        marlin_dev->is_btwf_in_sysfs = true;
+        err = marlin_download_from_partition();
+        return err;
+    }
+```
+
+`marlin_download_from_partition()` is the `/dev/block/by-name/wcnmodem` path; it only
+runs once `request_firmware()` has already failed.  The `from /system/etc/firmware/`
+line is a hardcoded string naming a directory that does not exist in this root
+filesystem at all, which is what made the log look like a partition read.
+
+On the live system `dmesg` shows
+
+    WCN BASEmarlin btwifi_download_firmware from /system/etc/firmware/ start!
+    WCN BASEmarlin btwifi_download_firmware successfully!
+
+with **no** `no find wcnmodem.bin` line anywhere, and
+
+    WCN BASEgnss_download_firmware successfully through request_firmware!
+
+for the GNSS half.  So the real requirement is the one section 8.1 already states --
+`wcnmodem.bin` present in `/lib/firmware` -- and the loop device was never necessary.
+The chip comes up because the initramfs overlay materialises the firmware before the
+module pass.
+
 ### 8.4 What to look at when it is tried
 
     dmesg | grep -iE "wcn|wlan|sdio"      # probe, firmware load, chip boot

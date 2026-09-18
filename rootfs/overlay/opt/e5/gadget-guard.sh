@@ -4,7 +4,7 @@
 set -u
 G=/sys/kernel/config/usb_gadget/linux
 [ -d "$G" ] || exit 0
-UDC=${ADBD_GADGET_UDC:-musb-hdrc.1.auto}
+UDC=${E5_GADGET_UDC:-musb-hdrc.1.auto}
 cur=$(cat "$G/UDC" 2>/dev/null)
 if [ -n "$cur" ]; then
     echo "gadget bound to $cur"

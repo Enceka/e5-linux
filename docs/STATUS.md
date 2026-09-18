@@ -8,44 +8,21 @@ bottom.
 
 ## Now (目前要做)
 
-- **Mobile data dies with a modem CP assert, and nothing on our side recovers it.**
-  Measured on 2026-09-18, twice, in one afternoon:
-  * a fresh boot brings the bearer up properly -- `+CPIN: READY`,
-    `+CEREG: 2,1,...,11` (NR SA), `+COPS: 0,2,"46001",11` (China Unicom),
-    `sipa_eth0` with `10.103.9.38/8` + an IPv6 address and a `metric 100` default
-    route;
-  * about 9.5 minutes later the CP stops answering: the last `sipa_dele: smsg_*`
-    heartbeat is at 574 s, the AT channel goes silent (`mobile-data status` prints
-    its header only, a bare `AT` probe on `/dev/stty_nr1` returns nothing, one
-    earlier probe returned just a `+SPERRLOG:` URC), and the bearer stops passing
-    traffic (TX errors climb, RX stays at a couple of packets, TCP to a resolver
-    times out -- note ICMP is not a usable test here);
-  * Trusty restarts the CP at 599 s (`trusty: enter SEC_KBC_START_CP` ->
-    `kbc_start_cp() enter MODEM_IMG`) and **the AT channel does not come back**;
-  * the CP's own words, from the kernel log:
-    `modem cmd Modem Assert: MN_AL Task PS CP assert in file
-    MS_System/RTOS/source/src_osa/c/threadx_os_iram.c line 1115
-    exp=ASSERT: Error 0xb, The queue was full info=[], [dfs=5]`;
-  * restarting `e5-vendor.service` is not a recovery: `modem_control` sends
-    `cmd 0x43c84e06` and 19 s later the same assert arrives again.  No userspace
-    modem reset exists (`/sys/class/misc` has no node for it, the only related
-    kernel thread is `slog-0-0`), so today only a reboot brings it back -- and
-    then it dies again ~10 minutes in.
-  Android, on the same hardware and the same SIM, is healthy: `gsm.sim.state
-  LOADED`, `gsm.operator.numeric 46001`, `gsm.network.type LTE`, baseband
-  `5G_MODEM_V2_23B_W24.16.1_P1|ums9621_modem`, and it runs
-  `modem_control` + `slogmodem` (`/system_ext/bin/`, a CP *log* service -- pulled
-  and looked at; it is not the AT server) + `urild` + `thermald`, where our chroot
-  runs only `modem_control`.
-
-  Next, and cheap: **the empty-run experiment.**  Boot Linux and do nothing -- no
-  AT, no bearer, just the kernel's smsg heartbeat -- and see whether the CP still
-  asserts at ~10 minutes.  If it does, our AT usage is not the trigger and the
-  missing `urild` (or the firmware itself) is; if it does not, our AT/polling is
-  what fills the CP's queue, and the fix is to copy what Android's RIL does
-  instead.  Then, whichever way it goes, mobile data needs a watchdog: with AT
-  gone the watcher cannot do anything, so "detect the CP is dead and reboot" is
-  the only honest recovery until the assert itself is understood.
+- **Baseband: RIL-shaped AT channel + CP watchdog deployed, soak running (2026-09-18).**
+  The empty run proved the `MN_AL Task PS CP assert ... The queue was full` is our
+  own AT usage, so the fix is to give the CP what Android's RIL gives it:
+  `opt/e5/atd.py` (`e5-atd.service`) opens `/dev/stty_nr0` (the URC channel) and
+  `/dev/stty_nr1` (the command channel) once and keeps them open, drains the URC
+  stream continuously, serialises commands with a minimum gap, and publishes
+  `/run/e5-atd.state`; `mobile-data` now asks it for AT and the watcher's context
+  poll dropped from every 30 s to every 5 min.  `opt/e5/cp-watchdog`
+  (`e5-cp-watchdog.service`) treats "no AT answer for 120 s" as CP death, logs
+  the evidence, re-arms the boot slot and reboots, with a 900 s guard against a
+  boot loop.  Deployed on the device and measured for 31 minutes (watcher up for
+  17): `CP assert` = 0, `+COPS: 0,2,"46001",11`, `wget` fine -- against the ~9.5
+  minutes the old regime survived.  **Still to do:** a longer soak (an hour, and
+  one with hotspot clients), then bake `opt/e5` into the next image.
+  Full reasoning: `docs/FINDINGS.md` section 22.
 - **Bluetooth: the attach race and the dead scans (open, 2026-09-18).**
   `docs/FINDINGS.md` section 8.7.  What works: the controller initialises, `hci0`
   comes up with the chip's own BD address, bluez reports `Powered: yes`, and scans
@@ -75,20 +52,15 @@ bottom.
   clean-boot test (fresh boot, one attach, scan immediately, then scan again after
   ten minutes idle) to decide whether the death is our attach sequence or the
   chip's state.
-- **Wi-Fi hotspot (in progress, 2026-09-18).**  `hostapd` 2.10 is installed on
-  the device and `rootfs/overlay/opt/e5/hotspot` (uncommitted) generates a 5 GHz,
-  channel 149, 80 MHz (VHT80, segment centre 155) AP plus a dnsmasq on
-  `192.168.78.1/24`.  Two things came out of the first test:
-  * the driver reports `#{ managed, AP } <= 1` -- the radio cannot be an AP and a
-    station at once, so starting the hotspot necessarily drops the Wi-Fi uplink
-    (clients then share the modem, or get a LAN with no way out while the modem is
-    unhappy);
-  * hostapd starts and then **stalls in `COUNTRY_UPDATE`**: 5 GHz AP operation
-    needs a country, and setting one through nl80211 does not complete.  The
-    vendor board configs carry `reg_domain1`/`reg_domain2` fields
-    (`wifi_board_config*.ini`) that are probably how Android gets its regulatory
-    settings, and Android's own `wlan0` country is not visible in props or
-    `/vendor/etc/wifi/*.conf` -- either way the country is the thing to fix next.
+- **Wi-Fi hotspot: `AP-ENABLED` at 20 MHz, 40/80 hangs hostapd (2026-09-18).**
+  The `COUNTRY_UPDATE` stall is fixed: `regulatory.db`/`.p7s` (upstream-signed)
+  are in the initramfs, `iw reg get` says `country CN: DFS-FCC`, and the hotspot
+  reaches `AP-ENABLED` on channel 149.  The remaining limit is width: with
+  `vht_oper_chwidth=1`/80 MHz (and 40 MHz) hostapd hangs in `HT_SCAN` after
+  `Channel width 80 MHz`, so the tree keeps ch149 at 20 MHz
+  (`rootfs/overlay/etc/hostapd/e5.conf`).  Two other limits stand: the driver
+  reports `#{ managed, AP } <= 1`, so an AP drops the Wi-Fi uplink, and guests
+  only get out through the (now watchdogged) modem.
 - **Shutdown takes ~32 s and it is all NetworkManager (deferred).**  Everything
   else stops inside 1.3 s (`bluetooth.service` in 0.25 s); the journal is then
   silent from NM's `modem-manager: ModemManager no longer available` at
@@ -107,10 +79,10 @@ bottom.
   `DUMB_CREATE_TIMES_LIMIT` sits at 64, and (b) the frequency is pinned at DVFS
   index 3 (384 MHz) because devfreq is skipped on this board -- watch thermals
   under real load.  PanVK stays out of reach: Mesa has no Valhall v9 backend.
-- **Documentation debt:** `rootfs/overlay/etc/machine-info` and this file refer to
-  `docs/FINDINGS.md` section 22, which does not exist yet -- it owes the identity
-  strings (pretty hostname `Rongyue E5`, `Processor: Unisoc T158` from
-  `kernel/patches/0009`) and the 32 s shutdown measurement above.
+- **The 32 s shutdown is still unexplained, but is written up now.**
+  `docs/FINDINGS.md` section 23 has the identity strings and the measurement
+  (everything stops in 1.3 s, then NetworkManager sits on device teardown for the
+  rest); the `TimeoutStopSec=5` drop-in has not helped in its one test.
 
 ### Traps found the hard way
 
@@ -169,9 +141,9 @@ bottom.
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57** -- and clients on the same renderer through the Wayland platform |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
-| baseband | 5G NR SA (n78) works for ~10 min after a boot, then the CP asserts and only a reboot recovers it; see "Now" (Android, same SIM: LTE, healthy) |
+| baseband | 5G NR SA (n78); the CP asserted ~10 min into a session that polled AT. `e5-atd.service` (persistent URC drain + serialised commands) + `e5-cp-watchdog.service` are deployed; 31 min soak clean, longer soak pending (`docs/FINDINGS.md` 22) |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
-| hotspot | `hostapd` 2.10 on the device, `opt/e5/hotspot` (uncommitted) for 5G/ch149/VHT80; stalls in `COUNTRY_UPDATE`; no AP+STA concurrency |
+| hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at **20 MHz** (`iw reg` = `country CN` after the regdb reflash); 40/80 MHz hangs hostapd in `HT_SCAN`; no AP+STA concurrency |
 | bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
 | disk | 4.4 GiB used, 1.2 GiB free |
@@ -179,13 +151,12 @@ bottom.
 
 ## Uncommitted in the working tree (2026-09-18)
 
-- `rootfs/overlay/opt/e5/mobile-data`: URC filtering in `at()` (`+CESQ/+CIND/+SIND/
-  +CIEV/+CREG/+CGREG/^CONN/+SPERRLOG` dropped, the prefixes this script itself
-  queries kept).  Written but never validated: the AT channel was dead by the time
-  a comparison was possible.
-- `rootfs/overlay/opt/e5/hotspot`: new (see "Now").
 - `rootfs/overlay/lib/firmware/bt_configure_{pskey,rf}.ini`: pulled from Android
   (`.gitignore` keeps them out of git, like the other vendor blobs).
+- Nothing else: `opt/e5/mobile-data`, the new `opt/e5/atd.py` +
+  `opt/e5/cp-watchdog` and their units are committed (see the baseband bullet),
+  and the earlier "URC filtering in `at()`" note was a dead edit -- the tree was
+  already clean when the AT channel came back.
 
 ### 2026-09-18, late (this round)
 

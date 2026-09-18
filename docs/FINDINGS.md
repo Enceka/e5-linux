@@ -2045,3 +2045,131 @@ Verified: `dnsmasq --test` OK, `dnsmasq: active` (enabled), listening on
 `192.168.9.1:53`, `192.168.77.1:53` and `127.0.0.1:53`, and
 `busybox nslookup deb.debian.org 192.168.9.1` resolves -- so a client that renews its
 lease gets `192.168.9.x`, gateway `192.168.9.1` and a resolver that actually answers.
+
+
+## 22. The baseband CP assert: the URC channel, the RIL-shaped AT channel, the watchdog
+
+### The symptom, and the empty run
+
+A boot brings the bearer up (`+CPIN: READY`, `+CEREG: 2,1,...,11` = NR SA,
+`AT+CGDATA="M-ETHER",1`, `sipa_eth0` with its address and a `metric 100` default
+route), and at about 9.5 minutes the CP stops answering.  The kernel log then
+carries the CP's own words:
+
+    modem cmd Modem Assert: MN_AL Task PS CP assert in file
+    MS_System/RTOS/source/src_osa/c/threadx_os_iram.c line 1115
+    exp=ASSERT: Error 0xb, The queue was full info=[], [dfs=5]
+
+Trusty restarts the CP (`enter SEC_KBC_START_CP` -> `kbc_start_cp() enter
+MODEM_IMG`) and the AT channel does not come back; only a reboot recovers it.  The
+empty run settled the trigger: with `e5-mobile-data` and its watcher stopped and
+no AT at all, **uptime 17 minutes passed with zero `CP assert` hits**, while a
+session that polls AT died at ~9.5 minutes.
+
+### The two channels
+
+Measured on 2026-09-18 with the watcher stopped and nobody holding a channel:
+
+* `/dev/stty_nr0` is the **URC channel**.  Opening it dumps the queue that piled
+  up since the last reader: `+SIND: 1`, `+SIND: 10,"SM",1,"FD",1,...`,
+  `+ECIND: 3,0,0,1`, `+ECIND: 3,6,1`, `+CMGW: ME is full`, `+PRENWINFU:"46001"`,
+  `+CREG: 2`, `+CEREG: 2`, then a periodic `+CSQ: 255,99` / `+CESQ:
+  99,99,255,255,255,255,75,67,73` pair (signal fields invalid, ME storage full),
+  and later the bearer events `+CGEV: ME PDN ACT 1` / `+SPPCODATA: 1`.  A 45 s
+  read produced tens of lines, a later 8 s read 63 lines (~6 lines/s).
+* `/dev/stty_nr1` is a **clean command channel**: it stays silent while idle and
+  answers `AT`, `AT+CEREG?`, `AT+COPS?` normally.  MU300-linux saw the same
+  `nr0`=URC / `nr1`=command split on the same modem family.
+
+Our code never read `nr0` at all, and `mobile-data`'s `at()` opened
+`/dev/stty_nr1`, drained 0.2 s of backlog, wrote one command, read to `OK` and
+closed the port again -- for every command, every 30 s, from the bearer watcher.
+Android's RIL does the opposite: it holds the channel open for the lifetime of
+the boot and reads the URC stream continuously (`urild` is the process that does
+it on this device).
+
+### A second, different death: AT dies without an assert
+
+On 2026-09-18 22:03-22:09 the AT server was observed dying on its own, with the
+watcher stopped and nobody holding either channel:
+
+* 22:03:14 (`uptime 1765`) a bare `AT` on `nr1` answered `OK`, and an `nr0` read
+  dumped the URC backlog above;
+* by 22:07 both channels returned nothing at all, and at 22:09 a bare `AT`
+  produced no `OK`, no `ERROR` and no URC -- no process had the channel open;
+* `dmesg` `CP assert` hits = 0, there was no `kbc_start_cp` after boot, and
+  `busybox wget` through `sipa_eth0` still worked (the address stayed up).
+
+So "the AT channel is dead" and "the CP has asserted" are not the same event, and
+the bearer can keep passing traffic after AT is gone.  A watchdog has to key on
+AT's silence, not on the CP assert appearing in dmesg.
+
+### The fix: a persistent, RIL-shaped AT channel
+
+`rootfs/overlay/opt/e5/atd.py` (`e5-atd.service`) is a small daemon that opens
+`nr0` and `nr1` **once** and keeps them open for the whole boot:
+
+* it drains `nr0` continuously into `/var/log/e5-atd.urc` (rotated at 256 KiB)
+  and never closes the port;
+* commands from `mobile-data` arrive on the `/run/e5-atd.sock` unix socket and are
+  serialised with a 0.3 s minimum gap, one in flight at a time, with an 8 s
+  timeout, so no caller can flood the CP;
+* URCs are interleaved with the command's own response rather than being lost;
+* when idle for 60 s it sends a bare `AT` and records the answer as the liveness
+  signal, and it publishes `/run/e5-atd.state` (JSON: `last_ok`, `last_rx`,
+  `urc_lines`, `commands`, `fails`, channel flags) for the watchdog;
+* the channels are reopened with backoff if they disappear, so a CP restart no
+  longer leaves a dead port behind.
+
+`mobile-data` asks for its AT through the daemon (`at()` falls back to the old
+direct path only if `/opt/e5/atd.py` is not installed), and its watcher now
+checks the interface every 30 s but asks the modem about `+CEREG?`/`+CGACT?` only
+once every five minutes instead of every 30 s.
+
+Measured after deploying it (2026-09-18, uptime 31 min, watcher up for 17 min):
+`CP assert` hits = 0, `AT+COPS?` -> `+COPS: 0,2,"46001",11`, `sipa_eth0` still up
+and `busybox wget http://mirror.nju.edu.cn/...` fine -- where the previous
+regime asserted at ~9.5 minutes.  (Correlation, not proof: the watcher's AT
+volume is now ~1.4 commands/min against ~4/min before, so either the persistent
+channel or the lower rate may be what helps.  The daemon does both, which is what
+the RIL does.)
+
+### The watchdog
+
+There is no userspace modem reset on this board: `/sys/class/misc` has no modem
+node and restarting `e5-vendor.service` sends `cmd 0x43c84e06`, which only
+re-triggers the same assert 19 s later.  So the honest recovery for a silent AT
+channel is a reboot, done by `rootfs/overlay/opt/e5/cp-watchdog`
+(`e5-cp-watchdog.service`, `/etc/e5/cp-watchdog.conf`):
+
+* dead = the daemon's `last_ok` is older than `DEAD_AFTER` (default 120 s);
+* on death it appends the evidence to `/var/log/e5-cp-watchdog.log` -- uptime,
+  the atd state, the last URCs, the `modem`/`CP assert`/`kbc_*` lines from dmesg
+  and `ip -s link show sipa_eth0` -- then re-arms the boot slot
+  (`/usr/local/sbin/e5-boot-ok`, which matters because `e5-boot-ok.service` is
+  disabled on the device right now and a plain reboot would otherwise fall back
+  to Android) and runs `systemctl reboot`;
+* `GUARD` (900 s) refuses a second watchdog reboot inside the window and only
+  logs it, so a CP that dies again immediately cannot turn into a boot loop;
+* `ACTION=log` observes without rebooting, and `--simulate` was used to test the
+  decision: with a fake state whose `last_ok` was 400 s old, the watchdog
+  reported "AT channel has not answered for 415 s" with the evidence block at the
+  first check and refused to reboot under `ACTION=log`.
+
+## 23. The two open documentation debts, paid
+
+* **Identity strings.**  `rootfs/overlay/etc/machine-info` sets `PRETTY_HOSTNAME=
+  Rongyue E5` (the static hostname cannot contain a space, so the login prompt
+  keeps `e5-linux`).  `HARDWARE_VENDOR`/`HARDWARE_MODEL` are deliberately unset --
+  they fill the "Hardware Model" row, while the part name belongs in "Processor",
+  which is built from `/proc/cpuinfo` and is therefore set in the kernel
+  (`kernel/patches/0009` prints `Processor: Unisoc T158`).
+* **The 32 s shutdown.**  Measured 2026-09-18: everything stops inside 1.3 s
+  (`bluetooth.service` in 0.25 s) and the journal is then silent from
+  NetworkManager's `modem-manager: ModemManager no longer available` at
+  14:57:01.108 until NM's own `exiting (success)` at 14:57:33.001 -- NM waits on
+  device teardown that does not complete here (the WLAN firmware does not answer
+  a disconnect promptly).  `NetworkManager.service.d/20-e5-shutdown-timeout.conf`
+  (`TimeoutStopSec=5`) did not shorten the total in the one test after it: NM's
+  stop is issued late in the sequence, so the time is spent before it is reached.
+  Re-measure on a booted image before believing anything else here.

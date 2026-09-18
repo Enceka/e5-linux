@@ -24,11 +24,13 @@ work list.
   at `433.3 MBit/s VHT-MCS 9 80MHz`, DHCP lease `192.168.137.113/24` plus a link-local
   address, and NetworkManager saved the profile to
   `/etc/NetworkManager/system-connections/` (mode 0600) so it autoconnects.
-  A 100 MB fetch from the wired side of the same subnet ran end to end:
-  `http=200 bytes=104857600 time=67.7s speed=1548242 B/s` — **12.4 Mbit/s, about 3 % of
-  the negotiated rate**, so the bottleneck is not the radio.  Worth measuring properly
-  (an upload test to separate the RX and TX paths, then the SDIO transport) before
-  calling Wi-Fi done; the 5G link manages ~50 Mbit/s for comparison.
+  A 100 MB fetch from the host ran end to end: `http=200 bytes=104857600 time=67.7s
+  speed=1548242 B/s` — **12.4 Mbit/s, about 3 % of the 433 Mbit/s the link
+  negotiates**.  The control settles where the loss is: the *same* file from the *same*
+  server over the USB LAN takes 4.2 s, `speed=24932851 B/s` (24.9 MB/s, 199 Mbit/s).
+  So the host, the file and the TCP stack are all fine and the ~16x gap is the
+  Wi-Fi/SDIO data path — the SDIO transport or the fullmac driver's RX, not the radio
+  and not the network stack.  That is the thing to profile before calling Wi-Fi done.
 
   Credentials live in `/etc/e5/wifi.conf` (0600) **and** in the NetworkManager profile
   on the device only — never in this repository and never in a log.
@@ -42,6 +44,10 @@ work list.
   unreachable, use phosh's per-app `scale-to-fit`, then `phoc.ini`'s `[output:DSI-1]`
   `scale`/`rotate` (the output reports `Enabled: no` in `wlr-randr` while phosh drives it,
   which is worth understanding before trusting either).
+  **Remote verification does not work yet.**  `grim` on the device fails with
+  `failed to copy output DSI-1`, the same oddity as `wlr-randr` reporting
+  `Enabled: no` while phosh is plainly driving the panel.  Until screencopy works the
+  UI has to be judged by eye, so this item cannot be closed from a shell.
 - **Reflash when convenient.** The device still runs the *old* flashed image (64 modules,
   25-file overlay).  The keypad modules and the 4 GiB zram work from the rootfs, but the
   initramfs overlay rewrites `/usr/local/sbin/e5-zram` and `/etc/environment` on every

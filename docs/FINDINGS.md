@@ -1934,3 +1934,32 @@ through D-Bus activation from a service file as well as by hand.  phosh's
 which is why the keyboard itself is the thing that suffers from a large font.
 
 
+
+## 20. The hotspot needed the regulatory database in the initramfs
+
+`hostapd` installs and `wlan0` does switch to AP mode (`iw dev wlan0 set type __ap`),
+but hostapd refused to start: `Failed to set beacon parameters` on 2.4 GHz, and on 5 GHz
+`Frequency 5180 (primary) not allowed for AP mode, flags: 0x853 NO-IR`.  `iw reg get`
+answered `country 00: DFS-UNSET`, and `iw reg set CN` never changed that: **cfg80211 loads
+`regulatory.db` from firmware when it initialises**, and here it initialises in the
+initramfs -- before the root filesystem, and therefore before `/lib/firmware`, exists.
+The request is one-shot: it waits in the sysfs firmware fallback (the trick MU300's
+`regdb-load` uses) and times out long before a systemd service could feed it.  Without
+the database cfg80211 cannot apply CN's rules, so every channel stays NO-IR and hostapd
+cannot transmit beacons -- which is what "client cannot join" looked like.
+
+Feeding it late cannot work either, and neither can reloading the modules: the running
+rootfs has no `/lib/modules` at all (the vendor modules live only in the initramfs), so
+`sprd_wlan_combo`/`wcn_bsp`/`cfg80211` cannot be unloaded and re-inserted to re-issue the
+request.
+
+The fix is in the image: `regulatory.db` and `regulatory.db.p7s` (from `wireless-regdb`,
+6 KiB together) now sit in `rootfs/overlay/lib/firmware/`, and `boot/init` copies the
+overlay's `lib/` to `/lib` *before* loading the WCN modules (`stage=overlay-early`), so
+cfg80211 finds them the moment it asks.  **The hotspot therefore needs a reflash** of the
+rebuilt image; the device currently runs the previous one.
+
+For reference, the parameters this chip wants (from MU300's `hotspot-start`): 5 GHz
+`hw_mode=a channel=36 ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40] ieee80211ac=1
+vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=42`, or 2.4 GHz `hw_mode=g channel=6
+ht_capab=[SHORT-GI-20]`, with `country_code=CN` and `ieee80211d=1`.

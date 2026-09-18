@@ -17,8 +17,11 @@ work list.
   kbase is a module that nothing loads (`CONFIG_MALI_MIDGARD=m` in
   `kernel/e5-linux.fragment`); `modprobe mali_kbase` (or putting it back to `=y`)
   is the way back to the blob.  Open, in the order I would pick them up:
-  * `phoc.ini` still scales the output to 0.75, a number chosen when the CPU had
-    to draw every pixel.  That reason is gone -- try 0.85 and 1.0 again.
+  * the output scale stays at `phoc.ini`'s 0.9.  Section 21 picked it for
+    sharpness and in-system text size, and the GPU does not argue against it --
+    the panel is what it should be, so this is settled rather than pending.  (The
+    "still scales to 0.75" this list used to carry was stale: 0.75 was the option
+    section 21 rejected as visibly soft.)
   * the scanout buffers are still the vendor KMS driver's dumb buffers, because
     wlroots allocates the swapchain on the *display* device (section 20.7); that
     is why `DUMB_CREATE_TIMES_LIMIT` had to be raised from 10 to 64.  If the GPU

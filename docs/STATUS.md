@@ -186,3 +186,25 @@ bottom.
 - `rootfs/overlay/opt/e5/hotspot`: new (see "Now").
 - `rootfs/overlay/lib/firmware/bt_configure_{pskey,rf}.ini`: pulled from Android
   (`.gitignore` keeps them out of git, like the other vendor blobs).
+
+### 2026-09-18, late (this round)
+
+* **Empty-run verdict (done, and it answers the question):** Linux was booted and left
+  alone -- `e5-mobile-data` and its watcher stopped, no AT at all -- and at **uptime
+  17 minutes there was no CP assert** (`CP assert` hits = 0), where a session that polls
+  AT dies at ~9.5 minutes.  So the `MN_AL Task PS CP assert ... The queue was full` is
+  **our AT usage filling the CP's queue**, not the firmware: the fix is to pace AT the way
+  Android's RIL does, and to keep a "CP is dead -> reboot" watchdog as the fallback.
+  Services were re-enabled afterwards; the bearer came back as `10.133.137.8/8`.
+* **Hotspot: blocked by the regulatory domain, fixed in the image** (docs/FINDINGS.md
+  section 20).  `regulatory.db` + its signature are now in `rootfs/overlay/lib/firmware/`,
+  and the rebuilt image puts them in the initramfs before the WCN modules load.  **After a
+  reflash**: `iw reg get` should say `country CN`, then
+  `iw dev wlan0 set type __ap; ip link set wlan0 up; hostapd -B /etc/hostapd/e5.conf`
+  should reach `AP-ENABLED` (SSID `E5-Linux`, psk `12345678`, DHCP from
+  `etc/systemd/network/20-e5-wlan0.network` = 192.168.78.1/24, NAT out via the existing
+  `sipa_eth0` masquerade).
+* **wlan0 is currently NetworkManager-unmanaged**
+  (`/etc/NetworkManager/conf.d/20-e5-wlan0-unmanaged.conf` was added so hostapd can own
+  the interface) and `wpa_supplicant.service` is masked.  Remove both to go back to
+  station mode.

@@ -38,21 +38,66 @@ work list.
   restores it on any touch or other key; suspend is not an option (see below).  The
   logind/ScreenSaver lock call was removed again after the user found the screen could no
   longer be woken while it was in -- confirm waking before adding anything back.
+
+  **Why it cannot be woken (2026-09-18).**  The script decides with `locked()`, which
+  reads `/sys/class/backlight/*/bl_power` and calls the panel locked when it is not
+  `0`.  That state and the compositor's are **independent**: phoc owns DPMS and blanks
+  the output on its own idle timer, while `bl_power` stays `0` the whole time.  So after
+  phoc blanks, `locked()` reports "panel is on", the power key calls `panel(True)` --
+  i.e. *off* -- and the `elif locked()` branch that is supposed to wake it on any other
+  key can never fire.  The result is a screen that only ever goes darker.  Confirmed
+  from the DRM side: `crtc[109]: dispc0 enable=0`, `connector[117]: DSI-1 crtc=(null)`,
+  `dpms=Off`, while the script's own journal says `panel on`.
+
+  The fix is to stop fighting the compositor: either drive phosh's own blank/unblank
+  (it already blanks on idle and wakes on touch, so the panel writes can simply go), or
+  have `locked()` consult the DRM DPMS state instead of `bl_power`.  Do **not** reach
+  for `systemctl restart sddm` while debugging this -- see the trap below.
+
 - **Screen size.** The panel is 49x74 mm at 320x480, i.e. ~166 DPI, and GTK lets that
   grow the UI past the screen ("some buttons are off-screen").  First attempt:
   `org.gnome.desktop.interface text-scaling-factor 0.75`.  If buttons are still
   unreachable, use phosh's per-app `scale-to-fit`, then `phoc.ini`'s `[output:DSI-1]`
   `scale`/`rotate` (the output reports `Enabled: no` in `wlr-randr` while phosh drives it,
   which is worth understanding before trusting either).
-  **Remote verification does not work yet.**  `grim` on the device fails with
-  `failed to copy output DSI-1`, the same oddity as `wlr-randr` reporting
-  `Enabled: no` while phosh is plainly driving the panel.  Until screencopy works the
-  UI has to be judged by eye, so this item cannot be closed from a shell.
+  **The virtual keyboard is the concrete failure (2026-09-18), and it is measured.**
+  With the display healthy, `grim` works after all -- the earlier
+  `failed to copy output DSI-1` was just the symptom of the panel being off
+  (`crtc enable=0`, `dpms=Off`), not a broken screencopy.  `tools/png2ascii.py`
+  turns the capture into a character map so it can be read without an image viewer,
+  and it shows the OSK clipped at the right edge: the top row ends mid-key
+  (`...:*******++` against 10-12 character keys elsewhere) and the indented home row,
+  which should have roughly half a key of margin on each side, starts with six
+  characters of blank on the left and is still cut off on the right.  The layout wants
+  around 355 px of logical width and the output only offers 320, so no amount of
+  `text-scaling-factor` will help --
+  `wlr-randr` confirms `Transform: normal`, `Scale: 1.000000`, mode `320x480`.
+
+  Next to try, in order: `phoc.ini`'s `[output:DSI-1] scale` below 1, which buys
+  logical width directly (if phoc only accepts integers, this needs squeekboard or a
+  patched layout instead); then `squeekboard`, whose layouts are built for narrow
+  phones; then phosh's per-app `scale-to-fit`.
 - **Reflash when convenient.** The device still runs the *old* flashed image (64 modules,
   25-file overlay).  The keypad modules and the 4 GiB zram work from the rootfs, but the
   initramfs overlay rewrites `/usr/local/sbin/e5-zram` and `/etc/environment` on every
   boot, which is why the zram size lives in a drop-in.  `boot-linux-slotb.img` in the
   repository is already the fixed one (66 modules, 26 overlay files).
+
+### Traps found the hard way
+
+- **`systemctl restart sddm` takes the screen away and only a reboot gives it back.**
+  SDDM's default `DisplayServer` is x11; X is not installed on this image any more, so
+  the restart tries `/usr/bin/X` three times, fails, and exports `DISPLAY=:0` into the
+  session environment.  phosh then exits with `cannot open display: :0`, and
+  `mobi.phosh.Shell.service` hits "Start request repeated too quickly".  The
+  `DisplayServer=wayland` line in `rootfs/overlay/etc/sddm.conf.d/10-e5.conf` is the
+  fix; a plain reboot is the recovery.
+- **The device's initramfs overlay is baked into the flashed image.**  Editing
+  `rootfs/overlay/...` changes nothing until the image is rebuilt and flashed, and
+  until then the *old* overlay is copied over `/etc` on every single boot.  The
+  device's `/etc/sddm.conf.d/10-e5.conf` still said `plasma-mobile.desktop` for
+  exactly this reason.  `/etc/sddm.conf` currently wins over `/etc/sddm.conf.d/`, which
+  is the only reason autologin kept working.
 
 ## Next (后续要做)
 

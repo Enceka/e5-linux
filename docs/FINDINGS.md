@@ -2025,3 +2025,23 @@ Verified after both fixes:
 
 A client that already holds a lease has to reconnect (or let the lease renew) to pick up
 the new DNS option.
+
+### 20.3 dnsmasq does the hotspot's DHCP and DNS
+
+`systemd-networkd`'s DHCPServer cannot answer the DNS queries it advertises, and with
+`EmitDNS=no` plus a static `DNS=` list the lease carried the carrier's resolvers but the
+client still did not resolve (it was the lease renewal that decided it, and a static list
+also breaks whenever the carrier changes servers).  `dnsmasq` does both jobs properly:
+
+    /etc/dnsmasq.d/e5-hotspot.conf
+      interface=wlan0, interface=usb0, bind-interfaces
+      no-dhcp-interface=usb0                 (usb0's leases stay with networkd)
+      dhcp-range=192.168.9.10,192.168.9.61,255.255.255.0,12h
+      dhcp-option=option:router,192.168.9.1
+      dhcp-option=option:dns-server,192.168.9.1
+
+and `wlan0`'s `.network` went back to address-only (`DHCPServer=no`), so nothing competes.
+Verified: `dnsmasq --test` OK, `dnsmasq: active` (enabled), listening on
+`192.168.9.1:53`, `192.168.77.1:53` and `127.0.0.1:53`, and
+`busybox nslookup deb.debian.org 192.168.9.1` resolves -- so a client that renews its
+lease gets `192.168.9.x`, gateway `192.168.9.1` and a resolver that actually answers.

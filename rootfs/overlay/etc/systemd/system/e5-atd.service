@@ -1,0 +1,18 @@
+[Unit]
+Description=E5 persistent AT channel (URC drain + command broker)
+Documentation=see docs/FINDINGS.md (baseband)
+# The CP pushes URCs continuously; someone has to read /dev/stty_nr0 all the
+# time or the CP's queue fills and the PS task asserts.  This daemon keeps both
+# channels open for the lifetime of the boot and serves commands to mobile-data.
+After=e5-vendor.service
+Wants=e5-vendor.service
+ConditionPathExists=/dev/stty_nr1
+
+[Service]
+Type=simple
+ExecStart=/opt/e5/atd.py serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

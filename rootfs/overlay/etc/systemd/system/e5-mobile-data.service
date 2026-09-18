@@ -1,7 +1,7 @@
 [Unit]
 Description=E5 mobile data (AT commands + sipa_eth0 bearer)
-After=e5-vendor.service network-pre.target graphical.target
-Wants=e5-vendor.service
+After=e5-vendor.service e5-atd.service network-pre.target graphical.target
+Wants=e5-vendor.service e5-atd.service
 ConditionPathExists=/dev/stty_nr1
 # Deliberately *after* the graphical session.  This unit used to sit in
 # "start running" for its whole TimeoutStartSec and then be restarted again

@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""CP death watchdog for the E5 baseband.
+
+There is no userspace modem reset on this board (`/sys/class/misc` has no modem
+node), so when the CP stops answering AT the only honest recovery is a reboot.
+This watches `/run/e5-atd.state`: if the AT channel has not answered for
+DEAD_AFTER seconds, it records the evidence and reboots.  A stamp file keeps a
+CP that dies again right after the reboot from turning into a boot loop.
+
+  cp-watchdog              run in the foreground (systemd unit)
+  cp-watchdog --simulate   decide and log the reboot, but do not issue it
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+CONF = os.environ.get('E5_CP_CONF', '/etc/e5/cp-watchdog.conf')
+STATE = os.environ.get('E5_AT_STATE', '/run/e5-atd.state')
+URCLOG = os.environ.get('E5_AT_URCLOG', '/var/log/e5-atd.urc')
+LOG = os.environ.get('E5_CP_LOG', '/var/log/e5-cp-watchdog.log')
+STAMP = os.environ.get('E5_CP_STAMP', '/var/lib/e5/cp-watchdog.stamp')
+BOOTOK = os.environ.get('E5_CP_BOOTOK', '/usr/local/sbin/e5-boot-ok')
+
+ACTION = 'reboot'
+DEAD_AFTER = 120.0
+CHECK = 15.0
+GUARD = 900.0
+BOOTOK_TIMEOUT = 20.0
+
+
+def load_conf():
+    global ACTION, DEAD_AFTER, CHECK, GUARD
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.split('#', 1)[0].strip()
+                if '=' not in line:
+                    continue
+                key, val = [x.strip() for x in line.split('=', 1)]
+                if key == 'ACTION':
+                    ACTION = val
+                elif key == 'DEAD_AFTER':
+                    DEAD_AFTER = float(val)
+                elif key == 'CHECK':
+                    CHECK = float(val)
+                elif key == 'GUARD':
+                    GUARD = float(val)
+    except OSError:
+        pass
+
+
+def report(text):
+    line = '%s %s' % (time.strftime('%F %T'), text)
+    sys.stderr.write(line + '\n')
+    sys.stderr.flush()
+    try:
+        with open(LOG, 'a') as f:
+            f.write(line + '\n')
+    except OSError:
+        pass
+
+
+def run(cmd, timeout=10):
+    try:
+        out = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
+        return (out.stdout + out.stderr).decode('utf-8', 'replace').strip()
+    except Exception as exc:
+        return '(%s: %r)' % (cmd, exc)
+
+
+def tail(path, lines=15, maxbytes=4096):
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - maxbytes))
+            data = f.read()
+        return '\n'.join(data.decode('utf-8', 'replace').splitlines()[-lines:])
+    except OSError:
+        return '(no %s)' % path
+
+
+def evidence(state):
+    return '\n'.join([
+        '  uptime: %s' % run('cat /proc/uptime'),
+        '  atd state: %s' % json.dumps(state),
+        '  last URCs:\n%s' % tail(URCLOG),
+        '  kernel: %s' % run("dmesg | grep -iE 'CP assert|kbc_start_cp|kbc_stop_cp|modem cmd' | tail -6"),
+        '  sipa: %s' % run("ip -s link show sipa_eth0 | tail -4"),
+    ])
+
+
+def stamp_age():
+    try:
+        return time.time() - os.path.getmtime(STAMP)
+    except OSError:
+        return None
+
+
+def reboot(reason):
+    if ACTION != 'reboot':
+        report('CP unresponsive (%s); ACTION=%s, not rebooting' % (reason, ACTION))
+        return
+    age = stamp_age()
+    if age is not None and age < GUARD:
+        report('CP unresponsive (%s) but a watchdog reboot was %d s ago; refusing '
+               '(guard %d s)' % (reason, age, GUARD))
+        return
+    try:
+        os.makedirs(os.path.dirname(STAMP), exist_ok=True)
+        with open(STAMP, 'w') as f:
+            f.write('%d\n' % time.time())
+    except OSError as exc:
+        report('cannot write %s: %s' % (STAMP, exc))
+    report('rebooting: %s' % reason)
+    if os.path.exists(BOOTOK):
+        report('re-arming the boot slot: %s' % run('%s 2>&1' % BOOTOK, BOOTOK_TIMEOUT))
+    else:
+        report('no %s; the next boot may fall back to Android' % BOOTOK)
+    run('sync')
+    run('systemctl reboot')
+
+
+def main(argv):
+    global ACTION
+    load_conf()
+    if '--simulate' in argv:
+        ACTION = 'log'
+    report('cp-watchdog started (action=%s dead_after=%ss check=%ss guard=%ss)'
+           % (ACTION, DEAD_AFTER, CHECK, GUARD))
+    dead_since = 0.0
+    while True:
+        time.sleep(CHECK)
+        try:
+            with open(STATE) as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            dead_since = 0.0
+            continue
+        now = time.time()
+        ref = state.get('last_ok') or state.get('ts') or now
+        if now - ref <= DEAD_AFTER:
+            dead_since = 0.0
+            continue
+        if not dead_since:
+            dead_since = now
+            report('AT channel has not answered for %d s:\n%s'
+                   % (now - ref, evidence(state)))
+        elif now - dead_since > CHECK:
+            reboot('no AT answer for %d s (atd last_ok=%s)'
+                   % (now - ref, state.get('last_ok')))
+            dead_since = now
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

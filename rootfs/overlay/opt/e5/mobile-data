@@ -16,6 +16,15 @@ APN=${APN:-3gnet}
 
 at() {
     local cmd=$1 t=${2:-5} line
+    # /opt/e5/atd.py holds the AT channels open for the whole boot and drains
+    # /dev/stty_nr0's URC stream; use it whenever it is running.  Opening the
+    # channel per command is what filled the CP's queue (and the CP asserts when
+    # it fills), so the direct path below is only a fallback for a boot where
+    # the daemon is not installed yet.
+    if [ -S "${E5_AT_SOCK:-/run/e5-atd.sock}" ] && [ -x /opt/e5/atd.py ]; then
+        python3 /opt/e5/atd.py cmd "$cmd" "$t" 2>/dev/null
+        return $?
+    fi
     [ -c "$DEV" ] || return 1
     # One AT channel, several callers (the oneshot unit, the watcher, a human on
     # telnet).  Without this they steal each other's responses and a perfectly
@@ -185,24 +194,31 @@ sim_reset() {
 # The modem firmware resets itself now and then; it comes back with the radio off
 # and no PDP context, so check the bearer and rebuild it when it is gone.
 watch() {
-    local fails=0
+    local fails=0 n=0
     # a boot where the modem was not ready yet leaves the bearer down and the
     # oneshot unit failed; repair it here rather than waiting for the first check
     [ -e /run/e5-mobile-data-down ] || up || true
     while :; do
         sleep 30
         [ -e /run/e5-mobile-data-down ] && continue
+        n=$((n + 1))
         # Registration is not enough.  When the PDP context deactivates the
         # interface keeps its address and the default route keeps blackholing
         # traffic, so "registered but no bearer" looks perfectly healthy here and
         # nothing ever reconnects -- the only symptom is that the internet stops.
-        # Ask about the context itself.
-        if ! at 'AT+CEREG?' 2>/dev/null | grep -qE '\+CEREG: [0-9],(1|5)'; then
+        # Ask about the context itself.  Asking the modem is the expensive part,
+        # though (every command is CP work), so with atd holding the channel the
+        # context is only queried once every five minutes; the interface check
+        # stays at 30 s and catches the common case.
+        if ! ip -br addr show "$IFACE" 2>/dev/null | grep -q 'UP'; then
             fails=$((fails + 1))
-        elif ! at 'AT+CGACT?' 2>/dev/null | grep -qE "\+CGACT: *$CID,1"; then
-            fails=$((fails + 1))
-        elif ! ip -br addr show "$IFACE" 2>/dev/null | grep -q 'UP'; then
-            fails=$((fails + 1))
+        elif [ $((n % 10)) -eq 0 ]; then
+            if at 'AT+CEREG?' 2>/dev/null | grep -qE '\+CEREG: [0-9],(1|5)' &&
+               at 'AT+CGACT?' 2>/dev/null | grep -qE "\+CGACT: *$CID,1"; then
+                fails=0
+            else
+                fails=$((fails + 1))
+            fi
         else
             fails=0
         fi

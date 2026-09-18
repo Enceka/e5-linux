@@ -1,0 +1,768 @@
+diff --git a/drivers/gpu/drm/panfrost/Makefile b/drivers/gpu/drm/panfrost/Makefile
+index b71935862..10da26fe3 100644
+--- a/drivers/gpu/drm/panfrost/Makefile
++++ b/drivers/gpu/drm/panfrost/Makefile
+@@ -9,6 +9,7 @@ panfrost-y := \
+ 	panfrost_gpu.o \
+ 	panfrost_job.o \
+ 	panfrost_mmu.o \
+-	panfrost_perfcnt.o
++	panfrost_perfcnt.o \
++	panfrost_sprd.o
+ 
+ obj-$(CONFIG_DRM_PANFROST) += panfrost.o
+diff --git a/drivers/gpu/drm/panfrost/panfrost_device.c b/drivers/gpu/drm/panfrost/panfrost_device.c
+index bd9b7be63..148bddf49 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_device.c
++++ b/drivers/gpu/drm/panfrost/panfrost_device.c
+@@ -3,18 +3,22 @@
+ /* Copyright 2019 Linaro, Ltd, Rob Herring <robh@kernel.org> */
+ 
+ #include <linux/clk.h>
++#include <linux/of_irq.h>
+ #include <linux/reset.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_domain.h>
+ #include <linux/regulator/consumer.h>
++#include <linux/string.h>
+ 
+ #include "panfrost_device.h"
+ #include "panfrost_devfreq.h"
+ #include "panfrost_features.h"
+ #include "panfrost_gpu.h"
++#include "panfrost_issues.h"
+ #include "panfrost_job.h"
+ #include "panfrost_mmu.h"
+ #include "panfrost_perfcnt.h"
++#include "panfrost_sprd.h"
+ 
+ static int panfrost_reset_init(struct panfrost_device *pfdev)
+ {
+@@ -85,6 +89,11 @@ static int panfrost_regulator_init(struct panfrost_device *pfdev)
+ {
+ 	int ret, i;
+ 
++	/* No supplies declared: nothing to do (devm_kcalloc(0, ...) is not a
++	 * usable array to hand to the regulator core). */
++	if (!pfdev->comp->num_supplies)
++		return 0;
++
+ 	pfdev->regulators = devm_kcalloc(pfdev->dev, pfdev->comp->num_supplies,
+ 					 sizeof(*pfdev->regulators),
+ 					 GFP_KERNEL);
+@@ -195,6 +204,34 @@ static int panfrost_pm_domain_init(struct panfrost_device *pfdev)
+ 	return err;
+ }
+ 
++/*
++ * Look up a named interrupt, tolerating the upper-case names the vendor
++ * device trees use ("JOB", "MMU", "GPU"): of_irq_get_byname() is case
++ * sensitive, and on some SoCs the only device tree we can use is the one the
++ * vendor BSP wrote for kbase.
++ */
++int panfrost_irq_get(struct panfrost_device *pfdev, const char *name)
++{
++	struct device_node *np = pfdev->dev->of_node;
++	const char *irq_name;
++	int irq, i;
++
++	irq = platform_get_irq_byname(pfdev->pdev, name);
++	if (irq != -EPROBE_DEFER && irq >= 0)
++		return irq;
++
++	for (i = 0; i < of_irq_count(np); i++) {
++		if (of_property_read_string_index(np, "interrupt-names", i,
++						  &irq_name))
++			break;
++
++		if (!strcasecmp(irq_name, name))
++			return platform_get_irq(pfdev->pdev, i);
++	}
++
++	return irq;
++}
++
+ int panfrost_device_init(struct panfrost_device *pfdev)
+ {
+ 	int err;
+@@ -212,11 +249,13 @@ int panfrost_device_init(struct panfrost_device *pfdev)
+ 		return err;
+ 	}
+ 
+-	err = panfrost_devfreq_init(pfdev);
+-	if (err) {
+-		if (err != -EPROBE_DEFER)
+-			dev_err(pfdev->dev, "devfreq init failed %d\n", err);
+-		goto out_clk;
++	if (!pfdev->comp->no_devfreq) {
++		err = panfrost_devfreq_init(pfdev);
++		if (err) {
++			if (err != -EPROBE_DEFER)
++				dev_err(pfdev->dev, "devfreq init failed %d\n", err);
++			goto out_clk;
++		}
+ 	}
+ 
+ 	/* OPP will handle regulators */
+@@ -232,9 +271,23 @@ int panfrost_device_init(struct panfrost_device *pfdev)
+ 		goto out_regulator;
+ 	}
+ 
++	/*
++	 * SoC side power/clock sequencing.  On Unisoc parts the GPU sits
++	 * behind the PMU/APB syscons, and the sequence that actually brings it
++	 * out of reset is done by the vendor kbase driver's platform code, not
++	 * by any generic power domain.  This has to happen after
++	 * panfrost_reset_init() (it re-uses pfdev->rstc) and before a single
++	 * GPU register is touched, which starts in panfrost_gpu_init() below.
++	 */
++	err = panfrost_sprd_init(pfdev);
++	if (err) {
++		dev_err(pfdev->dev, "sprd init failed %d\n", err);
++		goto out_reset;
++	}
++
+ 	err = panfrost_pm_domain_init(pfdev);
+ 	if (err)
+-		goto out_reset;
++		goto out_sprd;
+ 
+ 	res = platform_get_resource(pfdev->pdev, IORESOURCE_MEM, 0);
+ 	pfdev->iomem = devm_ioremap_resource(pfdev->dev, res);
+@@ -274,6 +327,8 @@ int panfrost_device_init(struct panfrost_device *pfdev)
+ 	panfrost_regulator_fini(pfdev);
+ out_devfreq:
+ 	panfrost_devfreq_fini(pfdev);
++out_sprd:
++	panfrost_sprd_fini(pfdev);
+ out_clk:
+ 	panfrost_clk_fini(pfdev);
+ 	return err;
+@@ -290,6 +345,7 @@ void panfrost_device_fini(struct panfrost_device *pfdev)
+ 	panfrost_devfreq_fini(pfdev);
+ 	panfrost_regulator_fini(pfdev);
+ 	panfrost_clk_fini(pfdev);
++	panfrost_sprd_fini(pfdev);
+ }
+ 
+ #define PANFROST_EXCEPTION(id) \
+@@ -382,9 +438,13 @@ const char *panfrost_exception_name(u32 exception_code)
+ bool panfrost_exception_needs_reset(const struct panfrost_device *pfdev,
+ 				    u32 exception_code)
+ {
+-	/* Right now, none of the GPU we support need a reset, but this
+-	 * might change.
++	/* If an occlusion query write causes a bus fault on affected GPUs,
++	 * future fragment jobs may hang. Reset to workaround.
+ 	 */
++	if (exception_code == DRM_PANFROST_EXCEPTION_JOB_BUS_FAULT)
++		return panfrost_has_hw_issue(pfdev, HW_ISSUE_TTRX_3076);
++
++	/* No other GPUs we support need a reset */
+ 	return false;
+ }
+ 
+diff --git a/drivers/gpu/drm/panfrost/panfrost_device.h b/drivers/gpu/drm/panfrost/panfrost_device.h
+index 8b25278f3..cb4b40ee1 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_device.h
++++ b/drivers/gpu/drm/panfrost/panfrost_device.h
+@@ -20,6 +20,7 @@ struct panfrost_mmu;
+ struct panfrost_job_slot;
+ struct panfrost_job;
+ struct panfrost_perfcnt;
++struct panfrost_sprd;
+ 
+ #define NUM_JOB_SLOTS 3
+ #define MAX_PM_DOMAINS 3
+@@ -74,6 +75,15 @@ struct panfrost_compatible {
+ 
+ 	/* Vendor implementation quirks callback */
+ 	void (*vendor_quirk)(struct panfrost_device *pfdev);
++
++	/*
++	 * Some SoCs clock their GPU from a hardware DVFS engine that the
++	 * generic OPP/devfreq layer cannot drive: Unisoc picks a frequency by
++	 * writing an index into a syscon register and the PLL behind the GPU
++	 * is shared with the rest of the SoC, so clk_set_rate() must not be
++	 * used on it.  Skip devfreq on those parts.
++	 */
++	bool no_devfreq;
+ };
+ 
+ struct panfrost_device {
+@@ -120,6 +130,9 @@ struct panfrost_device {
+ 	struct shrinker shrinker;
+ 
+ 	struct panfrost_devfreq pfdevfreq;
++
++	/* SoC-specific power/clock glue, see panfrost_sprd.c */
++	struct panfrost_sprd *sprd;
+ };
+ 
+ struct panfrost_mmu {
+@@ -255,6 +268,8 @@ const char *panfrost_exception_name(u32 exception_code);
+ bool panfrost_exception_needs_reset(const struct panfrost_device *pfdev,
+ 				    u32 exception_code);
+ 
++int panfrost_irq_get(struct panfrost_device *pfdev, const char *name);
++
+ static inline void
+ panfrost_device_schedule_reset(struct panfrost_device *pfdev)
+ {
+diff --git a/drivers/gpu/drm/panfrost/panfrost_drv.c b/drivers/gpu/drm/panfrost/panfrost_drv.c
+index 19a097da9..ff9e09300 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_drv.c
++++ b/drivers/gpu/drm/panfrost/panfrost_drv.c
+@@ -649,6 +649,22 @@ static const struct panfrost_compatible mediatek_mt8183_data = {
+ 	.pm_domain_names = mediatek_mt8183_pm_domains,
+ };
+ 
++/*
++ * Unisoc/Spreadtrum parts (Mali-G57 "Natt" on UMS9620/9621).
++ *
++ * There is no generic power domain for the GPU here: the PMU/APB syscon
++ * sequence that takes the GPU out of reset lives in the vendor kbase
++ * driver's platform code, and panfrost_sprd.c reproduces it.  The GPU's
++ * DCDC is a PMIC register write rather than a regulator consumer and the
++ * frequency is chosen by the SoC's hardware DVFS engine, so there is no
++ * supply and no devfreq.
++ */
++static const struct panfrost_compatible sprd_mali_data = {
++	.num_supplies = 0,
++	.num_pm_domains = 0,
++	.no_devfreq = true,
++};
++
+ static const struct of_device_id dt_match[] = {
+ 	/* Set first to probe before the generic compatibles */
+ 	{ .compatible = "amlogic,meson-gxm-mali",
+@@ -666,6 +682,7 @@ static const struct of_device_id dt_match[] = {
+ 	{ .compatible = "arm,mali-t880", .data = &default_data, },
+ 	{ .compatible = "arm,mali-bifrost", .data = &default_data, },
+ 	{ .compatible = "mediatek,mt8183-mali", .data = &mediatek_mt8183_data },
++	{ .compatible = "sprd,mali-natt", .data = &sprd_mali_data },
+ 	{}
+ };
+ MODULE_DEVICE_TABLE(of, dt_match);
+diff --git a/drivers/gpu/drm/panfrost/panfrost_features.h b/drivers/gpu/drm/panfrost/panfrost_features.h
+index 5056777c7..0b50a6a95 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_features.h
++++ b/drivers/gpu/drm/panfrost/panfrost_features.h
+@@ -38,6 +38,8 @@ enum panfrost_hw_feature {
+ 	HW_FEATURE_AARCH64_MMU,
+ 	HW_FEATURE_TLS_HASHING,
+ 	HW_FEATURE_THREAD_GROUP_SPLIT,
++	HW_FEATURE_IDVS_GROUP_SIZE,
++	HW_FEATURE_CLEAN_ONLY_SAFE,
+ 	HW_FEATURE_3BIT_EXT_RW_L2_MMU_CONFIG,
+ };
+ 
+@@ -242,6 +244,7 @@ enum panfrost_hw_feature {
+ 	BIT_ULL(HW_FEATURE_FLUSH_REDUCTION) | \
+ 	BIT_ULL(HW_FEATURE_PROTECTED_MODE) | \
+ 	BIT_ULL(HW_FEATURE_PROTECTED_DEBUG_MODE) | \
++	BIT_ULL(HW_FEATURE_IDVS_GROUP_SIZE) | \
+ 	BIT_ULL(HW_FEATURE_COHERENCY_REG))
+ 
+ #define hw_features_g76 (\
+@@ -270,8 +273,21 @@ enum panfrost_hw_feature {
+ 	BIT_ULL(HW_FEATURE_COHERENCY_REG) | \
+ 	BIT_ULL(HW_FEATURE_AARCH64_MMU) | \
+ 	BIT_ULL(HW_FEATURE_TLS_HASHING) | \
++	BIT_ULL(HW_FEATURE_IDVS_GROUP_SIZE) | \
+ 	BIT_ULL(HW_FEATURE_3BIT_EXT_RW_L2_MMU_CONFIG))
+ 
++#define hw_features_g57 (\
++	BIT_ULL(HW_FEATURE_JOBCHAIN_DISAMBIGUATION) | \
++	BIT_ULL(HW_FEATURE_PWRON_DURING_PWROFF_TRANS) | \
++	BIT_ULL(HW_FEATURE_XAFFINITY) | \
++	BIT_ULL(HW_FEATURE_FLUSH_REDUCTION) | \
++	BIT_ULL(HW_FEATURE_PROTECTED_MODE) | \
++	BIT_ULL(HW_FEATURE_PROTECTED_DEBUG_MODE) | \
++	BIT_ULL(HW_FEATURE_COHERENCY_REG) | \
++	BIT_ULL(HW_FEATURE_AARCH64_MMU) | \
++	BIT_ULL(HW_FEATURE_IDVS_GROUP_SIZE) | \
++	BIT_ULL(HW_FEATURE_CLEAN_ONLY_SAFE))
++
+ #define hw_features_g31 (\
+ 	BIT_ULL(HW_FEATURE_JOBCHAIN_DISAMBIGUATION) | \
+ 	BIT_ULL(HW_FEATURE_PWRON_DURING_PWROFF_TRANS) | \
+diff --git a/drivers/gpu/drm/panfrost/panfrost_gpu.c b/drivers/gpu/drm/panfrost/panfrost_gpu.c
+index 813c75950..fa9281864 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_gpu.c
++++ b/drivers/gpu/drm/panfrost/panfrost_gpu.c
+@@ -108,6 +108,9 @@ static void panfrost_gpu_init_quirks(struct panfrost_device *pfdev)
+ 			quirks |= SC_LS_ALLOW_ATTR_TYPES;
+ 	}
+ 
++	if (panfrost_has_hw_issue(pfdev, HW_ISSUE_TTRX_2968_TTRX_3162))
++		quirks |= SC_VAR_ALGORITHM;
++
+ 	if (panfrost_has_hw_feature(pfdev, HW_FEATURE_TLS_HASHING))
+ 		quirks |= SC_TLS_HASH_ENABLE;
+ 
+@@ -123,19 +126,6 @@ static void panfrost_gpu_init_quirks(struct panfrost_device *pfdev)
+ 
+ 	gpu_write(pfdev, GPU_TILER_CONFIG, quirks);
+ 
+-
+-	quirks = gpu_read(pfdev, GPU_L2_MMU_CONFIG);
+-
+-	/* Limit read & write ID width for AXI */
+-	if (panfrost_has_hw_feature(pfdev, HW_FEATURE_3BIT_EXT_RW_L2_MMU_CONFIG))
+-		quirks &= ~(L2_MMU_CONFIG_3BIT_LIMIT_EXTERNAL_READS |
+-			    L2_MMU_CONFIG_3BIT_LIMIT_EXTERNAL_WRITES);
+-	else
+-		quirks &= ~(L2_MMU_CONFIG_LIMIT_EXTERNAL_READS |
+-			    L2_MMU_CONFIG_LIMIT_EXTERNAL_WRITES);
+-
+-	gpu_write(pfdev, GPU_L2_MMU_CONFIG, quirks);
+-
+ 	quirks = 0;
+ 	if ((panfrost_model_eq(pfdev, 0x860) || panfrost_model_eq(pfdev, 0x880)) &&
+ 	    pfdev->features.revision >= 0x2000)
+@@ -145,6 +135,9 @@ static void panfrost_gpu_init_quirks(struct panfrost_device *pfdev)
+ 		quirks |= (COHERENCY_ACE_LITE | COHERENCY_ACE) <<
+ 			   JM_FORCE_COHERENCY_FEATURES_SHIFT;
+ 
++	if (panfrost_has_hw_feature(pfdev, HW_FEATURE_IDVS_GROUP_SIZE))
++		quirks |= JM_DEFAULT_IDVS_GROUP_SIZE << JM_IDVS_GROUP_SIZE_SHIFT;
++
+ 	if (quirks)
+ 		gpu_write(pfdev, GPU_JM_CONFIG, quirks);
+ 
+@@ -206,6 +199,9 @@ static const struct panfrost_model gpu_models[] = {
+ 	GPU_MODEL(g52, 0x7002),
+ 	GPU_MODEL(g31, 0x7003,
+ 		GPU_REV(g31, 1, 0)),
++
++	GPU_MODEL(g57, 0x9001,
++		GPU_REV(g57, 0, 0)),
+ };
+ 
+ static void panfrost_gpu_init_features(struct panfrost_device *pfdev)
+@@ -366,7 +362,7 @@ int panfrost_gpu_init(struct panfrost_device *pfdev)
+ 
+ 	dma_set_max_seg_size(pfdev->dev, UINT_MAX);
+ 
+-	irq = platform_get_irq_byname(to_platform_device(pfdev->dev), "gpu");
++	irq = panfrost_irq_get(pfdev, "gpu");
+ 	if (irq <= 0)
+ 		return -ENODEV;
+ 
+diff --git a/drivers/gpu/drm/panfrost/panfrost_issues.h b/drivers/gpu/drm/panfrost/panfrost_issues.h
+index 8e59d765b..504a6dac7 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_issues.h
++++ b/drivers/gpu/drm/panfrost/panfrost_issues.h
+@@ -125,6 +125,16 @@ enum panfrost_hw_issue {
+ 	 * kernel must fiddle with L2 caches to prevent data leakage */
+ 	HW_ISSUE_TGOX_R1_1234,
+ 
++	/* Must set SC_VAR_ALGORITHM */
++	HW_ISSUE_TTRX_2968_TTRX_3162,
++
++	/* Bus fault from occlusion query write may cause future fragment jobs
++	 * to hang */
++	HW_ISSUE_TTRX_3076,
++
++	/* Must issue a dummy job before starting real work to prevent hangs */
++	HW_ISSUE_TTRX_3485,
++
+ 	HW_ISSUE_END
+ };
+ 
+@@ -248,7 +258,14 @@ enum panfrost_hw_issue {
+ 
+ #define hw_issues_g76 0
+ 
+-static inline bool panfrost_has_hw_issue(struct panfrost_device *pfdev,
++#define hw_issues_g57 (\
++	BIT_ULL(HW_ISSUE_TTRX_2968_TTRX_3162) | \
++	BIT_ULL(HW_ISSUE_TTRX_3076))
++
++#define hw_issues_g57_r0p0 (\
++	BIT_ULL(HW_ISSUE_TTRX_3485))
++
++static inline bool panfrost_has_hw_issue(const struct panfrost_device *pfdev,
+ 					 enum panfrost_hw_issue issue)
+ {
+ 	return test_bit(issue, pfdev->features.hw_issues);
+diff --git a/drivers/gpu/drm/panfrost/panfrost_job.c b/drivers/gpu/drm/panfrost/panfrost_job.c
+index 71a72fb50..4347ff7f9 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_job.c
++++ b/drivers/gpu/drm/panfrost/panfrost_job.c
+@@ -812,7 +812,7 @@ int panfrost_job_init(struct panfrost_device *pfdev)
+ 	INIT_WORK(&pfdev->reset.work, panfrost_reset_work);
+ 	spin_lock_init(&js->job_lock);
+ 
+-	js->irq = platform_get_irq_byname(to_platform_device(pfdev->dev), "job");
++	js->irq = panfrost_irq_get(pfdev, "job");
+ 	if (js->irq <= 0)
+ 		return -ENODEV;
+ 
+diff --git a/drivers/gpu/drm/panfrost/panfrost_mmu.c b/drivers/gpu/drm/panfrost/panfrost_mmu.c
+index fb2b4b5eb..3aefcf639 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_mmu.c
++++ b/drivers/gpu/drm/panfrost/panfrost_mmu.c
+@@ -717,7 +717,7 @@ int panfrost_mmu_init(struct panfrost_device *pfdev)
+ {
+ 	int err, irq;
+ 
+-	irq = platform_get_irq_byname(to_platform_device(pfdev->dev), "mmu");
++	irq = panfrost_irq_get(pfdev, "mmu");
+ 	if (irq <= 0)
+ 		return -ENODEV;
+ 
+diff --git a/drivers/gpu/drm/panfrost/panfrost_regs.h b/drivers/gpu/drm/panfrost/panfrost_regs.h
+index 6c5a11ef1..fa1e1af56 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_regs.h
++++ b/drivers/gpu/drm/panfrost/panfrost_regs.h
+@@ -195,6 +195,7 @@
+ #define SC_TLS_HASH_ENABLE		BIT(17)
+ #define SC_LS_ATTR_CHECK_DISABLE	BIT(18)
+ #define SC_ENABLE_TEXGRD_FLAGS		BIT(25)
++#define SC_VAR_ALGORITHM		BIT(29)
+ /* End SHADER_CONFIG register */
+ 
+ /* TILER_CONFIG register */
+@@ -208,6 +209,7 @@
+ #define JM_MAX_JOB_THROTTLE_LIMIT	0x3F
+ #define JM_FORCE_COHERENCY_FEATURES_SHIFT 2
+ #define JM_IDVS_GROUP_SIZE_SHIFT	16
++#define JM_DEFAULT_IDVS_GROUP_SIZE	0xF
+ #define JM_MAX_IDVS_GROUP_SIZE		0x3F
+ 
+ 
+diff --git a/drivers/gpu/drm/panfrost/panfrost_sprd.c b/drivers/gpu/drm/panfrost/panfrost_sprd.c
+new file mode 100644
+index 000000000..294ced9e4
+--- /dev/null
++++ b/drivers/gpu/drm/panfrost/panfrost_sprd.c
+@@ -0,0 +1,305 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Unisoc (Spreadtrum) Mali platform glue for panfrost.
++ *
++ * On UMS9620/UMS9621 ("qogirn6pro"/"qogirn6lite") the Mali GPU is not behind a
++ * generic power domain, and nothing in the device tree describes how it is
++ * switched on: the vendor kbase driver pokes the PMU and GPU APB syscons
++ * directly from its platform code
++ * (drivers/gpu/arm/midgard/platform/qogirn6l/mali_kbase_config_qogirn6l.c).
++ * The sequence is:
++ *
++ *   - the GPU PLL ("GPLL") is forced on and the GPU DCDC is enabled -- the
++ *     latter is a PMIC register write, not a regulator consumer, so treating
++ *     it as a supply does not work,
++ *   - the GPU is taken out of its forced-shutdown state and soft reset,
++ *   - the core clock gate inside the GPU APB block is enabled, the power
++ *     state is polled until the block reports itself up, and the hardware
++ *     DVFS engine is given a frequency index.
++ *
++ * The device tree only carries those registers as opaque
++ * (syscon, register, mask) triples, which is why this glue reads them back and
++ * replays the sequence instead of describing it in a binding.
++ *
++ * Copyright (C) 2026 The e5-linux project
++ */
++
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/mfd/syscon.h>
++#include <linux/of.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <linux/reset.h>
++
++#include "panfrost_device.h"
++#include "panfrost_sprd.h"
++
++/* Offsets inside the GPU DVFS APB block: kbase's gpu,qogirn6l-regs.h */
++#define SPRD_DVFS_APB_DVFS_INDEX_CFG	0x0794
++#define SPRD_DVFS_APB_DVFS_INDEX_MASK	0x7
++#define SPRD_DVFS_APB_FREQ_UPD_CFG0	0x09ac
++#define SPRD_DVFS_APB_FREQ_UPD_MASK	0x3	/* HDSK_EN | DELAY_EN */
++
++/*
++ * The hardware DVFS table entry kbase starts on.  On these parts index 3 of
++ * the "operating-points" list is 384 MHz; kbase raises it from there with its
++ * own governor, panfrost only has to get off the 26 MHz floor.
++ */
++#define SPRD_DVFS_INDEX_DEFAULT		3
++
++#define SPRD_TOP_STATE_POLL_US		50
++#define SPRD_TOP_STATE_POLL_MAX		200
++#define SPRD_TOP_STATE_UP		0
++
++struct sprd_reg {
++	struct regmap *map;
++	u32 reg;
++	u32 mask;
++};
++
++struct panfrost_sprd {
++	struct sprd_reg top_dvfs_cfg;
++	struct sprd_reg gpu_sw_dvfs_ctrl;
++	struct sprd_reg dcdc_gpu_pd;
++	struct sprd_reg top_force_shutdown;
++	struct sprd_reg gpll_frc_off;
++	struct sprd_reg gpll_frc_on;
++	struct sprd_reg clk_core_gpu_eb;
++	struct sprd_reg gpu_top_state;
++
++	struct regmap *gpu_dvfs_apb;
++};
++
++/*
++ * Read a "<&syscon register mask>" property.  The register and the mask are
++ * baked into the device tree by the vendor BSP; we never need to know either.
++ */
++static int sprd_reg_get(struct device *dev, const char *prop,
++			struct sprd_reg *out)
++{
++	struct regmap *map;
++	u32 args[2];
++
++	map = syscon_regmap_lookup_by_phandle_args(dev->of_node, prop, 2, args);
++	if (IS_ERR(map)) {
++		dev_err(dev, "no %s property/syscon: %ld\n", prop,
++			PTR_ERR(map));
++		return PTR_ERR(map);
++	}
++
++	out->map = map;
++	out->reg = args[0];
++	out->mask = args[1];
++
++	return 0;
++}
++
++/*
++ * The GPU DCDC lives in the PMIC, and the vendor device tree points
++ * dcdc_gpu_pd at the PMU syscon with a note that the address is fake and the
++ * "real syscon config" happens at init: kbase looks the PMIC up by compatible
++ * and swaps the regmap underneath the parsed register/mask pair.  Do the same.
++ */
++static struct regmap *sprd_pmic_regmap(struct device *dev)
++{
++	struct device_node *np;
++	struct platform_device *pdev;
++	struct regmap *map;
++
++	np = of_find_compatible_node(NULL, NULL, "sprd,ump962x-syscon");
++	if (!np) {
++		dev_warn(dev, "no sprd,ump962x-syscon node: GPU DCDC untouched\n");
++		return NULL;
++	}
++
++	pdev = of_find_device_by_node(np);
++	of_node_put(np);
++	if (!pdev) {
++		dev_warn(dev, "no platform device for the PMIC syscon\n");
++		return NULL;
++	}
++
++	map = dev_get_regmap(pdev->dev.parent, NULL);
++	put_device(&pdev->dev);
++
++	if (!map)
++		dev_warn(dev, "PMIC syscon has no regmap\n");
++
++	return map;
++}
++
++static int sprd_gpu_top_state_wait(struct panfrost_sprd *sprd)
++{
++	unsigned int val;
++	int i;
++
++	for (i = 0; i < SPRD_TOP_STATE_POLL_MAX; i++) {
++		if (regmap_read(sprd->gpu_top_state.map,
++				sprd->gpu_top_state.reg, &val))
++			return -EIO;
++
++		if ((val & sprd->gpu_top_state.mask) == SPRD_TOP_STATE_UP)
++			return 0;
++
++		udelay(SPRD_TOP_STATE_POLL_US);
++	}
++
++	return -ETIMEDOUT;
++}
++
++static void sprd_gpu_power_on(struct panfrost_sprd *sprd,
++			      struct reset_control *rstc)
++{
++	/* GPLL: 0 = not forced off, 1 = forced on */
++	regmap_update_bits(sprd->gpll_frc_off.map, sprd->gpll_frc_off.reg,
++			   sprd->gpll_frc_off.mask, ~sprd->gpll_frc_off.mask);
++	udelay(100);
++	regmap_update_bits(sprd->gpll_frc_on.map, sprd->gpll_frc_on.reg,
++			   sprd->gpll_frc_on.mask, sprd->gpll_frc_on.mask);
++	udelay(150);
++
++	/* dcdc_gpu_pd bit: 0 = enable, 1 = power down */
++	regmap_update_bits(sprd->dcdc_gpu_pd.map, sprd->dcdc_gpu_pd.reg,
++			   sprd->dcdc_gpu_pd.mask,
++			   ~sprd->dcdc_gpu_pd.mask);
++	udelay(400);
++
++	regmap_update_bits(sprd->top_force_shutdown.map,
++			   sprd->top_force_shutdown.reg,
++			   sprd->top_force_shutdown.mask,
++			   ~sprd->top_force_shutdown.mask);
++
++	reset_control_assert(rstc);
++	udelay(10);
++	reset_control_deassert(rstc);
++	udelay(300);
++}
++
++static void sprd_gpu_power_off(struct panfrost_sprd *sprd)
++{
++	regmap_update_bits(sprd->top_force_shutdown.map,
++			   sprd->top_force_shutdown.reg,
++			   sprd->top_force_shutdown.mask,
++			   sprd->top_force_shutdown.mask);
++
++	regmap_update_bits(sprd->dcdc_gpu_pd.map, sprd->dcdc_gpu_pd.reg,
++			   sprd->dcdc_gpu_pd.mask, sprd->dcdc_gpu_pd.mask);
++	udelay(10);
++
++	regmap_update_bits(sprd->gpll_frc_off.map, sprd->gpll_frc_off.reg,
++			   sprd->gpll_frc_off.mask, sprd->gpll_frc_off.mask);
++	regmap_update_bits(sprd->gpll_frc_on.map, sprd->gpll_frc_on.reg,
++			   sprd->gpll_frc_on.mask, ~sprd->gpll_frc_on.mask);
++}
++
++int panfrost_sprd_init(struct panfrost_device *pfdev)
++{
++	struct device *dev = pfdev->dev;
++	struct panfrost_sprd *sprd;
++	struct regmap *pmic;
++	int ret;
++
++	if (!of_device_is_compatible(dev->of_node, "sprd,mali-natt"))
++		return 0;
++
++	sprd = devm_kzalloc(dev, sizeof(*sprd), GFP_KERNEL);
++	if (!sprd)
++		return -ENOMEM;
++
++	ret = sprd_reg_get(dev, "top_dvfs_cfg", &sprd->top_dvfs_cfg);
++	if (ret)
++		return ret;
++	ret = sprd_reg_get(dev, "gpu_sw_dvfs_ctrl", &sprd->gpu_sw_dvfs_ctrl);
++	if (ret)
++		return ret;
++	ret = sprd_reg_get(dev, "dcdc_gpu_pd", &sprd->dcdc_gpu_pd);
++	if (ret)
++		return ret;
++	ret = sprd_reg_get(dev, "top_force_shutdown", &sprd->top_force_shutdown);
++	if (ret)
++		return ret;
++	ret = sprd_reg_get(dev, "gpll_cfg_frc_off", &sprd->gpll_frc_off);
++	if (ret)
++		return ret;
++	ret = sprd_reg_get(dev, "gpll_cfg_frc_on", &sprd->gpll_frc_on);
++	if (ret)
++		return ret;
++	ret = sprd_reg_get(dev, "clk_core_gpu_eb", &sprd->clk_core_gpu_eb);
++	if (ret)
++		return ret;
++	ret = sprd_reg_get(dev, "gpu_top_state", &sprd->gpu_top_state);
++	if (ret)
++		return ret;
++
++	pmic = sprd_pmic_regmap(dev);
++	if (pmic)
++		sprd->dcdc_gpu_pd.map = pmic;
++
++	sprd->gpu_dvfs_apb = syscon_regmap_lookup_by_phandle(dev->of_node,
++						"sprd,gpu-dvfs-apb-syscon");
++	if (IS_ERR(sprd->gpu_dvfs_apb)) {
++		dev_err(dev, "no sprd,gpu-dvfs-apb-syscon: %ld\n",
++			PTR_ERR(sprd->gpu_dvfs_apb));
++		return PTR_ERR(sprd->gpu_dvfs_apb);
++	}
++
++	/*
++	 * Let the hardware DVFS engine drive the GPU frequency and make sure
++	 * the software path is not also steering it, exactly as kbase does
++	 * before it powers the GPU on.
++	 */
++	regmap_update_bits(sprd->top_dvfs_cfg.map, sprd->top_dvfs_cfg.reg,
++			   sprd->top_dvfs_cfg.mask, ~sprd->top_dvfs_cfg.mask);
++	regmap_update_bits(sprd->gpu_sw_dvfs_ctrl.map,
++			   sprd->gpu_sw_dvfs_ctrl.reg,
++			   sprd->gpu_sw_dvfs_ctrl.mask,
++			   ~sprd->gpu_sw_dvfs_ctrl.mask);
++
++	/*
++	 * The GPU soft reset is the one panfrost_reset_init() already owns, so
++	 * it is toggled through pfdev->rstc rather than claimed a second time.
++	 */
++	sprd_gpu_power_on(sprd, pfdev->rstc);
++
++	/* Core clock gate inside the GPU APB block */
++	regmap_update_bits(sprd->clk_core_gpu_eb.map,
++			   sprd->clk_core_gpu_eb.reg,
++			   sprd->clk_core_gpu_eb.mask,
++			   sprd->clk_core_gpu_eb.mask);
++	udelay(400);
++
++	ret = sprd_gpu_top_state_wait(sprd);
++	if (ret) {
++		dev_err(dev, "GPU did not report itself powered up (%d)\n", ret);
++		return ret;
++	}
++
++	regmap_update_bits(sprd->gpu_dvfs_apb,
++			   SPRD_DVFS_APB_FREQ_UPD_CFG0,
++			   SPRD_DVFS_APB_FREQ_UPD_MASK, 1);
++	regmap_update_bits(sprd->gpu_dvfs_apb,
++			   SPRD_DVFS_APB_DVFS_INDEX_CFG,
++			   SPRD_DVFS_APB_DVFS_INDEX_MASK,
++			   SPRD_DVFS_INDEX_DEFAULT);
++
++	pfdev->sprd = sprd;
++
++	dev_info(dev, "Unisoc GPU powered on (DVFS index %d)\n",
++		 SPRD_DVFS_INDEX_DEFAULT);
++
++	return 0;
++}
++
++void panfrost_sprd_fini(struct panfrost_device *pfdev)
++{
++	struct panfrost_sprd *sprd = pfdev->sprd;
++
++	if (!sprd)
++		return;
++
++	sprd_gpu_power_off(sprd);
++	pfdev->sprd = NULL;
++}
+diff --git a/drivers/gpu/drm/panfrost/panfrost_sprd.h b/drivers/gpu/drm/panfrost/panfrost_sprd.h
+new file mode 100644
+index 000000000..f8a3bbdc1
+--- /dev/null
++++ b/drivers/gpu/drm/panfrost/panfrost_sprd.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Unisoc (Spreadtrum) platform glue for panfrost.
++ *
++ * Copyright (C) 2026 The e5-linux project
++ */
++
++#ifndef __PANFROST_SPRD_H__
++#define __PANFROST_SPRD_H__
++
++struct panfrost_device;
++
++int panfrost_sprd_init(struct panfrost_device *pfdev);
++void panfrost_sprd_fini(struct panfrost_device *pfdev);
++
++#endif /* __PANFROST_SPRD_H__ */

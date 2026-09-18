@@ -233,6 +233,21 @@ CONFIG_ION_CMA_HEAP=y
 CONFIG_UNIX98_PTYS=y
 CONFIG_LEGACY_PTYS=y
 
+# --- GPU: panfrost drives the Mali-G57, so kbase has to let go of the node --
+# The GPU node is "sprd,mali-natt" and both drivers match it (kbase in
+# drivers/gpu/arm/midgard/mali_kbase_core_linux.c, panfrost through its
+# dt_match).  kbase is built in by the vendor defconfig and probes first, so
+# panfrost would never see the device; build it as a module and do not load it.
+# Nothing in module-order.stock asks for mali_kbase, so the initramfs leaves it
+# alone, which is the point -- and it also means `modprobe mali_kbase` (or
+# putting this back to =y) returns the device to the vendor blob path
+# (rootfs/overlay/opt/e5/gpu-mali-setup) without a rebuild.
+#
+# See docs/FINDINGS.md section 20.7: panfrost_sprd.c replays the power and
+# clock sequencing that kbase's platform code used to do, and this is what
+# makes panfrost able to bind at all.
+CONFIG_MALI_MIDGARD=m
+
 # --- build speed: no DWARF/BTF for a bring-up kernel (kallsyms still gives
 #     symbol names in oops/panic output)
 # CONFIG_DEBUG_INFO is not set

@@ -82,6 +82,6 @@ work list.
 | session | Phosh 0.46.0, `phoc` on the **Mali-G57** via the Allwinner r32p0 GBM UMD; kernel log on the panel |
 | gpu | kbase r41p0 + ARM fbdev UMD (handshake) and the r32p0 GBM UMD (compositor); r44p0 blobs are refused |
 | baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s (modem asserted once, see above) |
-| keys | 9-key keypad works; volume/power/KEY_F1 events verified; power key = panel toggle |
+| keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short locks, long powers off, panel blank/wake is phoc's idle) |
 | disk | 4.4 GiB used, 1.2 GiB free |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |

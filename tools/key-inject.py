@@ -30,7 +30,7 @@ KEYS = {
     '1': 2, '2': 3, '3': 4, '4': 5, '5': 6, '6': 7, '7': 8, '8': 9, '9': 10,
     '0': 11, 'enter': 28, 'kpenter': 96, 'escape': 1, 'backspace': 14, 'tab': 15, 'space': 57,
     'select': 353, 'up': 103, 'down': 108, 'left': 105, 'right': 106,
-    'playpause': 164, 'phone': 169,
+    'playpause': 164, 'phone': 169, 'power': 116, 'wakeup': 143,
 }
 
 

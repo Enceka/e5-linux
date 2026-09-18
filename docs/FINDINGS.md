@@ -1176,46 +1176,62 @@ the DT.
    key -- which is the state the user found: gsd's 300 s idle blank had turned the panel
    off (`bl_power=4`) and no key could turn it back on.
 
-### What runs now
+### What runs now: logind alone, no userspace daemon
 
-`e5-powerkey.service` (`/opt/e5/powerkey.py`) reads `/dev/input/event0` and gives the
-key phone semantics without suspend:
+`/opt/e5/powerkey.py` is gone (2026-09-18).  It listened on `/dev/input/event0`, forced
+`idle-delay` to 0 so that its own `bl_power` toggle stayed coherent, and opened the
+Power Off dialog on a 1.5 s hold.  All of that was either redundant or actively fighting
+the compositor:
 
-* **short press** -- if the panel is dark (ours *or* the compositor's), turn it back
-  on; otherwise `loginctl lock-sessions` + panel off (`bl_power=1`);
-* **long press (1.5 s)** -- `gnome-session-quit --power-off`: the "Power Off" dialog
-  with its countdown and Cancel, i.e. the menu a phone shows for a held power key.
-  Verified on the device -- `Power Off / The system will power off automatically in 56
-  seconds / [Cancel] [Power Off]`;
-* any other key, or a touch on event1, wakes the panel; the long-press action fires
-  *while the key is still down* (the short action is taken on release);
+* waking from a blanked panel never needed help.  phoc uses wlroots' idle protocol and
+  owns DPMS through the DRM connector: once it blanked, `bl_power` alone could not
+  bring the CRTC back, and any input event -- key or touch -- unblanks it.  The script
+  was writing `bl_power` underneath a compositor that was already doing it;
+* `idle-delay=0` was the price of that arrangement, and it is a bad price on a phone:
+  it means the panel *never* blanks on its own;
+* logind implements the long press in the kernel-facing path already
+  (`HandlePowerKeyLongPress`, whose default is `ignore` -- that default, not a missing
+  handler, is what made a held key do nothing).
 
-alongside the logind drop-in `HandlePowerKey=lock` and `HandlePowerKeyLongPress=ignore`
--- logind's default there is poweroff, and the script's deliberate 1.5 s hold is the
-only thing that should reach that action.  The panel is `sprd_backlight`, whose
-`bl_power` and `brightness` were already opened to the session in `boot/init`.
+So the key is now logind's, via
+`rootfs/overlay/etc/systemd/logind.conf.d/20-e5-pwrkey.conf`:
 
-Two details that matter:
+| press | action | who |
+|---|---|---|
+| short | `lock` -- phosh's lock screen | systemd-logind |
+| long | `poweroff` -- immediate, no dialog | systemd-logind's own long-press timer |
+| (panel dark) | any key or touch wakes it | phoc (wlroots idle) |
 
-* `idle-delay` is forced to 0 when the service starts.  phoc blanks on idle and owns
-  DPMS: once it has blanked, writing `bl_power` cannot bring the panel back (the CRTC
-  is off *and* `bl_power` still reads 0), so the script would conclude "panel is on"
-  and turn it *off* on the next press.  With idle blanking off, the backlight is the
-  only control and the toggle is coherent;
-* `screen_is_off()` checks both `bl_power` and the connector's
-  `/sys/class/drm/card0-DSI-1/dpms`, so a compositor-initiated blank still counts as
-  "off".
+`HandlePowerKey=suspend` is not an option on this board and neither is gsd's
+`power-button-action=suspend` (bullet 3 above); `lock` is what is left that is both
+instant and safe.
 
-### Verification
+### Verification (measured on the device)
 
-The earlier "pending verification" -- the service could not be deployed over a
-re-enumerating USB link -- is obsolete: the journal now shows the short press
-(`gsettings idle-delay 0 -> rc=0`, `panel off`, then `panel on` on the next touch),
-the long press opens the dialog, and every step is logged so a press can be checked
-without looking at the panel:
+With `org.gnome.desktop.session idle-delay` temporarily at 15 s and the session left
+alone:
 
-    journalctl -u e5-powerkey -f     # then press: 'long press: power menu', or
-                                     # 'loginctl lock-sessions -> rc=0' + 'panel off'
+| t | `card0-DSI-1/dpms` | `sprd_backlight/bl_power` |
+|---|---|---|
+| 8 s, 16 s | On | 0 |
+| 24 s ... 64 s | **Off** | **4** |
+| after one injected `KEY_WAKEUP` | **On** | **0** |
+
+i.e. the compositor blanks the panel on idle (it does not depend on the session being
+locked) and the panel driver is the one that kills the backlight -- the two states are
+set together, by the same idle transition, which is exactly what the script used to
+approximate from the outside.  `idle-delay` is back at 300 s afterwards.
+
+The cost of dropping the script, stated plainly: a **short press no longer turns the
+panel off immediately**.  It locks, and the panel then blanks on the idle timer (up to
+`idle-delay` later, 5 minutes at the current setting, or instantly if you also touch
+nothing for that long).  Turning the panel off on the press itself would need a process
+that reacts to the key press, i.e. the script again; the alternative is a much shorter
+`idle-delay`, at the price of blanking while you are reading.
+
+The long press is also no longer the "Power Off" dialog with its countdown and Cancel
+(that came from `gnome-session-quit --power-off`, i.e. from the script).  It powers off
+at once.
 
 ## 19. Phosh needs GNOME apps -- purging KDE took the only settings app with it
 

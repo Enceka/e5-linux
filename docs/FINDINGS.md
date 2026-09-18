@@ -680,6 +680,76 @@ took `wifi_board_config*.ini` and the two MACs; nothing in the kernel reads the
 is optional tuning: `sprd_parse_wifi_driver_config()` returns silently when the
 file is missing.
 
+### 8.6 Solved: the driver was built as the "userdebug" variant
+
+The card dump in 8.5 is not a hang.  It is a compile-time policy, and this
+repository was building the wrong one.
+
+Android's Kbuild picks part of this driver's behaviour from its build variant:
+
+    ifeq ($(TARGET_BUILD_VARIANT),user)
+    ccflags-y += -DFLAG_WCN_USER
+    endif
+
+and a hand-run `make` sets no `TARGET_BUILD_VARIANT`, so `FLAG_WCN_USER` was
+never defined and the driver took every `#else` branch.  One of them is the
+assert policy:
+
+```c
+#ifdef FLAG_WCN_USER
+	atomic_set(&sysfs_info.is_reset, 0x1);      /* WCN_ASSERT_ONLY_RESET */
+#else
+	atomic_set(&sysfs_info.is_reset, 0x0);      /* WCN_ASSERT_ONLY_DUMP  */
+#endif
+```
+
+`__wcn_assert_interface()` reads that value and then either dumps the chip's
+memory and leaves the SDIO card dead, or resets the chip and carries on.  Since
+the loopcheck treats one missed `at+loopcheck` round (4 s to answer) as an
+assert, the userdebug default turns a single late answer into a radio that is
+dead for the rest of the boot.  The same `#ifdef` also adds a reset-pad priority
+write for qogirl6 in `btwf_sys_poweron()` -- the user variant is not just the
+policy.
+
+It is settable at runtime, which is how it was pinned down: the whole
+difference is one sysfs write.
+
+    $ cat /sys/class/misc/wcn/devices/reset_dump          # dump   (before)
+    $ echo reset > /sys/class/misc/wcn/devices/reset_dump # switch to the user policy
+    $ echo manual_dump > /sys/class/misc/wcn/devices/reset_dump   # force an assert
+    WCN SDIO: carddump flag set[0]            <- cleared
+    WCN BASE: wcn_reset_process reset end     <- chip reset, no dump
+    $ sudo iw dev wlan0 scan | grep -c SSID:
+    18
+
+so the radio came back inside an already-booted device, and `reset_dump`'s
+three accepted values (`dump`, `reset`, `reset_dump`) are exactly the three
+policies of the `if`/`else` chain above.
+
+The fix is the vendor's own production switch, brought out as a Kconfig symbol so
+that the choice is visible and lives in `kernel/e5-linux.fragment` rather than in
+a Makefile:
+
+    CONFIG_UNISOC_WCN_BSP_USER_VARIANT=y
+
+Verified on a freshly flashed boot with no sysfs writes of any kind:
+`reset_dump` reports `reset`, the loopcheck answers every round, no
+`carddump flag set` line appears at all, and Wi-Fi scans 18 APs on both bands on
+its own.  Bluetooth gets one step further with it too -- the chip answers the
+whole HCI init sequence and `hci0` comes up with a real BD address
+(`27:93:31:14:22:11`) and sane ACL/SCO MTUs, where before the policy change its
+power-on returned -1.
+
+**Still open on Bluetooth**: `hciconfig hci0 up` ends in
+`Can't init device hci0: Invalid argument`, i.e. the last step of the kernel's HCI
+setup is refused.  Everything before it works -- 23 commands and 23 events cross
+the tty, and the reset path powers MARLIN_BLUETOOTH up cleanly
+(`mtty_open power on state ret = 0`) -- so what is missing is the vendor-side init
+that Android does from its BT HAL: most likely the `bt_configure_pskey*.ini` /
+`bt_configure_rf*.ini` pair this image does not carry, or a baud-rate switch that
+`btattach -B /dev/ttyBT0 -S 3000000` does not perform.  `sudo hciconfig hci0 up`
+on a booted device reproduces it.
+
 
 ## 9. The five-minute reset: the PMIC watchdog, not a panic
 

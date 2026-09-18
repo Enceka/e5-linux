@@ -1,0 +1,69 @@
+diff --git a/drivers/unisoc_platform/sprdwcn/Kconfig b/drivers/unisoc_platform/sprdwcn/Kconfig
+index 2bd0eaf8a..9e7cb2591 100644
+--- a/drivers/unisoc_platform/sprdwcn/Kconfig
++++ b/drivers/unisoc_platform/sprdwcn/Kconfig
+@@ -8,6 +8,32 @@ config UNISOC_WCN_BSP
+ 	  This is support wcn chip for Unisoc.
+ 	  if you want to use 23xx series wcn chip of Unisoc.
+ 	  please say "y".
++
++config UNISOC_WCN_BSP_USER_VARIANT
++	bool "Build the WCN drivers as the production (user) variant"
++	depends on UNISOC_WCN_BSP
++	help
++	  The vendor's Kbuild takes parts of this driver's behaviour from
++	  Android's build variant:
++
++	    drivers/unisoc_platform/sprdwcn/Makefile and platform/Makefile
++	      ifeq ($(TARGET_BUILD_VARIANT),user)
++	      ccflags-y += -DFLAG_WCN_USER
++
++	  and Android's lunch target sets TARGET_BUILD_VARIANT, so a kernel
++	  built by hand silently gets the "userdebug" behaviour.  What that
++	  means in practice is the assert policy in platform/sysfs.c: after
++	  any WCN asset the userdebug default dumps the chip's memory and
++	  marks the SDIO card dead (sprd_gem-style "carddump flag set[1]"),
++	  which condemns every later start_marlin() until the next reboot,
++	  while the user variant resets the chip and carries on.  The
++	  loopcheck ping alone is enough to trigger it: the chip gets 4 s to
++	  answer and one missed round is treated as an assert.
++
++	  It also selects the qogirl6 reset-pad priority write in
++	  btwf_sys_poweron() (boot/wcn_integrate_boot.c).
++
++	  Say Y on a device that has to keep its radios working.
+ config SC23XX
+ 	bool "SC23XX chip Support"
+ 	#depends on MMC
+diff --git a/drivers/unisoc_platform/sprdwcn/Makefile b/drivers/unisoc_platform/sprdwcn/Makefile
+index 0fb42f804..c1b73944d 100644
+--- a/drivers/unisoc_platform/sprdwcn/Makefile
++++ b/drivers/unisoc_platform/sprdwcn/Makefile
+@@ -22,6 +22,11 @@ ifeq ($(TARGET_BUILD_VARIANT),user)
+ ccflags-y += -DFLAG_WCN_USER
+ endif
+ 
++# Same switch for builds that are not driven by Android's lunch target, which is
++# every build this repository makes: see the Kconfig help for what the user
++# variant changes (the assert policy above all).
++ccflags-$(CONFIG_UNISOC_WCN_BSP_USER_VARIANT) += -DFLAG_WCN_USER
++
+ #WCN MODULE
+ obj-$(CONFIG_UNISOC_WCN_BSP) += wcn_bsp.o
+ wcn_bsp-y += wcn_bus.o
+diff --git a/drivers/unisoc_platform/sprdwcn/platform/Makefile b/drivers/unisoc_platform/sprdwcn/platform/Makefile
+index cb1e9289e..df7908409 100644
+--- a/drivers/unisoc_platform/sprdwcn/platform/Makefile
++++ b/drivers/unisoc_platform/sprdwcn/platform/Makefile
+@@ -29,6 +29,11 @@ ifeq ($(TARGET_BUILD_VARIANT),user)
+ ccflags-y += -DFLAG_WCN_USER
+ endif
+ 
++# Same switch for builds that are not driven by Android's lunch target, which is
++# every build this repository makes: see the Kconfig help in the parent
++# directory for what the user variant changes (the assert policy above all).
++ccflags-$(CONFIG_UNISOC_WCN_BSP_USER_VARIANT) += -DFLAG_WCN_USER
++
+ obj-y := marlin.o
+ marlin-y += pcie_boot.o
+ marlin-y += wcn_swd_dap.o

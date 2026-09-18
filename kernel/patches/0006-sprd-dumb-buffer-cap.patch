@@ -1,0 +1,24 @@
+diff --git a/drivers/unisoc_platform/sprd_disp/sprd_gem.c b/drivers/unisoc_platform/sprd_disp/sprd_gem.c
+index a614df11a..90abebf18 100644
+--- a/drivers/unisoc_platform/sprd_disp/sprd_gem.c
++++ b/drivers/unisoc_platform/sprd_disp/sprd_gem.c
+@@ -13,7 +13,18 @@
+ #include "sprd_drm.h"
+ #include "sprd_gem.h"
+ 
+-#define DUMB_CREATE_TIMES_LIMIT 10
++/*
++ * e5-linux: 10 is not a limit for a Linux session, it is a trap.  The counter
++ * in sprd_gem_dumb_create() is static and never goes down, wlroots' DRM
++ * allocator asks for one dumb buffer per swapchain buffer, and every session
++ * restart asks for more -- so the 11th DRM_IOCTL_MODE_CREATE_DUMB of every boot
++ * returns -EINVAL, the compositor fails its swapchain test ("gbm_bo_create
++ * failed" / "Failed to allocate buffer") and the panel stays black until the
++ * next reboot.  The buffers are freed with their GEM object, so the guard only
++ * exists to catch a leak that never releases anything: 64 still does that and
++ * leaves room for a few sessions.
++ */
++#define DUMB_CREATE_TIMES_LIMIT 64
+ 
+ static const struct drm_gem_object_funcs sprd_gem_object_funcs = {
+ 	.free = sprd_gem_free_object,

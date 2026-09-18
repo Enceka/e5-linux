@@ -7,81 +7,49 @@ work list.
 
 ## Now (目前要做)
 
-- **Wi-Fi association.** `wlan0` is up and `iw dev wlan0 scan` returns real APs on
-  2.4 and 5 GHz — no loop device is involved and none is needed.  The partition theory
-  was wrong: `btwifi_download_firmware()` in `wcn_boot.c` calls
-  `request_firmware("wcnmodem.bin")` **first** and only falls back to the DT's
-  `/dev/block/by-name/wcnmodem` when that fails.  The `from /system/etc/firmware/`
-  line it logs is a misleading hardcoded string — that path does not exist on this
-  root filesystem at all.  What actually fixed it was getting `wcnmodem.bin` into
-  `/lib/firmware` early enough, which the initramfs overlay does; `no find
-  wcnmodem.bin` never appears in `dmesg`, so the fallback was never taken.
-  The scan also confirms the factory MAC is being ignored (`wlan0` comes up on a
-  random address while `/mnt/vendor/wifimac.txt` is readable) — worth chasing later.
+- **GPU: the compositor is on the Mali GPU; the apps are not (2026-09-18).**
+  phoc comes up with wlroots' GLES2 renderer on `Mali-G57`
+  (`docs/FINDINGS.md` section 20), but every *client* is still llvmpipe -- `About`
+  and `fastfetch` are right.  Measured: the working blob is GBM-only
+  (`EGL_KHR_platform_gbm`, no Wayland platform, zero `wl_display` references), so a
+  Wayland client cannot even create an EGL display on it (section 20.7); Mesa has
+  no kbase driver, so removing the software-forcing `/etc/environment` variables
+  would not help either.  Getting apps on the GPU needs a **Wayland-WSI** Mali
+  userspace the kernel accepts: the published r44p0 wayland blob is exactly that
+  and kbase r41p0 refuses it, i.e. port kbase to r44p0, or run the Android blob
+  through libhybris / a bionic chroot.  Remaining polish for what works today:
+  * the blob that works is Allwinner's r32p0 **GBM** build, a vendor artifact that
+    is *not* in this repository: `/opt/mali/libMali-r32p0-sunxi.so`, installed by
+    `rootfs/overlay/opt/e5/gpu-mali-setup` (it also wraps `/usr/bin/phoc` and
+    depends on the `/dev/dma_heap/*` udev rule).  A fresh rootfs needs that script
+    run once; the next flash bakes in the udev rule.
+  * `phoc.ini` still scales the output to 0.75 because the CPU could not afford
+    1.0.  That reason is gone -- try 0.85 and 1.0 again and compare.
+  * watch GPU DVFS, thermals and buffer churn under a real load (the panel is the
+    only load so far; the vendor DRM driver's `DUMB_CREATE_TIMES_LIMIT` is a
+    one-shot failure at the 11th dumb buffer).
+- **Wi-Fi throughput.**  Association, DHCP and a 100 MB transfer work; the data path
+  does not: 12.4 Mbit/s over 5 GHz against 199 Mbit/s for the same file over the USB
+  LAN -- ~3 % of the 433 Mbit/s the link negotiates.  Profile the SDIO transport /
+  the fullmac RX path.  Also `wlan0` comes up on a random MAC while
+  `/mnt/vendor/wifimac.txt` is readable.
+- **Baseband stability.**  On the last session the modem stopped answering AT
+  (`AT+CSQ` empty, `sipa_eth0` up with no address) and dmesg showed
+  `sipa_delegate ... Modem assert ... MN_AL Task PS CP assert ... The queue was
+  full`; earlier boots had a working NR SA bearer at ~50 Mbit/s.  Reproduce, then
+  decide whether `mobile-data`'s retry path should reset the modem (`AT+SFUN`)
+  instead of only re-activating the context.
+- **Power key, pending verification.**  `e5-powerkey.service` toggles the panel on
+  `KEY_POWER`; the lock call was removed because the screen could no longer be
+  woken while locked.  Confirm the wake path before adding anything back.
 
-  **Associated, on DHCP, and transferring (2026-09-18).**  `nmcli device wifi connect`
-  against a 5 GHz AP: `Connected to ... freq: 5745.0`, signal -39 dBm, both directions
-  at `433.3 MBit/s VHT-MCS 9 80MHz`, DHCP lease `192.168.137.113/24` plus a link-local
-  address, and NetworkManager saved the profile to
-  `/etc/NetworkManager/system-connections/` (mode 0600) so it autoconnects.
-  A 100 MB fetch from the host ran end to end: `http=200 bytes=104857600 time=67.7s
-  speed=1548242 B/s` — **12.4 Mbit/s, about 3 % of the 433 Mbit/s the link
-  negotiates**.  The control settles where the loss is: the *same* file from the *same*
-  server over the USB LAN takes 4.2 s, `speed=24932851 B/s` (24.9 MB/s, 199 Mbit/s).
-  So the host, the file and the TCP stack are all fine and the ~16x gap is the
-  Wi-Fi/SDIO data path — the SDIO transport or the fullmac driver's RX, not the radio
-  and not the network stack.  That is the thing to profile before calling Wi-Fi done.
-
-  Credentials live in `/etc/e5/wifi.conf` (0600) **and** in the NetworkManager profile
-  on the device only — never in this repository and never in a log.
-- **Power key.** `e5-powerkey.service` toggles the panel (`bl_power`) on `KEY_POWER` and
-  restores it on any touch or other key; suspend is not an option (see below).  The
-  logind/ScreenSaver lock call was removed again after the user found the screen could no
-  longer be woken while it was in -- confirm waking before adding anything back.
-
-  **Why it cannot be woken (2026-09-18).**  The script decides with `locked()`, which
-  reads `/sys/class/backlight/*/bl_power` and calls the panel locked when it is not
-  `0`.  That state and the compositor's are **independent**: phoc owns DPMS and blanks
-  the output on its own idle timer, while `bl_power` stays `0` the whole time.  So after
-  phoc blanks, `locked()` reports "panel is on", the power key calls `panel(True)` --
-  i.e. *off* -- and the `elif locked()` branch that is supposed to wake it on any other
-  key can never fire.  The result is a screen that only ever goes darker.  Confirmed
-  from the DRM side: `crtc[109]: dispc0 enable=0`, `connector[117]: DSI-1 crtc=(null)`,
-  `dpms=Off`, while the script's own journal says `panel on`.
-
-  The fix is to stop fighting the compositor: either drive phosh's own blank/unblank
-  (it already blanks on idle and wakes on touch, so the panel writes can simply go), or
-  have `locked()` consult the DRM DPMS state instead of `bl_power`.  Do **not** reach
-  for `systemctl restart sddm` while debugging this -- see the trap below.
-
-- **Screen size.** The panel is 49x74 mm at 320x480, i.e. ~166 DPI, and GTK lets that
-  grow the UI past the screen ("some buttons are off-screen").  First attempt:
-  `org.gnome.desktop.interface text-scaling-factor 0.75`.  If buttons are still
-  unreachable, use phosh's per-app `scale-to-fit`, then `phoc.ini`'s `[output:DSI-1]`
-  `scale`/`rotate` (the output reports `Enabled: no` in `wlr-randr` while phosh drives it,
-  which is worth understanding before trusting either).
-  **The virtual keyboard is the concrete failure (2026-09-18), and it is measured.**
-  With the display healthy, `grim` works after all -- the earlier
-  `failed to copy output DSI-1` was just the symptom of the panel being off
-  (`crtc enable=0`, `dpms=Off`), not a broken screencopy.  `tools/png2ascii.py`
-  turns the capture into a character map so it can be read without an image viewer,
-  and it shows the OSK clipped at the right edge: the top row ends mid-key
-  (`...:*******++` against 10-12 character keys elsewhere) and the indented home row,
-  which should have roughly half a key of margin on each side, starts with six
-  characters of blank on the left and is still cut off on the right.  The layout wants
-  around 355 px of logical width and the output only offers 320, so no amount of
-  `text-scaling-factor` will help --
-  `wlr-randr` confirms `Transform: normal`, `Scale: 1.000000`, mode `320x480`.
-
-  Next to try, in order: `phoc.ini`'s `[output:DSI-1] scale` below 1, which buys
-  logical width directly (if phoc only accepts integers, this needs squeekboard or a
-  patched layout instead); then `squeekboard`, whose layouts are built for narrow
-  phones; then phosh's per-app `scale-to-fit`.
-- **Reflash when convenient.** The device still runs the *old* flashed image (64 modules,
-  25-file overlay).  The keypad modules and the 4 GiB zram work from the rootfs, but the
-  initramfs overlay rewrites `/usr/local/sbin/e5-zram` and `/etc/environment` on every
-  boot, which is why the zram size lives in a drop-in.  `boot-linux-slotb.img` in the
-  repository is already the fixed one (66 modules, 26 overlay files).
+- **The keypad's confirm key.**  It emits `KEY_SELECT` (0x161 in the DT keymap), which
+  nothing in the session handles, and phosh's lock screen wants `KP_Enter` instead
+  (measured -- `docs/FINDINGS.md` 12.1).  `udev`/hwdb cannot remap it: the matrix
+  keypad driver implements no scancode map (`EVIOCSKEYCODE` is `EINVAL`), so this needs
+  a small uinput re-emitter, or a driver that grows `getkeycode`/`setkeycode`.
+  Until then the lock screen can only be unlocked with
+  `loginctl unlock-session` from the management LAN.
 
 ### Traps found the hard way
 
@@ -98,59 +66,6 @@ work list.
   device's `/etc/sddm.conf.d/10-e5.conf` still said `plasma-mobile.desktop` for
   exactly this reason.  `/etc/sddm.conf` currently wins over `/etc/sddm.conf.d/`, which
   is the only reason autologin kept working.
-
-- **GPU: the kernel side already works, userspace is the whole gap (2026-09-18).**
-  The DT node is `gpu@23140000` with `compatible = "sprd,mali-natt"`, and ARM's
-  vendor kbase driver is built in (`CONFIG_MALI_MIDGARD=y`,
-  `CONFIG_MALI_PLATFORM_NAME="qogirn6l"`).  It binds:
-  `/sys/bus/platform/drivers/mali/23140000.gpu` exists, `/dev/mali0` is there, and
-  dmesg from a boot that showed it reports `Kernel DDK version r41p0-01eac0` and
-  `GPU identified as 0x1 arch 9.0.9 r0p1` -- arch 9 is **Valhall**, i.e. a Mali-G57
-  class part, with IRQ 63 live.  So nothing is missing on the kernel side.
-  What is missing is a GL/EGL implementation Debian can use: Mesa speaks panfrost
-  and lima, never kbase.  Two routes:
-  * **Vendor blobs (fastest, recommended first).**  Android's `/vendor` carries
-    ARM's libmali built for this exact GPU *and* this exact kbase (r41p0).  Pull it
-    from Android (the partition is erofs inside `super`, so it cannot be mounted
-    from Linux -- same constraint as the WCN firmware in section 8), stage it into
-    the rootfs, and point EGL at it.  No kernel change at all.
-
-    **Update: that is not what the Android blob is.**  It is
-    `/vendor/lib64/egl/libGLES_mali.so`, 43.7 MiB, and `readelf -d` says it needs 19
-    shared objects: bionic `libc.so`/`libdl.so`/`libm.so`, `libc++.so`, `liblog`,
-    `libcutils`, `libutils`, `libbase`, `libhardware`, `libbinder_ndk`, `libhidlbase`,
-    `libnativewindow`, `libsync`, `libdmabufheap`, `libgralloctypes`, plus the
-    graphics HALs `android.hardware.graphics.allocator-V1-ndk`,
-    `android.hardware.graphics.mapper@4.0` and
-    `android.hardware.graphics.common-V3-ndk`.  `libc.so` there is **bionic**, and the
-    allocator/mapper are HIDL services that only exist under Android's
-    hwservicemanager, so it cannot simply be dropped into a Debian rootfs.
-
-    **The glibc equivalent exists though.**  CoreELEC packages ARM's Linux UMD as
-    `opengl-meson`; commit `8bfb8ebe38f615907852ada7ff375a04f53f3e81` carries
-    `lib/arm64/valhall/r41p0/fbdev/libMali.so` -- 21.9 MiB, and its `NEEDED` list is
-    nothing but ordinary glibc libraries: `libdrm.so.2`, `libpthread.so.0`,
-    `libdl.so.2`, `libstdc++.so.6`, `libm.so.6`, `libc.so.6`, `libgcc_s.so.1`.
-    **r41p0 is exactly the kbase version this kernel reports**, so the UMD/kernel
-    handshake should pass.  Staged at `work/mali/libMali.so` (gitignored, it is a
-    vendor blob).
-
-    The catch is the variant: only **fbdev** is published for arm64, never gbm or
-    wayland.  fbdev talks to `/dev/fb0`, and this kernel has no fbdev at all
-    (`CONFIG_DRM_FBDEV_EMULATION` is off), so it needs that turned on -- and even
-    then a Wayland compositor wants EGL on GBM with DRM modifiers, which the fbdev
-    build does not provide.  It is still worth loading, because proving the UMD
-    talks to kbase r41p0 is the real unknown; a GBM build for Valhall r41p0 would
-    then be the thing to hunt for.
-  * **Panfrost (mainline, no blobs).**  `CONFIG_DRM_PANFROST=y` is already set and
-    panfrost does support Valhall.  But it cannot bind while kbase owns
-    `sprd,mali-natt`, and the node describes its power and DVFS with vendor syscons
-    (`sprd,gpu-apb-syscon`, `top_dvfs_cfg`, `dcdc_gpu_voltage*`) rather than the
-    generic `clocks`/`power-domains`/`operating-points` panfrost wants.  That is a
-    DT port, not a config flip.
-
-  Worth doing because it is what makes the 0.75 output scale affordable: at that
-  scale the compositor rasterises 273k pixels per frame on the CPU.
 
 ## Next (后续要做)
 
@@ -172,10 +87,11 @@ work list.
 | | |
 |---|---|
 | board | Rongyue E5 (`ums9158_1h10`, UMS9621/qogirn6lite), 1450 MB RAM |
-| kernel | the original flashed `Image` (sha256 `c1ab1905...`), slot-b trial boot |
+| kernel | rebuilt `Image` (sha256 `7356c756...`): fbdev + ION + `kernel/patches/0001-0003`; slot-b trial boot |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/` |
-| session | Phosh 0.46.0 (`phoc` with pixman); KDE purged; `e5`/`123456`, `root`/`root` |
-| baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s |
+| session | Phosh 0.46.0, `phoc` on the **Mali-G57** via the Allwinner r32p0 GBM UMD; kernel log on the panel |
+| gpu | kbase r41p0 + ARM fbdev UMD (handshake) and the r32p0 GBM UMD (compositor); r44p0 blobs are refused |
+| baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s (modem asserted once, see above) |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; power key = panel toggle |
 | disk | 4.4 GiB used, 1.2 GiB free |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |

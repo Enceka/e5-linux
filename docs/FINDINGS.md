@@ -793,6 +793,43 @@ Persistence is in two places:
   `boot-linux-slotb.img` carries 66 modules instead of 64 and loads them in
   dependency order (`matrix-keymap.ko` before `sprd_keypad.ko`).
 
+### 12.1 The confirm key is KEY_SELECT, and hwdb cannot remap it (2026-09-18)
+
+The keypad's devicetree keymap (`/proc/device-tree/soc/aon/keypad@641B0000/linux,keymap`,
+20 entries of `(row << 24) | (col << 16) | keycode`) decodes to:
+
+| row,col | keycode | name |
+|---|---|---|
+| 1,0 | 0x161 (353) | **KEY_SELECT** -- the confirm key |
+| 0,0 | 0x9e (158) | KEY_BACK |
+| 0,4 | 0x20b (523) | KEY_PHONE |
+| 0,5 / 0,6 / 1,1 / 1,2 | 0x6a / 0x67 / 0x69 / 0x6c | RIGHT / UP / LEFT / DOWN |
+| 3,0 / 3,1 | 0x8b / 0xa9 | KEY_MENU / KEY_NEXT |
+| 3,3..3,5, 1,3..1,6, 0,1..0,3 | 2..11 | KEY_1 .. KEY_0 |
+| 3,6 | 0x37 | KEY_KPASTERISK |
+
+Nothing in the session handles KEY_SELECT, so on the phosh lock screen the PIN could be
+typed but never submitted.  The obvious fix -- `KEYBOARD_KEY_161=enter` in
+`/etc/udev/hwdb.d/` -- **cannot work here**: udev's `keyboard` builtin applies those
+mappings with `EVIOCSKEYCODE`, and this keypad implements no scancode map at all:
+
+    tools/keycode-query.py /dev/input/event2 0x161
+      OSError: [Errno 22] Invalid argument        (evdev: dev->getkeycode == NULL)
+
+`/dev/input/event0` (gpio-keys) answers the same way, so it is the driver class, not
+this device.  The confirm key therefore has to be translated in userspace -- a uinput
+re-emitter that turns KEY_SELECT into whatever the consumer expects;
+`tools/key-inject.py` is exactly that mechanism, driven by hand.
+
+What the consumer expects was measured with it, on a locked session:
+
+    tools/key-inject.py 1 2 3 4 5 6 enter     -> LockedHint stays yes
+    tools/key-inject.py 1 2 3 4 5 6 kpenter   -> LockedHint: no    (unlocked)
+
+phosh's lock screen unlocks on **KP_Enter**, not on Return, and the PIN is checked by
+PAM -- a wrong one leaves `phosh[..]: pam_unix(phosh:auth): authentication failure`
+in the journal (that is how the "123" typed by an earlier test showed up).
+
 ## 13. Baseband internet: Android's modem_control in a chroot
 
 The vendor kernel already carries the whole SIPC/SIPA modem stack: the modules are
@@ -1164,3 +1201,304 @@ digits, so that is what unlocks phosh's lock screen.  The root one is unchanged,
 `rootfs/device-finalize.sh` -- which creates both accounts when a rootfs is built -- now
 writes 123456 as well, so a rebuilt image matches the running device.  Verified by
 logging in over telnet as `e5`/`123456`.
+
+## 20. GPU: the UMD/kbase handshake, the panel console, and what still blocks a compositor
+
+Everything in this section was measured on the device on 2026-09-18, on the kernel
+this repository builds (`5.15.211-g94401422a7df #4`, 66 modules).
+
+### 20.1 The handshake: ARM's glibc UMD and kbase r41p0 do talk
+
+The kernel side was never in doubt (vendor kbase is built in and reports
+`Kernel DDK version r41p0-01eac0`, `GPU identified as 0x1 arch 9.0.9 r0p1`).
+What was unknown is whether a *userspace* Mali driver exists that this kernel
+accepts.  One does: CoreELEC's `opengl-meson` packages ARM's Linux UMD, and the
+r41p0 arm64 build is `r41p0-fbdev-g57-aarch64-8a6d38656-b5` -- glibc, aarch64,
+Valhall G57, and built against the same kbase major version this kernel reports.
+
+Installed in the rootfs at `/opt/mali` (`libMali.so` plus
+`libEGL.so.1`/`libGLESv2.so.2`/`libGLESv1_CM.so.1` symlinks) and driven by
+`tools/egl-probe.py` -- ctypes only, so the target needs no compiler:
+
+    libEGL   : /opt/mali/libEGL.so.1
+    eglGetDisplay(DEFAULT) -> 0xfe4aa80
+    eglInitialize -> OK, EGL 1.4
+    EGL_VENDOR      : ARM
+    EGL_VERSION     : 1.4 Valhall-"r41p0-fbdev-g57-aarch64-8a6d38656-b5"
+    EGL_CLIENT_APIS : OpenGL_ES
+    eglChooseConfig(pbuffer) -> 5 config(s)
+    eglCreateContext -> 0x100765a0
+    pbuffer surface + current -> OK
+    GL_VENDOR                   : ARM
+    GL_RENDERER                 : Mali-G57
+    GL_VERSION                  : OpenGL ES 3.2 v1.r41p0-fbdev-g57-aarch64-8a6d38656-b5.fc0fdda618d58b1ff293a1730bc57b91
+    GL_SHADING_LANGUAGE_VERSION : OpenGL ES GLSL ES 3.20
+    GL_NUM_EXTENSIONS           : 101
+    glClear + glFinish -> OK
+
+kbase says the same thing from its own side -- the first UMD context makes it
+power the GPU up through its platform hook:
+
+    [  136.577129] mali GPU_set_DVFS_table kbase_platform_set_DVFS_table
+                   gpu_power_state = 1 gpu_clock_state = 1,gpu_temperature = 39840
+
+Two details worth keeping:
+
+* **This does not need `/dev/fb0`.**  The extension list contains
+  `EGL_KHR_surfaceless_context`, and the handshake succeeds on a kernel with no
+  fbdev at all -- the "handshake needs fbdev" assumption was wrong.
+* **The UMD is not installed as the system `libEGL.so.1`.**  It is a *fbdev*
+  build: it has no `EGL_KHR_platform_gbm`/`EGL_MESA_platform_gbm`, so a wlroots
+  compositor (phoc) could not use it, and swapping Mesa's libEGL out for it would
+  cost the session its renderer for nothing.
+
+### 20.2 `/dev/fb0` needed two driver patches, and it was worth it for the console
+
+The vendor KMS driver in `drivers/unisoc_platform/sprd_disp` never called
+`drm_fbdev_generic_setup()`, so `CONFIG_DRM_FBDEV_EMULATION=y` on its own produces
+no framebuffer.  `kernel/patches/0001` adds the call at the end of
+`sprd_drm_bind()`.  That alone is not enough either, and the reason is a probe
+order: the MIPI panel is a *child* device of the DSI host, and it attaches after
+`drm_dev_register()`:
+
+    [   11.836695] [drm] sprd_dsi_connector_detect()          <- before the panel exists
+    [   11.850052] [drm:sprd_panel_probe] create cabc Succeed!
+    [   11.930868] [drm] sprd_dsi_host_attach()
+    ...
+    [   12.428273] WCN BASEcrystal ... (12 s later, boot continues)
+
+`sprd_dsi_connector_detect()` returns connected only when `dsi->panel` is set, so
+the fbdev client probed a "disconnected" connector and gave up.  Patch `0002`
+schedules a `drm_kms_helper_hotplug_event()` from a delayed workqueue in
+`sprd_dsi_host_attach()` -- from a workqueue, not inline, because the hotplug ends
+in a modeset that walks the same panel/DSI paths the probe is still holding.  The
+inline version was tried first and made the boot take minutes (the initramfs loads
+`sprd-drm.ko`), which is how that was learned.
+
+With both patches `/dev/fb0` is there on every boot (`0 sprddrmfb`,
+320x480, 32bpp XRGB8888) -- and so is a **console on the panel**.  That second
+part needed one more fix: LK merges the boot image's command line with its own
+bootargs and *its* parameters win on duplicate keys, so the `console=tty0
+loglevel=7` that `build-boot-image.py` has always put in the header never took
+effect.  `/proc/consoles` showed only `ttyS1` and `ramoops-1`, the VT never
+received a printk, and the panel showed an empty console with a blinking cursor.
+The kernel now carries it itself:
+
+    CONFIG_CMDLINE="console=tty0 loglevel=6"
+    CONFIG_CMDLINE_EXTEND=y
+
+which is appended after the bootloader's string, and after that:
+
+    ttyS1                -W- (EC    )  235:1
+    ramoops-1            -W- (E  p a)
+    tty0                 -WU (E  p  )    4:1
+
+The kernel log now scrolls on the panel from the moment fbcon binds.
+
+### 20.3 A window surface still fails, with or without ION
+
+`tools/fbdev-info.py` (new, same ctypes trick) shows what the UMD sees:
+
+    /dev/fb0   smem_start 0x0   smem_len 614400   line_length 1280
+               xres x yres 320 x 480   virtual 320 x 480   32bpp
+               red/green/blue 16:8 / 8:8 / 0:8   capabilities 0x0
+
+`eglCreateWindowSurface()` with ARM's `fbdev_window {u16 width, height}` fails:
+
+    eglCreateWindowSurface(fbdev 320x480) -> EGL_NO_SURFACE
+    FAIL: glCreateWindowSurface failed (EGL_BAD_ALLOC (0x3003))
+
+-- at 320x480 and at 64x64, 160x160, 240x240 and 320x320 (so it is not a size or
+a format mismatch), and both before and after ION was enabled.  The blob's
+strings contain `/dev/ion` and `query ion heap failed ret=%#x`, i.e. it predates
+dma-buf heaps; this kernel has dma-heap but the Android build never enables the
+vendor ION that is still sitting in the tree, so `kernel/patches/0003` wires its
+Kconfig/Makefile back up and the fragment sets `CONFIG_ION`+`CONFIG_ION_SYSTEM_HEAP`
++`CONFIG_ION_CMA_HEAP`.  `/dev/ion` now exists and the window surface still fails,
+so ION was not the (only) blocker and the fbdev path was not pursued further --
+it cannot serve a compositor anyway.
+
+### 20.4 A newer UMD is rejected by this kernel
+
+CoreELEC's newer package (`opengl-meson-r44p0`) has exactly the variant that is
+missing: `valhall/r44p0/wayland/libMali_g57_dmaheap.so`,
+`r44p0-wayland-drm-g57-dmaheap-aarch64`, glibc, linking
+`libwayland-client/server` and using GBM.  Run as the session user with the
+running phoc's socket:
+
+    libEGL   : /opt/mali/libMali-r44p0-wayland.so
+    eglGetDisplay(DEFAULT) -> 0x26da97e0
+    FAIL: eglInitialize failed (EGL_NOT_INITIALIZED (0x3001)) -- the UMD did not accept kbase
+
+So kbase r41p0 refuses an r44p0 UMD.  The version check is not advisory: a UMD
+from a different DDK major version cannot be used against this kernel, which
+rules out "just take CoreELEC's newest blob".
+
+### 20.5 What that leaves
+
+A GPU-composited session needs a **glibc aarch64 GBM (or wayland) UMD built
+against kbase r41p0**.  The alternatives, in order of effort:
+
+1. Find that blob.  The r41p0 arm64 package publishes fbdev only, so this means
+   another vendor's BSP (Amlogic/Unisoc/Rockchip trees that ship a Linux libmali),
+   an ARM DDK build, or a CoreELEC/LibreELEC tree that built the wayland variant
+   for an r41p0 kernel.
+2. Port the kernel side to the DDK version that *is* published (r44p0) -- a
+   kbase replacement plus the vendor platform integration (DVFS, power domains),
+   which is a real kernel port, not a config change.
+3. libhybris around the device's own Android blob (bionic + the graphics
+   allocator/mapper HIDL services) -- how Ubuntu Touch and Sailfish do it.
+4. Panfrost, which needs a DT port (section in `docs/STATUS.md`).
+
+### 20.6 The compositor runs on the GPU: an *older* GBM UMD, and a 0600 dma-heap
+
+The missing piece in 20.1-20.5 was a glibc GBM/wayland UMD.  It does not have to be
+r41p0: the version check is not what the kernel enforces -- the UMD is the one that
+bails out, and only when the kernel is *older* than it.  Allwinner's A523 (also a
+G57) userspace, taken from TrimUI Smart Pro S firmware, is one blob with the whole
+GBM API in it:
+
+    /opt/mali/libMali-r32p0-sunxi.so
+    49,377,264 B, ELF aarch64, glibc
+    version string: 1.4 Valhall-"r32p0-01eac1"
+    exports gbm_create_device / gbm_bo_create / gbm_surface_create[_with_modifiers]
+    EGL client extensions: EGL_EXT_platform_base EGL_KHR_platform_gbm
+
+Against this kernel it initialises on the *compositor* platform rather than the
+fbdev one:
+
+    gbm_create_device(/dev/dri/card0) -> 0x4dc1490
+    eglGetPlatformDisplayEXT(EGL_PLATFORM_GBM_KHR) -> 0x4f965a0
+    eglInitialize -> OK, EGL 1.4
+    EGL_VERSION : 1.4 Valhall-"r32p0-01eac1"
+    GL_RENDERER : Mali-G57
+    GL_VERSION  : OpenGL ES 3.2 v1.r32p0-01eac1.3634895aa082dda7c3407d9f3e199919
+
+(`tools/egl-probe.py` grew an `EGL_PLATFORM=gbm` mode for this; the platform
+entry point is only reachable through `eglGetProcAddress` -- it is not a dynamic
+symbol in this build.)
+
+`gbm_surface_create(..., SCANOUT|RENDERING)` returns NULL, but the modifier-aware
+entry point works, and that is the one wlroots uses:
+
+    gbm_surface_create_with_modifiers(XR24, LINEAR) -> 0x4d61530
+    eglCreateWindowSurface(gbm surface) -> 0xac62130
+    eglSwapBuffers -> ok (three times)
+    gbm_surface_lock_front_buffer -> 0xac62740   stride=1280 format=0x34325258
+
+Then phoc, with the dynamic loader pointed at the blob **for the compositor only**:
+
+    /lib/ld-linux-aarch64.so.1 --library-path /opt/mali/gbm:/usr/lib/aarch64-linux-gnu \
+        /usr/bin/phoc.orig -v -S -C /etc/phosh/phoc.ini ...
+
+...failed at first, and the reason is worth remembering:
+
+    [render/egl.c:205] Supported EGL client extensions: ... EGL_KHR_platform_gbm
+    [render/egl.c:555] Failed to create GBM device
+    [render/pixman/renderer.c:328] Creating pixman renderer
+    phoc[7208]: open /dev/dma_heap/system failed
+
+**`/dev/dma_heap/*` is created 0600 root:root.**  The session user cannot open it,
+ARM's GBM allocates its buffers from a dma-buf heap, `gbm_create_device()` returns
+NULL, and wlroots quietly falls back to the CPU renderer instead of failing.  One
+udev rule later (`rootfs/overlay/etc/udev/rules.d/60-e5-dma-heap.rules`,
+`SUBSYSTEM=="dma_heap", MODE="0666"`) the same boot reports:
+
+    [render/egl.c:354] Using EGL 1.4
+    [render/egl.c:359] EGL vendor: ARM
+    [render/gles2/renderer.c:538] Creating GLES2 renderer
+    [render/gles2/renderer.c:539] Using OpenGL ES 3.2 v1.r32p0-01eac1...
+    [render/gles2/renderer.c:541] GL renderer: Mali-G57
+
+with the GPU actually busy (`SPRDDEBUG gpu core power on polling SUCCESS`), the
+shell up ("Phosh ready after 0.85s"), and `grim` capturing the composited output.
+
+Two details keep the rest of the session working:
+
+* the blob has **no Wayland platform** in its EGL client extensions, so GTK apps
+  must keep Mesa's software EGL.  That is why phoc gets the blob through an
+  explicit `--library-path` on the loader rather than `LD_LIBRARY_PATH`, which
+  its session child (`gnome-session`) would inherit;
+* `WLR_RENDERER=pixman` from `/etc/environment` is unset for phoc by the same
+  wrapper, so wlroots gets to choose its GLES2 renderer.
+
+All of it is installed by `rootfs/overlay/opt/e5/gpu-mali-setup`: the
+`/opt/mali/gbm/*` symlinks, the `/usr/bin/phoc` wrapper (the real binary stays as
+`/usr/bin/phoc.orig`), and the chmod that makes the current boot work before udev's
+rule is in place.
+
+## 21. Display scaling on a 320x480 panel: crisp beats roomy
+
+The panel is 320x480 physical at ~166 DPI, and phosh's layout assumes roughly
+360 logical pixels of width.  `phoc.ini` therefore had `[output:DSI-1] scale =
+0.75`, which buys 426x640 logical pixels -- enough for the on-screen keyboard --
+at a price that is easy to miss: a Wayland output scale below 1 is *fractional*,
+and a client that does not implement `wp_fractional_scale_v1` renders at buffer
+scale 1 anyway and lets the compositor resample.  That is what made the text look
+soft, and it is measurable from the capture size alone:
+
+    scale = 0.75  ->  grim output 426 x 640   (1x buffer, resampled down to 320x480)
+    scale = 1     ->  grim output 320 x 480   (1:1, no resampling)
+
+This GTK (4.18.6) and this phoc do not offer the fractional-scale protocol --
+`strings libgtk-4.so.1 | grep -c fractional_scale` is 0, same for phoc -- so
+"fits but soft" and "crisp but tight" really are the only two options, and the
+current choice is crisp:
+
+* `rootfs/overlay/etc/phosh/phoc.ini`: `scale = 1`;
+* `org.gnome.desktop.interface text-scaling-factor = 0.85` for the `e5` user --
+  text is rasterised at that size, so it stays sharp, and the effective size
+  (0.85) is still larger than what the old setup produced (0.75 x 1.0);
+* `sm.puri.phoc scale-to-fit = true` -- phoc scales down windows that are larger
+  than the output, which is what makes apps written for >=360 px usable;
+* the OSK in use is `phosh-osk-stub`, whose layout is full width and fits 320 px
+  (a grim capture at scale 1 shows ten keys across the screen, nothing clipped;
+  `squeekboard` is installed too and can be activated as `sm.puri.OSK0`).
+
+If something still overflows, the next knobs are a smaller
+`text-scaling-factor` (~0.8) and a per-app fix; going back to a fractional output
+scale is the only way to fit *everything* at once, and it costs the sharpness
+above.
+
+### 20.7 The apps are still software-rendered -- measured, and it is the WSI, not a setting
+
+`About` and `fastfetch` report llvmpipe because a Wayland *client* has no GPU
+driver to use, and that is two facts stacked:
+
+* `/etc/environment` (in the overlay) still forces Mesa's software stack for every
+  client -- `LIBGL_ALWAYS_SOFTWARE=1`, `MESA_LOADER_DRIVER_OVERRIDE=kms_swrast`,
+  `GALLIUM_DRIVER=llvmpipe`.  That was necessary before there was any GPU driver
+  (and it is why `kms_swrast` was chosen: it is what a KMS/GBM compositor needs
+  when there is no hardware driver).  Removing it is not enough on its own:
+  **Mesa has no kbase driver**, so a client that ignores those variables still
+  ends up on llvmpipe.
+* The only userspace that talks to this GPU is ARM's blob, and the build that
+  works here (Allwinner r32p0, section 20.6) is **GBM-only**.  Measured as a
+  client would do it, against the running session's socket:
+
+      EGL_LIB=/opt/mali/libMali-r32p0-sunxi.so EGL_PLATFORM=wayland
+        wl_display_connect(wayland-0) -> 0x3afddd40
+        eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_KHR) -> EGL_NO_DISPLAY
+        FAIL: eglGetDisplay failed (EGL_BAD_PARAMETER)
+      (system Mesa libEGL, same command)
+        wl_display_connect(wayland-0) -> 0x2d7bf7f0
+        eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_KHR) -> 0x2da4d4f0
+        eglInitialize -> OK, EGL 1.5
+
+  Its client extension string is `EGL_EXT_client_extensions EGL_EXT_platform_base
+  EGL_KHR_client_get_all_proc_addresses EGL_KHR_platform_gbm` and the blob has
+  **zero** `wl_display`/`libwayland` references: it can drive KMS (the compositor)
+  but it cannot hand a client an EGL display, so GTK falls back to its software
+  renderer.  That is why phoc says `GL renderer: Mali-G57` while `About` says
+  llvmpipe -- both are correct, they are different processes with different EGL
+  libraries.
+
+Making the apps use the GPU needs a **Wayland-WSI** Mali userspace that this
+kernel accepts.  The published r44p0 wayland blob is exactly that
+(`EGL_KHR_platform_wayland` + GBM, measured in 20.4), but kbase r41p0 refuses it,
+so this is the same fork in the road as 20.5: port kbase to r44p0, or run the
+Android blob through libhybris/a bionic chroot (what the UMS9620 Linux community
+does -- `mu300-linux` `android-gpu-run`).
+
+
+

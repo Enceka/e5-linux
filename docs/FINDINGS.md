@@ -791,7 +791,13 @@ Two things are still open on Bluetooth, and neither is a blocker:
   the vendor command, or accepting an address that is stable but wrong (a peer
   that paired with the Android BT stack will not recognise this device).
 * pairing and a data transfer have not been exercised -- an inquiry only proves
-  the radio, the stack and the HCI transport work.
+  the radio, the stack and the HCI transport work.  The one attempt so far (the
+  settings app at 14:26, to the peer bluez has in its cache as "Enceka SE",
+  `80:04:5F:76:78:0C`) came back
+  `org.bluez.Error.ConnectionAttemptFailed: Page Timeout`: the page went out and
+  the peer never answered it.  That is what a peer that is off, out of range or
+  refusing connections looks like, and it is not evidence either way about
+  paging itself -- nothing has been connected successfully yet.
 
 ## 9. The five-minute reset: the PMIC watchdog, not a panic
 

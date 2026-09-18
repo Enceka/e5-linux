@@ -740,15 +740,36 @@ whole HCI init sequence and `hci0` comes up with a real BD address
 (`27:93:31:14:22:11`) and sane ACL/SCO MTUs, where before the policy change its
 power-on returned -1.
 
-**Still open on Bluetooth**: `hciconfig hci0 up` ends in
-`Can't init device hci0: Invalid argument`, i.e. the last step of the kernel's HCI
-setup is refused.  Everything before it works -- 23 commands and 23 events cross
-the tty, and the reset path powers MARLIN_BLUETOOTH up cleanly
-(`mtty_open power on state ret = 0`) -- so what is missing is the vendor-side init
-that Android does from its BT HAL: most likely the `bt_configure_pskey*.ini` /
-`bt_configure_rf*.ini` pair this image does not carry, or a baud-rate switch that
-`btattach -B /dev/ttyBT0 -S 3000000` does not perform.  `sudo hciconfig hci0 up`
-on a booted device reproduces it.
+**Still open on Bluetooth, and now located exactly.**  `hciconfig hci0 up` runs the
+kernel's whole HCI init request and fails on its *last* command:
+
+    < HCI Command: Write Default Link Policy Settings (0x02|0x000f) plen 2
+            Link policy: 0x000f   (Role Switch + Hold + Sniff + Park)
+    > HCI Event: Command Complete
+          Status: Invalid HCI Command Parameters (0x12)
+    Can't init device hci0: Invalid argument (22)
+
+`hci_setup_link_policy()` builds that value from the LMP features the controller
+itself reported (`lmp_hold_capable()` and friends), and sends the command because
+`hdev->commands[5] & 0x10` claims support -- so this firmware advertises
+hold/sniff/park and then refuses to enable them.  `hci_req_sync()` treats a
+non-zero status anywhere in the request as fatal, which is why one rejected
+command takes the whole controller down with it.  Android never meets this:
+Bluedroid does not send Write Default Link Policy Settings at all, so the vendor
+firmware was never asked for it.  The candidates, in the order I would try them:
+
+* make that one request tolerate a rejection for this controller -- a quirk, or
+  clamping the policy to `HCI_LP_RSWITCH`, which every BR/EDR controller has to
+  accept;
+* or keep the kernel out of it and let userspace own the setup
+  (`HCI_UART_RAW_DEVICE`, i.e. attach the tty as a raw device and run bluez's own
+  init sequence).
+
+Everything up to that command works: the init sequence runs to its 46th exchange
+over `/dev/ttyBT0` (btmon), `hci0` comes up with the chip's own BD address
+(`27:93:31:14:22:11`) and sane ACL/SCO MTUs, and the reset path powers
+MARLIN_BLUETOOTH up cleanly (`mtty_open power on state ret = 0`).  `sudo hciconfig
+hci0 up` on a booted device reproduces the failure.
 
 
 ## 9. The five-minute reset: the PMIC watchdog, not a panic

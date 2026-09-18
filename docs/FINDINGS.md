@@ -2046,6 +2046,48 @@ Verified: `dnsmasq --test` OK, `dnsmasq: active` (enabled), listening on
 `busybox nslookup deb.debian.org 192.168.9.1` resolves -- so a client that renews its
 lease gets `192.168.9.x`, gateway `192.168.9.1` and a resolver that actually answers.
 
+### 20.4 Channel 149 at 80 MHz works -- the stall was the regulatory domain
+
+For a while the tree kept the hotspot at 20 MHz because 40 MHz and 80 MHz both left
+hostapd in `COUNTRY_UPDATE->HT_SCAN` and never at `AP-ENABLED`.  That was not the width;
+it was the same missing country as section 20.  With `country CN: DFS-FCC` the driver's
+own regulatory list reads
+
+    nl80211: 5725-5850 @ 80 MHz 33 mBm
+
+and with `ieee80211ac=1`, `ht_capab=[HT40+]`, `vht_oper_chwidth=1` and
+`vht_oper_centr_freq_seg0_idx=155` hostapd sets
+
+    nl80211: Set freq 5745 (ht_enabled=1, vht_enabled=1, he_enabled=0, bandwidth=80 MHz, cf1=5775 MHz, cf2=0 MHz)
+
+The beacon (parsed from hostapd's own `-dd` hexdump with `work/parse-beacon.py`) carries
+HT Operation primary 149 / secondary offset 1 (HT40+) and **VHT Operation `width=1`
+(80 MHz), seg0=155, seg1=0** -- the 149/153/157/161 block.  Four start attempts (with and
+without a preceding `iw dev wlan0 scan`; with and without a pre-set
+`iw dev wlan0 set channel 149 80MHZ`) all reached `AP-ENABLED`, so
+`opt/e5/hotspot-start.sh` no longer configures the channel and
+`etc/hostapd/e5.conf` is the 80 MHz profile (the old 20 MHz one is in git history).
+
+Two things to keep in mind:
+
+* The 5 GHz band's own capabilities are fine: `iw phy` says `HT20/HT40`, and the wiphy's
+  VHT max width is 80 MHz (`Supported Channel Width: neither 160 nor 80+80`), while the
+  driver's regulatory list allows 80 MHz on 5725-5850.
+* The VHT *Capabilities* IE still advertises `SupportedChannelWidthSet=0` (20/40) even
+  though the operation element says 80 MHz.  That bit is inherited from the driver's
+  `hw vht capab: 0x1b07031`, which has it clear -- the vendor driver claims 20/40 in its
+  capability IE while running 80 MHz.  A client that trusts the operation element gets
+  80 MHz, which is why the acceptance test is a real client's link rate, not the beacon.
+
+### 20.5 The old "HT_SCAN hang" note, corrected
+
+The earlier commits (fdc0494 and a38122d) disagreed about whether pre-setting the channel
+while the interface was down helped.  It did not matter either way: what changed between
+"hangs in HT_SCAN" and the measurements above is the country.  hostapd's 40 MHz
+coexistence scan (`Scan for neighboring BSSes prior to enabling 40 MHz channel`) does run
+and complete in the working case; with every 5 GHz channel NO-IR it had nothing to settle
+on and never left `HT_SCAN`.
+
 
 ## 22. The baseband CP assert: the URC channel, the RIL-shaped AT channel, the watchdog
 

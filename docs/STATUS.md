@@ -52,15 +52,18 @@ bottom.
   clean-boot test (fresh boot, one attach, scan immediately, then scan again after
   ten minutes idle) to decide whether the death is our attach sequence or the
   chip's state.
-- **Wi-Fi hotspot: `AP-ENABLED` at 20 MHz, 40/80 hangs hostapd (2026-09-18).**
-  The `COUNTRY_UPDATE` stall is fixed: `regulatory.db`/`.p7s` (upstream-signed)
-  are in the initramfs, `iw reg get` says `country CN: DFS-FCC`, and the hotspot
-  reaches `AP-ENABLED` on channel 149.  The remaining limit is width: with
-  `vht_oper_chwidth=1`/80 MHz (and 40 MHz) hostapd hangs in `HT_SCAN` after
-  `Channel width 80 MHz`, so the tree keeps ch149 at 20 MHz
-  (`rootfs/overlay/etc/hostapd/e5.conf`).  Two other limits stand: the driver
-  reports `#{ managed, AP } <= 1`, so an AP drops the Wi-Fi uplink, and guests
-  only get out through the (now watchdogged) modem.
+- **Wi-Fi hotspot: ch149 at 80 MHz is up (2026-09-18).**  The `HT_SCAN` stall was
+  never the width -- it was the regulatory domain, the same missing country as
+  `docs/FINDINGS.md` section 20.  With `country CN: DFS-FCC` the driver
+  advertises `5725-5850 @ 80 MHz`; `etc/hostapd/e5.conf` now runs channel 149,
+  VHT80 with centre 155, and hostapd logs `Set freq 5745 ... bandwidth=80 MHz,
+  cf1=5775` with the beacon's VHT Operation at `width=1, seg0=155`.  4/4 start
+  attempts reached `AP-ENABLED` (with/without a prior scan, with/without a
+  pre-set channel), so `hotspot-start.sh` no longer configures the channel.
+  Still open: confirm 80 MHz from a real client's link rate (the beacon's VHT
+  *Capabilities* IE says 20/40 because the driver's own `hw vht capab` has that
+  bit clear), the `#{ managed, AP } <= 1` limit means an AP drops the Wi-Fi
+  uplink, and guests still get out only through the (now watchdogged) modem.
 - **Shutdown takes ~32 s and it is all NetworkManager (deferred).**  Everything
   else stops inside 1.3 s (`bluetooth.service` in 0.25 s); the journal is then
   silent from NM's `modem-manager: ModemManager no longer available` at
@@ -143,7 +146,7 @@ bottom.
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | baseband | 5G NR SA (n78); the CP asserted ~10 min into a session that polled AT. `e5-atd.service` (persistent URC drain + serialised commands) + `e5-cp-watchdog.service` are deployed; 31 min soak clean, longer soak pending (`docs/FINDINGS.md` 22) |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
-| hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at **20 MHz** (`iw reg` = `country CN` after the regdb reflash); 40/80 MHz hangs hostapd in `HT_SCAN`; no AP+STA concurrency |
+| hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at **80 MHz VHT80 (centre 155)**; the old `HT_SCAN` stall was the missing `country CN`, not the width; no AP+STA concurrency |
 | bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
 | disk | 4.4 GiB used, 1.2 GiB free |

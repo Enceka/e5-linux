@@ -39,9 +39,6 @@ work list.
   full`; earlier boots had a working NR SA bearer at ~50 Mbit/s.  Reproduce, then
   decide whether `mobile-data`'s retry path should reset the modem (`AT+SFUN`)
   instead of only re-activating the context.
-- **Power key, pending verification.**  `e5-powerkey.service` toggles the panel on
-  `KEY_POWER`; the lock call was removed because the screen could no longer be
-  woken while locked.  Confirm the wake path before adding anything back.
 
 
 ### Traps found the hard way

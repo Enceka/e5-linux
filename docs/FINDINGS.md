@@ -873,7 +873,11 @@ visible in the device's key bitmap once the patched module is loaded:
 
     /proc/bus/input/devices, sprd-keypad:  BACKSPACE(14) yes  KP_ENTER(96) yes  BACK(158) yes
 
-The hwdb rule therefore still carries only `KEYBOARD_KEY_8=kpenter`.
+The hwdb rule therefore still carries only `KEYBOARD_KEY_8=kpenter`.  So the two
+keys of this section are implemented in two different layers: the confirm key is a
+**userspace** udev/hwdb remap of a matrix scan code, the back key is a **kernel**
+change in `drivers/input/keyboard/sprd_keypad.c` (committed as `678d2409`, see
+section 20.2 for the table of kernel commits).
 
 ## 13. Baseband internet: Android's modem_control in a chroot
 
@@ -1366,7 +1370,25 @@ in a modeset that walks the same panel/DSI paths the probe is still holding.  Th
 inline version was tried first and made the boot take minutes (the initramfs loads
 `sprd-drm.ko`), which is how that was learned.
 
-With both patches `/dev/fb0` is there on every boot (`0 sprddrmfb`,
+**These patches live in two places on purpose.**  `kernel/patches/*.patch` in this
+repository is the canonical form -- `kernel/build-linux.sh` applies them to a fresh
+clone -- and the same four changes are now also *commits* in the kernel tree itself
+(`kernel_sprd_ums9158`, branch `linux-staging`):
+
+| patch | commit | what it touches |
+|---|---|---|
+| `0001-sprd-drm-fbdev-emulation` | `c7b95f5f` | `sprd_drm.c`: `drm_fbdev_generic_setup()` |
+| `0002-sprd-dsi-hotplug-on-panel-attach` | `4ab5ac3d` | `sprd_dsi.c/.h`: deferred client re-probe |
+| `0003-ion-for-the-fbdev-umd` | `7b42f508` | `staging/android` Kconfig + Makefile |
+| `0004-sprd-keypad-backspace-next-to-back` | `678d2409` | `sprd_keypad.c`: back + BackSpace |
+
+The build script recognises the committed state (`git apply --reverse --check` passes,
+so it prints "already applied") and the working tree is byte-identical before and after
+those commits.  `.scmversion` stays frozen at `-g94401422a7df`, so the release string
+-- and with it `/lib/modules/5.15.211-g94401422a7df` -- does not move when the tree
+gains commits.
+
+With both DRM patches `/dev/fb0` is there on every boot (`0 sprddrmfb`,
 320x480, 32bpp XRGB8888) -- and so is a **console on the panel**.  That second
 part needed one more fix: LK merges the boot image's command line with its own
 bootargs and *its* parameters win on duplicate keys, so the `console=tty0

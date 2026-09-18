@@ -1505,4 +1505,24 @@ the device (grim captures; the "logical" column is exactly the capture size):
 * `sm.puri.phoc scale-to-fit = true` makes phoc scale down windows that are larger than
   the output, which is what keeps apps written for >=360 px usable.
 
+**The system font size is the user's call, and the toggle is built in.**  Everything
+above is about the *output* scale; the *font* is
+`org.gnome.desktop.interface text-scaling-factor`, which phosh exposes as
+Settings -> Accessibility -> "Large Text" (and which renders at the chosen size, so it
+stays sharp).  That is the control to reach for -- the panel ends up at 1.25 here,
+which is 47 % larger text than the 0.85 this started with, with nothing but the
+on-screen keyboard and the lock screen caring.
+
+Trying to widen that budget by replacing the OSK did not work: Debian's
+`squeekboard` ships (its layouts are compiled into the binary) and it starts,
+registers as a gnome-session client and connects to Wayland -- and then exits with
+
+    DEBUG: Registered client at '/org/gnome/SessionManager/Client25'
+    WARNING: DBus unavailable, unclear how to continue. Is Squeekboard already running?
+
+even when nothing owns `sm.puri.OSK0` (verified with `GetNameOwner`: NameHasNoOwner),
+through D-Bus activation from a service file as well as by hand.  phosh's
+`phosh-osk-stub --allow-replacement` is what runs, and its layout is a fixed width --
+which is why the keyboard itself is the thing that suffers from a large font.
+
 

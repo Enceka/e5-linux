@@ -1,20 +1,28 @@
 [Unit]
 Description=E5 mobile data (AT commands + sipa_eth0 bearer)
-After=e5-vendor.service network-pre.target
+After=e5-vendor.service network-pre.target graphical.target
 Wants=e5-vendor.service
-Before=network.target
 ConditionPathExists=/dev/stty_nr1
-# the modem can still be booting when this runs, so retry instead of failing
-StartLimitIntervalSec=0
+# Deliberately *after* the graphical session.  This unit used to sit in
+# "start running" for its whole TimeoutStartSec and then be restarted again
+# (Restart=on-failure with StartLimitIntervalSec=0), while network.target,
+# multi-user.target and sddm all waited on it -- so a modem that would not answer
+# turned into a device that booted to a black screen with no session at all.
+# Bringing the bearer up is allowed to take minutes or to fail; the boot is not
+# allowed to wait for it.
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/e5/mobile-data up
 ExecStop=/opt/e5/mobile-data down
-TimeoutStartSec=300
+# Bounded so a wedged AT channel cannot hold anything else up.  Reconnection is
+# e5-mobile-data-watch.service's job, and it does not block the boot.
+TimeoutStartSec=120
 Restart=on-failure
-RestartSec=20
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target

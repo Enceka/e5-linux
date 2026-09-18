@@ -1,11 +1,12 @@
 [Unit]
-# Wi-Fi hotspot (hostapd + networkd DHCP on wlan0, NATed via sipa_eth0).
-# Needs the upstream-signed regulatory.db in the initramfs and iw reg set CN; see
-# docs/FINDINGS.md section 20.  The DT's wcnmodem partition is faked with a loop device
-# by the start script, so gate on the firmware file it needs, not on that node.
+# Wi-Fi hotspot (hostapd + dnsmasq on wlan0; clients are NATed out through the baseband by
+# e5-mobile-data).  Needs the upstream-signed regulatory.db in the initramfs and
+# `iw reg set CN`; docs/FINDINGS.md sections 20-20.3.  Ordering deliberately avoids
+# network.target: e5-mobile-data is Before=network.target, and asking for both went
+# through the target in a cycle ("Transaction order is cyclic").
 Description=E5 Wi-Fi hotspot (hostapd on wlan0)
-After=network.target e5-mobile-data.service
-Wants=e5-mobile-data.service
+After=e5-vendor.service
+Wants=e5-vendor.service
 ConditionPathExists=/lib/firmware/wcnmodem.bin
 
 [Service]

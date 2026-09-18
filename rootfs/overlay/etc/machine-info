@@ -1,0 +1,12 @@
+# Identity strings for this device, read by systemd (hostnamectl, and the About
+# panel of the session's settings).
+#
+# PRETTY_HOSTNAME rather than /etc/hostname: a static hostname cannot contain a
+# space, so "Rongyue E5" lives here and the login prompt keeps using the static
+# name (e5-linux).
+#
+# HARDWARE_VENDOR/HARDWARE_MODEL are deliberately not set.  They fill the
+# "Hardware Model" row, and the part name belongs in the "Processor" row -- which
+# nothing in userspace can write: it is built from /proc/cpuinfo, so it is fixed
+# in the kernel instead (kernel/patches/0009, docs/FINDINGS.md section 22).
+PRETTY_HOSTNAME=Rongyue E5

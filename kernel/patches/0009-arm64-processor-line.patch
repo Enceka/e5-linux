@@ -1,0 +1,38 @@
+diff --git a/arch/arm64/kernel/cpuinfo.c b/arch/arm64/kernel/cpuinfo.c
+index 330b92ea8..9c44dbda1 100644
+--- a/arch/arm64/kernel/cpuinfo.c
++++ b/arch/arm64/kernel/cpuinfo.c
+@@ -17,6 +17,7 @@
+ #include <linux/elf.h>
+ #include <linux/init.h>
+ #include <linux/kernel.h>
++#include <linux/of.h>
+ #include <linux/personality.h>
+ #include <linux/preempt.h>
+ #include <linux/printk.h>
+@@ -155,6 +156,25 @@ static int c_show(struct seq_file *m, void *v)
+ 		if (compat)
+ 			seq_printf(m, "model name\t: ARMv8 Processor rev %d (%s)\n",
+ 				   MIDR_REVISION(midr), COMPAT_ELF_PLATFORM);
++		else if (i == 0) {
++			/*
++			 * A 32-bit process has always found a "model name" line
++			 * here; a 64-bit one finds nothing, and userspace has
++			 * been reading it all along: libgtop -- which is what
++			 * gnome-control-center's About panel asks for the string
++			 * it shows as "Processor" -- parses /proc/cpuinfo and
++			 * looks for "model name", "cpu", "Processor" or
++			 * "Model Name", so on an arm64 device that row comes out
++			 * empty.  Report the name this part is sold under.
++			 *
++			 * Only in the first block, and not per CPU: libgtop groups
++			 * equal values and renders a group as "<name> x <count>",
++			 * which is the right thing for a core name and a strange
++			 * one for the name of the whole SoC.
++			 */
++			if (of_machine_is_compatible("sprd,ums9621"))
++				seq_puts(m, "Processor\t: Unisoc T158\n");
++		}
+ 
+ 		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
+ 			   loops_per_jiffy / (500000UL/HZ),

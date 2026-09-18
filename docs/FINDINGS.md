@@ -1178,38 +1178,44 @@ the DT.
 
 ### What runs now
 
-`e5-powerkey.service` (`/opt/e5/powerkey.py`, 60 lines of Python) reads
-`/dev/input/event0` and gives the key phone semantics without suspend:
+`e5-powerkey.service` (`/opt/e5/powerkey.py`) reads `/dev/input/event0` and gives the
+key phone semantics without suspend:
 
-* short `KEY_POWER` -> panel off (`bl_power=1`) + `loginctl lock-sessions`;
-* any other key, or a touch on event1 -> panel on (`bl_power=0`).
+* **short press** -- if the panel is dark (ours *or* the compositor's), turn it back
+  on; otherwise `loginctl lock-sessions` + panel off (`bl_power=1`);
+* **long press (1.5 s)** -- `gnome-session-quit --power-off`: the "Power Off" dialog
+  with its countdown and Cancel, i.e. the menu a phone shows for a held power key.
+  Verified on the device -- `Power Off / The system will power off automatically in 56
+  seconds / [Cancel] [Power Off]`;
+* any other key, or a touch on event1, wakes the panel; the long-press action fires
+  *while the key is still down* (the short action is taken on release);
 
-alongside two settings: a logind drop-in `HandlePowerKey=lock` (for sessions that do
-implement logind locking) and `sleep-inactive-ac-type=nothing` so gsd stops trying to
-suspend every idle period.  The panel is `sprd_backlight`, whose `bl_power` and
-`brightness` were already opened to the session in `boot/init`.
+alongside the logind drop-in `HandlePowerKey=lock` and `HandlePowerKeyLongPress=ignore`
+-- logind's default there is poweroff, and the script's deliberate 1.5 s hold is the
+only thing that should reach that action.  The panel is `sprd_backlight`, whose
+`bl_power` and `brightness` were already opened to the session in `boot/init`.
 
-### Pending verification (blocked by the USB link)
+Two details that matter:
 
-The first `e5-powerkey.service` (system unit, root, panel toggle only) was deployed and
-ran; the improved one -- `User=e5` with `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` so it
-can call phosh's `org.gnome.ScreenSaver.Lock`, plus a journal line per press -- was written
-and pushed, but the deploy command did not complete: the USB gadget keeps re-enumerating
-(`--- lost /dev/cu.usbmodemE5LINUX3 ---` in the console log, telnet refused for minutes at
-a time), which also explains the flaky command channel throughout this section.
+* `idle-delay` is forced to 0 when the service starts.  phoc blanks on idle and owns
+  DPMS: once it has blanked, writing `bl_power` cannot bring the panel back (the CRTC
+  is off *and* `bl_power` still reads 0), so the script would conclude "panel is on"
+  and turn it *off* on the next press.  With idle blanking off, the backlight is the
+  only control and the toggle is coherent;
+* `screen_is_off()` checks both `bl_power` and the connector's
+  `/sys/class/drm/card0-DSI-1/dpms`, so a compositor-initiated blank still counts as
+  "off".
 
-To finish it once the link is steady (or from the serial console):
+### Verification
 
-    cd / && tar -xf /tmp/pwr3.tar            # or re-push work/e5-pwr2.tar
-    systemctl daemon-reload && systemctl restart e5-powerkey.service
-    journalctl -u e5-powerkey -f             # press the key: expect 'lock ... rc=0'
-    sudo -u e5 env XDG_RUNTIME_DIR=/run/user/1000 \
-        DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
-        gdbus call --session --dest org.gnome.ScreenSaver \
-        --object-path /org/gnome/ScreenSaver --method org.gnome.ScreenSaver.Lock
+The earlier "pending verification" -- the service could not be deployed over a
+re-enumerating USB link -- is obsolete: the journal now shows the short press
+(`gsettings idle-delay 0 -> rc=0`, `panel off`, then `panel on` on the next touch),
+the long press opens the dialog, and every step is logged so a press can be checked
+without looking at the panel:
 
-Pressing the power key should then show phosh's lock screen, and a touch should bring the
-panel back; the journal line makes it verifiable without guessing at the display.
+    journalctl -u e5-powerkey -f     # then press: 'long press: power menu', or
+                                     # 'loginctl lock-sessions -> rc=0' + 'panel off'
 
 ## 19. Phosh needs GNOME apps -- purging KDE took the only settings app with it
 

@@ -111,3 +111,15 @@ sprd_pmic_wdt.ko
 # docs/FINDINGS.md section 12.
 sprd_keypad.ko
 matrix-keymap.ko
+
+# --- Bluetooth ----------------------------------------------------------------
+# sprdbt_tty is the Bluetooth half of the same WCN combo chip the WLAN modules
+# drive: HCI over the sprdwcn bus into the marlin core that wcn_bsp boots.  It is
+# built (CONFIG_UNISOC_WCN_BT=m, "SPRDBT_TTY") and, like the WLAN half, it is
+# second-stage on Android, so it was never in the stock first-stage list and
+# nothing loaded it -- there was no hci0 and bluez had no adapter to talk to.
+#
+# It depends on wcn_bsp having taken the chip out of reset, which is the firmware
+# story in docs/FINDINGS.md section 8: the WCN modules cannot do anything until
+# /lib/firmware carries the firmware, and they now load with it in place.
+sprdbt_tty.ko

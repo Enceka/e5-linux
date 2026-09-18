@@ -1,6 +1,10 @@
-# The Mali userspace (ARM's GBM implementation) allocates its window/scanout
-# buffers from a dma-buf heap, and the kernel creates /dev/dma_heap/* with mode
-# 0600 root:root.  The session user cannot open them, so gbm_create_device()
-# fails, wlroots logs "Failed to create GBM device" and quietly falls back to the
-# CPU renderer (pixman).  /dev/mali0 is 0666 for the same reason.
+# The kernel creates /dev/dma_heap/* with mode 0600 root:root.  This rule was
+# added for ARM's GBM: it allocated the session's window/scanout buffers from a
+# dma-buf heap, so without it gbm_create_device() failed, wlroots logged "Failed
+# to create GBM device" and quietly fell back to the CPU renderer (pixman).
+#
+# That path is retired -- the GPU runs panfrost, which allocates through GEM and
+# does not need a heap (docs/FINDINGS.md section 20.7).  The rule stays because
+# opening the heaps is not specific to Mali and costs nothing here, but nothing
+# in this image depends on it any more.
 SUBSYSTEM=="dma_heap", MODE="0666"

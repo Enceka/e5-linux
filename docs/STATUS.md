@@ -7,38 +7,29 @@ work list.
 
 ## Now (目前要做)
 
-- **GPU: the compositor is on the Mali GPU; the apps are not (2026-09-18).**
-  phoc comes up with wlroots' GLES2 renderer on `Mali-G57`
-  (`docs/FINDINGS.md` section 20), but every *client* is still llvmpipe -- `About`
-  and `fastfetch` are right.  Measured: the working blob is GBM-only
-  (`EGL_KHR_platform_gbm`, no Wayland platform, zero `wl_display` references), so a
-  Wayland client cannot even create an EGL display on it (section 20.6); and Mesa
-  cannot drive kbase, so deleting the software-forcing `/etc/environment`
-  variables would not have helped either -- panfrost needed the backport in
-  section 20.7 first.  Getting apps on the GPU needs a **Wayland-WSI** Mali
-  userspace the kernel accepts: the published r44p0 wayland blob is exactly that
-  and kbase r41p0 refuses it, i.e. port kbase to r44p0, or run the Android blob
-  through libhybris / a bionic chroot.  Remaining polish for what works today:
-  * the blob that works is Allwinner's r32p0 **GBM** build, a vendor artifact that
-    is *not* in this repository: `/opt/mali/libMali-r32p0-sunxi.so`, installed by
-    `rootfs/overlay/opt/e5/gpu-mali-setup` (it also wraps `/usr/bin/phoc` and
-    depends on the `/dev/dma_heap/*` udev rule).  A fresh rootfs needs that script
-    run once; the next flash bakes in the udev rule.
-  * `phoc.ini` still scales the output to 0.75 because the CPU could not afford
-    1.0.  That reason is gone -- try 0.85 and 1.0 again and compare.
-  * watch GPU DVFS, thermals and buffer churn under a real load (the panel is the
-    only load so far; the vendor DRM driver's `DUMB_CREATE_TIMES_LIMIT` is a
-    one-shot failure at the 11th dumb buffer).
-- **Panfrost for the G57: backported, not yet on hardware (2026-09-18).**
-  `docs/FINDINGS.md` section 20.7.  Valhall (G57) support and the Unisoc power
-  sequencing are in the kernel tree (exported as
-  `kernel/patches/0005-panfrost-valhall-g57.patch`), and `CONFIG_MALI_MIDGARD=m`
-  in `kernel/e5-linux.fragment` is what hands the `sprd,mali-natt` node to
-  panfrost.  Until it is tested the session renders on the CPU, because nothing
-  loads kbase any more -- `modprobe mali_kbase` (or putting MALI_MIDGARD back to
-  `=y`) is the way back to the Allwinner blob.  First check on the device:
-  `mali-g57 id 0x9001` in dmesg, then a job on the render node.  PanVK is not
-  part of this: Mesa has no v9 backend for it, so this is GLES only.
+- **GPU: panfrost drives the G57 -- compositor *and* clients (2026-09-18).**
+  `docs/FINDINGS.md` section 20.7.  phoc renders with wlroots' GLES2 renderer on
+  `Mali-G57 (Panfrost)` and a client now gets the same renderer through the
+  Wayland platform, where it used to be llvmpipe -- which is the thing the blob
+  hunt in 20.1-20.6 could never reach.  The blob path is retired with it: no
+  `/opt/mali` blob, no `/usr/bin/phoc` wrapper, `/etc/environment` no longer
+  forces software rendering, and `rootfs/overlay/opt/e5/gpu-mali-setup` is gone.
+  kbase is a module that nothing loads (`CONFIG_MALI_MIDGARD=m` in
+  `kernel/e5-linux.fragment`); `modprobe mali_kbase` (or putting it back to `=y`)
+  is the way back to the blob.  Open, in the order I would pick them up:
+  * `phoc.ini` still scales the output to 0.75, a number chosen when the CPU had
+    to draw every pixel.  That reason is gone -- try 0.85 and 1.0 again.
+  * the scanout buffers are still the vendor KMS driver's dumb buffers, because
+    wlroots allocates the swapchain on the *display* device (section 20.7); that
+    is why `DUMB_CREATE_TIMES_LIMIT` had to be raised from 10 to 64.  If the GPU
+    ever looks slow, the fix is to allocate on panfrost instead -- and
+    `WLR_DRM_DEVICES` is not it, because libseat refuses the list on this
+    device (20.7 records the log).
+  * the frequency is pinned at DVFS index 3 (384 MHz): devfreq is skipped on this
+    board (20.7), so watch thermals and GPU throughput under a real load before
+    deciding whether that needs a hand.
+  * PanVK stays out of reach -- Mesa has no Valhall v9 backend for it -- so this
+    is GLES 3.1 and there is no Vulkan on this GPU either way.
 - **Wi-Fi throughput.**  Association, DHCP and a 100 MB transfer work; the data path
   does not: 12.4 Mbit/s over 5 GHz against 199 Mbit/s for the same file over the USB
   LAN -- ~3 % of the 433 Mbit/s the link negotiates.  Profile the SDIO transport /
@@ -103,10 +94,10 @@ work list.
 | | |
 |---|---|
 | board | Rongyue E5 (`ums9158_1h10`, UMS9621/qogirn6lite), 1450 MB RAM |
-| kernel | rebuilt `Image` (sha256 `7356c756...`): fbdev + ION + `kernel/patches/0001-0003`; slot-b trial boot |
+| kernel | rebuilt `Image` (sha256 `97082a76...`): fbdev + ION + `kernel/patches/0001-0006`; slot-b trial boot |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/` |
-| session | Phosh 0.46.0, `phoc` on the **Mali-G57** via the Allwinner r32p0 GBM UMD; kernel log on the panel |
-| gpu | kbase r41p0 + ARM fbdev UMD (handshake) and the r32p0 GBM UMD (compositor); r44p0 blobs are refused |
+| session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57** -- and clients on the same renderer through the Wayland platform |
+| gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s (modem asserted once, see above) |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
 | disk | 4.4 GiB used, 1.2 GiB free |

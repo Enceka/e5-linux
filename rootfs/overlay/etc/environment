@@ -1,9 +1,9 @@
-# Software rendering: the UMS9621 GPU has no mainline Mesa driver.
-LIBGL_ALWAYS_SOFTWARE=1
-MESA_LOADER_DRIVER_OVERRIDE=kms_swrast
-GALLIUM_DRIVER=llvmpipe
+# The Mali-G57 runs panfrost (docs/FINDINGS.md section 20.7), so the compositor
+# and its clients are both on the GPU.  Nothing here may force software
+# rendering any more: LIBGL_ALWAYS_SOFTWARE / MESA_LOADER_DRIVER_OVERRIDE=
+# kms_swrast / GALLIUM_DRIVER=llvmpipe were only there because UMS9621 had no
+# Mesa driver at all, and WLR_RENDERER=pixman was the same story for the
+# compositor (KWin and Plasma ignore that one).
+#
 # The E5's panel is 480x320; do not let Qt pick a scale factor that does not fit.
 QT_AUTO_SCREEN_SCALE_FACTOR=0
-# Phosh's compositor is wlroots: with pixman it never touches GL, which is the whole
-# point on a board whose GPU has no driver.  (KWin and Plasma ignore this.)
-WLR_RENDERER=pixman

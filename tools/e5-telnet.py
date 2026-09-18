@@ -116,4 +116,6 @@ def run(cmds, wait=60.0):
 
 
 if __name__ == '__main__':
-    sys.exit(run(sys.argv[1:] or ['echo hello']))
+    # Association and DHCP take tens of seconds, so allow a longer per-command wait.
+    wait = float(os.environ.get('E5_TELNET_WAIT', '60'))
+    sys.exit(run(sys.argv[1:] or ['echo hello'], wait=wait))

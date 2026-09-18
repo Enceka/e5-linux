@@ -178,6 +178,54 @@ bottom.
   should reach `AP-ENABLED` (SSID `E5-Linux`, psk `12345678`, DHCP from
   `etc/systemd/network/20-e5-wlan0.network` = 192.168.78.1/24, NAT out via the existing
   `sipa_eth0` masquerade).
+
+### 2026-09-18, late night (the 80 MHz hotspot round, and the modem going out of service)
+
+* **Channel 149 at 80 MHz is done and verified end to end.**  The "40/80 hangs in
+  HT_SCAN" conclusion was wrong: with `country CN: DFS-FCC` (the regdb reflash of
+  section 20) the driver advertises `5725-5850 @ 80 MHz` and hostapd sets the AP up
+  itself (`Set freq 5745 ... bandwidth=80 MHz, cf1=5775`), beacon VHT Operation
+  `width=1, seg0=155`; 4/4 start orders reached `AP-ENABLED`.  A phone connected to
+  `E5-Linux` and **reported 80 MHz** (*user-verified*).  `etc/hostapd/e5.conf` is the
+  80 MHz profile and `hotspot-start.sh` no longer pre-sets the channel; it now fails
+  loudly (and retries once) when hostapd does not come up.  See FINDINGS 20.4/20.5.
+* **The overlay-restore trap bit us, and the fix is the flashed image.**  Pushing
+  `etc/hostapd/e5.conf`, `opt/e5/hotspot-start.sh` or `opt/e5/mobile-data` is undone by
+  the next boot (the initramfs overlay is copied over them; files that are *not* in the
+  baked overlay, like the new `atd.py`, survive).  That is why the hotspot came up
+  trying **2.4 GHz channel 6** after a reboot and why the watcher lost its fix.  The
+  image has now been rebuilt (`boot/build-boot-image.py`, busybox recovered from the
+  device's own `/usr/local/bin/busybox`) and written into a boot slot; the tree is the
+  single source of truth again.
+* **Both slots held Linux images -- Android's boot image was gone.**  `boot_a` sha was
+  byte-identical to the previous Linux image and `boot_b` to an older one, so every BCB
+  "switch to Android" landed in Linux (LK logged `ANDROID: Booting slot_a`).  Fixed:
+  `boot_b` now carries the new Linux image and `boot_a` the Android image the user
+  supplied (`/Volumes/Projects/e5/spd_dump-macos/b.img`, sha256 `3ff27449...`), so
+  Android is the fallback again and a switch back to Linux is one `dd` of `boot_b`
+  over `boot_a` (or arming slot b, tries=2).
+* **The modem went out of service at 23:07, on both systems.**  The URC log caught the
+  network throwing us off -- `+CGEV: NW PDN DEACT 1`, `+CGEV: NW DETACH`,
+  `+SPERROR: 14,27,"46001"` -- and after that neither Linux (`+CGATT: 0`,
+  `AT+CGATT=1 -> +CME ERROR: 0`, `AT+CGACT=1,1 -> +CME ERROR: 28`, `+COPS: 46001` but
+  no PS attach) nor **Android** can register: `mDataRegState=1(OUT_OF_SERVICE)`,
+  `mIsEmergencyOnly=true`, while `mCellInfo` still shows a healthy LTE band 1 cell
+  (rsrp -90, mRegistered=YES).  So the RF and the cell are fine and the network is
+  refusing service -- most likely the SIM was barred after the repeated abnormal
+  detaches.  Not a Linux-side bug; test the SIM in another phone / reseat it.
+* **Shutdown was slow because of `btattach`, not just NetworkManager.**
+  `e5-bt-attach.service` sat in `final-sigterm timed out` and then reported
+  "Processes still around after final SIGKILL"; it now has `KillSignal=SIGKILL` and
+  `TimeoutStopSec=2`, and a `system.conf.d` drop-in caps `DefaultTimeoutStopSec` at
+  5 s (`DefaultTimeoutStopUSec=5s` verified after a daemon-reload).  A watchdog reboot
+  must not wait on vendor teardown.
+* **`mobile-data` fixes from this round:** `radio_on()` no longer trusts `+CFUN` (a cold
+  CP can read 1 with the stack off -- the modem sat at `+CEREG: 2,0` until SFUN=2/4 were
+  sent), `wait_registered` accepts this modem's `+CEREG` stat 8 and is bounded,
+  `watch()` keeps separate interface and PDP-context counters (the one reset by the other
+  hid the 23:07 deactivation for half an hour), and `sim-reset` drops `SFUN=5/3`, which
+  leaves this modem's SIM undetected until a reboot.
+
 * **wlan0 is currently NetworkManager-unmanaged**
   (`/etc/NetworkManager/conf.d/20-e5-wlan0-unmanaged.conf` was added so hostapd can own
   the interface) and `wpa_supplicant.service` is masked.  Remove both to go back to

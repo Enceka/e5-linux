@@ -1,0 +1,17 @@
+[Unit]
+# Belt and braces for the USB gadget: if the UDC ends up empty (a failed rebind, or
+# VID/PID written while bound), the board has no network, no serial console and no adb.
+# docs/FINDINGS.md section 21 describes the failure this guards against.
+Description=E5 USB gadget guard (rebind if the UDC is empty)
+DefaultDependencies=no
+After=sysinit.target
+Before=multi-user.target
+ConditionPathExists=/sys/kernel/config/usb_gadget/linux
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/e5/gadget-guard.sh
+
+[Install]
+WantedBy=sysinit.target

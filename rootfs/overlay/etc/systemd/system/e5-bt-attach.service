@@ -17,10 +17,12 @@ ExecStart=/usr/bin/btattach -B /dev/ttyBT0 -S 3000000
 Restart=always
 RestartSec=5
 # btattach is the process holding the HCI line discipline on the tty, and the
-# tty is what keeps MARLIN_BLUETOOTH powered.  If it ever ignores SIGTERM, do not
-# let that hold the shutdown for the default 90 s (it exits promptly today: the
-# journal shows it stopped with everything else, inside the first second).
-TimeoutStopSec=5
+# tty is what keeps MARLIN_BLUETOOTH powered.  It *does* ignore SIGTERM: the
+# shutdown on 2026-09-18 23:33 sat in "State 'final-sigterm' timed out. Killing."
+# and then reported "Processes still around after final SIGKILL", which is what
+# made the reboot feel slow.  Go straight to SIGKILL and do not wait.
+KillSignal=SIGKILL
+TimeoutStopSec=2
 
 [Install]
 WantedBy=multi-user.target

@@ -38,6 +38,8 @@ bash "$HERE/e5-chroot.sh" '
     systemctl enable NetworkManager.service >/dev/null 2>&1 || echo "warn: NM enable failed"
     systemctl enable e5-zram.service >/dev/null 2>&1 || echo "warn: zram enable failed"
     systemctl enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
+    systemctl enable e5-atd.service >/dev/null 2>&1 || echo "warn: e5-atd enable failed"
+    systemctl enable e5-cp-watchdog.service >/dev/null 2>&1 || echo "warn: cp-watchdog enable failed"
     systemctl enable serial-getty@ttyGS0.service >/dev/null 2>&1 || echo "warn: getty enable failed"
     systemctl set-default graphical.target >/dev/null 2>&1 || true
     echo "enabled:"; ls /etc/systemd/system/graphical.target.wants/ /etc/systemd/system/multi-user.target.wants/ 2>/dev/null | head -30

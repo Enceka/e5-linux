@@ -1,14 +1,14 @@
 {
   "image": "boot-linux-slotb.img",
-  "sha256": "49667b53549abdde59490cf86426da81aa02207afe947d92db1d63954806ee7e",
-  "sha256_head56m": "f6bf5b4e4b4b8887648422902d39cb458712d223ea620991c36fc83aa704ce12",
-  "kernel_sha256": "7cf0a57f3a30e263910c8938a27a79aa4bf63258382ef70b8d5394d67bd8bea6",
-  "kernel_size": 30915072,
-  "ramdisk_size": 4447447,
+  "sha256": "2ccbefafb08abb105cdfc562740b957c4f577941c5634071202f3788757760e4",
+  "sha256_head56m": "f9abcc80762a9f9bb61bbbefa0e878f390e15802e7aefa383195014d124785ab",
+  "kernel_sha256": "c1ab1905c82480374123737dd92771a664385e5332b8e32bf2064f955d67fe0e",
+  "kernel_size": 31422976,
+  "ramdisk_size": 4478565,
   "modules": 67,
   "cmdline": "console=tty0 console=ttyGS0,115200 loglevel=7 selinux=0 androidboot.selinux=permissive enforcing=0 panic=10 softlockup_panic=1 ramoops.mem_address=0xfff80000 ramoops.mem_size=0x40000 ramoops.record_size=0x8000 ramoops.console_size=0x8000 ramoops.pmsg_size=0x8000",
   "misc_slot_a_hex": "5f61000042434142010200009f001e000000000000000000000000000be17146",
   "misc_slot_b_trial_hex": "5f62000042434142010200009e002f000000000000000000000000009bf8546d",
-  "overlay_files": 47,
+  "overlay_files": 55,
   "persist_log_offset": 58720256
 }

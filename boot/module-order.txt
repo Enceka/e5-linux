@@ -42,8 +42,8 @@ unisoc_ursp.ko
 sfp_core.ko
 sprd_cache_print.ko
 sprd_vpu_pw_domain.ko
-ocp2131.ko
 sprd-gsp.ko
+ocp2131.ko
 sprd-drm.ko
 sprd_battery_info.ko
 sprd_tcpm.ko

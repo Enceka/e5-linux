@@ -1541,58 +1541,119 @@ All of it is installed by `rootfs/overlay/opt/e5/gpu-mali-setup`: the
 `/usr/bin/phoc.orig`), and the chmod that makes the current boot work before udev's
 rule is in place.
 
-### 20.7 Panfrost: what it takes to drive this GPU without a blob
+### 20.7 Panfrost on the device: what it took, and what runs now
 
-Everything above is about finding a blob that matches kbase r41p0.  The other
-route is panfrost, and the question that matters is what it costs on *this*
-kernel rather than on a mainline one.  The answer, after doing it, is: a small
-driver backport plus the platform sequencing nobody upstream had a reason to
-write.
+Sections 20.1-20.6 are the search for a blob this kernel accepts.  This is the
+other route, and it is the one that works: panfrost drives the Mali-G57, the
+compositor renders on it, and -- for the first time on this device -- so do the
+clients.  Everything below was measured on the device, image `bf347253`,
+kernel `97082a76`.
 
 **The driver was not there.**  The tree's `drivers/gpu/drm/panfrost` is upstream
-v5.15 with a couple of ACK backports and stops at Bifrost -- its model table
-ends at `GPU_MODEL(g31, 0x7003)` and there is no `hw_features_g57` at all.
-Upstream added Valhall to panfrost in 6.0, in the nine-commit "Valhall (JM)
-support" series (G57's entry is named "Natt", which is also what the vendor DT
-calls the node: `compatible = "sprd,mali-natt"`).  That series is small and
-self-contained enough to carry back; it is in the kernel tree now, along with
-the `HW_FEATURE_IDVS_GROUP_SIZE` support it depends on.  `arm,mali-valhall-jm`
-is registered as a compatible too.
+v5.15 with a couple of ACK backports and stops at Bifrost -- its model table ends
+at `GPU_MODEL(g31, 0x7003)` and there is no `hw_features_g57` -- so upstream
+6.0's job-manager Valhall series was carried back: `2e87309e0660`,
+`382435709516`, `a17775a1af59`, `0c0af438345e`, `892e7fb7c254`, `5b9afc161ea5`,
+`d8e53d8a4e0a`, `5ba99fca1de0`, `952cd9745092`.  That is the G57 model entry
+(its ARM codename is "Natt", which is also what the vendor DT calls the node),
+its feature and issue sets, three errata bits and the two register writes that go
+with them.
 
-**The platform side was neither upstream nor in this tree.**  The GPU has no
-power domain in the device tree, and the sequence that switches it on lives in
-kbase's platform code: GPLL forced on, the PMIC's GPU DCDC enabled, the forced
-shutdown released, the GPU APB clock gate opened, a DVFS index written.  What
-makes that portable is that the DT already carries every one of those registers
-as an opaque `<&syscon REG MASK>` triple -- so a driver needs the *order*, not
-the addresses.  `panfrost_sprd.c` is `mali_kbase_config_qogirn6l.c`'s
-`mali_freq_init()` plus `mali_power_on()`/`mali_clock_on()` with the DVFS and
-thermal governance dropped.
+**The platform side was nobody's.**  There is no power domain for this GPU in
+the device tree, and the sequence that switches it on lived only in kbase's
+platform code.  What makes it portable is that the DT already carries every one
+of those registers as an opaque `<&syscon REG MASK>` triple, so a driver needs
+the *order*, not the addresses: `panfrost_sprd.c` is
+`mali_kbase_config_qogirn6l.c`'s `mali_freq_init()` plus
+`mali_power_on()`/`mali_clock_on()` with the DVFS governance dropped.  First
+boot with it:
 
-Three details that each cost an hour to find and would cost it again:
+    panfrost 23140000.gpu: clock rate = 26000000
+    panfrost 23140000.gpu: Unisoc GPU powered on (DVFS index 3)
+    panfrost 23140000.gpu: mali-g57 id 0x9091 major 0x0 minor 0x1 status 0x0
+    panfrost 23140000.gpu: features: 00000000,67c00007, issues: 00000001,80000400
+    panfrost 23140000.gpu: Features: L2:0x07120206 Shader:0x00000000 Tiler:0x00000809 ...
+    panfrost 23140000.gpu: shader_present=0x5 l2_present=0x1
+    [drm] Initialized panfrost 1.2.0 20180908 for 23140000.gpu on minor 0
+
+`0x9091` is the G57 ID (`panfrost_model_cmp()` masks it to `0x9001` to match the
+model table) and `0x5` is two shader cores, non-contiguous -- the same value an
+independent G57 MC2 bring-up reports.
+
+Three details that each cost an hour:
 
 * `dcdc_gpu_pd` points at `&pmu_apb_regs`, but kbase replaces the regmap
   underneath it with the PMIC's (`sprd,ump962x-syscon`) before using it; the DT
-  comment calls the address fake.  `sprd_pmic_regmap()` does the same, and
-  falls back to the unhelpful regmap rather than dereferencing NULL.
-* the vendor DT names its three interrupts `"JOB"`, `"MMU"` and `"GPU"` -- all
-  three on the same GIC line -- and `of_irq_get_byname()` is case sensitive, so
-  a mainline driver finds no interrupts at all.  `panfrost_irq_get()` falls
-  back to a case-insensitive walk of `interrupt-names` by index.
-* the frequency is set by writing a DVFS *index* into a syscon, and the clocks
-  in the node are shared PLL parents, so `clk_set_rate()` must not be used:
+  comment calls the address fake.  `sprd_pmic_regmap()` does the same and keeps
+  the parsed register/mask pair.
+* the vendor DT names its interrupts `"JOB"`, `"MMU"` and `"GPU"` -- all three on
+  the same GIC line -- and `of_irq_get_byname()` is case sensitive, so a mainline
+  driver finds no interrupts at all.  `panfrost_irq_get()` walks
+  `interrupt-names` case-insensitively as a fallback, quietly: the first version
+  asked with `platform_get_irq_byname()` and printed three "IRQ x not found"
+  lines per boot for lookups that then succeeded.
+* the frequency is set by writing a DVFS *index* into a syscon, and the clocks in
+  the node are shared PLL parents, so `clk_set_rate()` must not be used on them:
   devfreq is skipped for this board through a new
-  `panfrost_compatible.no_devfreq` flag, otherwise `dev_pm_opp_set_rate()` would
-  reach for a PLL the whole SoC is clocked from.
+  `panfrost_compatible.no_devfreq`.
 
-**Flipping over.**  Both drivers match `sprd,mali-natt` and kbase is built in
-and probes first (the device core will not re-probe a bound device), so
-panfrost can only bind if kbase is gone: `CONFIG_MALI_MIDGARD=m` in
-`kernel/e5-linux.fragment`, with nothing in module-order asking for the module.
-That is also the way back -- `modprobe mali_kbase` returns the device to the
-vendor blob path without a reflash.  The first thing to look for is
-`mali-g57 id 0x9001` in dmesg: `panfrost_gpu_init()` reads `GPU_ID` off the
-hardware, so it only prints if the sequence above actually powered the GPU up.
+**Userspace is stock Debian.**  Nothing was installed for this -- Mesa 25.0.7
+already carries panfrost.  The session only had to stop being told not to use
+it (`/etc/environment` forced `llvmpipe`) and wlroots had to be told to look:
+
+    [render/gles2/renderer.c:538] Creating GLES2 renderer
+    [render/gles2/renderer.c:539] Using OpenGL ES 3.1 Mesa 25.0.7-2+deb13u1
+    [render/gles2/renderer.c:541] GL renderer: Mali-G57 (Panfrost)
+
+and a *client* gets hardware too, which is what the blob could never do (20.6):
+`eglinfo` on the Wayland platform now reports
+`OpenGL ES profile renderer: Mali-G57 (Panfrost)` where it used to report
+llvmpipe.  The display is being scanned out from a compositor buffer as well:
+
+    plane[31]: crtc=dispc0  fb=121  format=XR24  size=320x480
+            allocated by = phoc.orig
+            imported=no
+
+**Two traps, both found the hard way.**
+
+* `sprd_gem_dumb_create()` counts every `DRM_IOCTL_MODE_CREATE_DUMB` in a static
+  variable that is never reset, and refuses the 11th request of each boot with
+  `-EINVAL`.  wlroots allocates its primary swapchain through exactly that
+  ioctl -- the KMS state above is the proof: Mesa's kmsro renders on panfrost,
+  but the *display* device allocates the buffer (`imported=no`) -- so a second
+  session in the same boot dies with
+
+      MESA: error: Failed to create scanout resource
+      DRM_IOCTL_MODE_CREATE_DUMB failed: Invalid argument
+      [render/allocator/gbm.c:116] gbm_bo_create failed
+      [render/swapchain.c:110] Failed to allocate buffer
+      [types/output/swapchain.c:109] Swapchain for output 'DSI-1' failed test
+
+  and the panel stays black until the next reboot, because a compositor that
+  cannot build a swapchain does not modeset at all.  The cap is 64 now
+  (kernel patch 0006).
+* splitting the two devices explicitly -- which is the shape this hardware wants
+  -- does not work with libseat/logind here:
+
+      Opening fixed list of KMS devices from WLR_DRM_DEVICES: /dev/dri/card0:/dev/dri/renderD128
+      Unable to open /dev/dri/card0 as KMS device
+      [libseat] Could not take device: No such device
+      Failed to open device: '/dev/dri/renderD128': Resource temporarily unavailable
+      Found 0 GPUs, cannot create backend
+
+  wlroots opens each entry from the list as a KMS device through libseat, logind
+  refuses both, and the session never starts at all.  Worth remembering anyway:
+  panfrost registers first and takes `card0`, so **the display is `card1`** and
+  the GPU is `card0` -- the opposite of the way 20.1-20.6 refer to them, and a
+  `WLR_DRM_DEVICES` list written from those notes would name the wrong device.
+
+**What the blob path leaves behind.**  It is retired, not because it broke but
+because panfrost makes it pointless: `rootfs/overlay/opt/e5/gpu-mali-setup` is
+gone, the session no longer installs a `/usr/bin/phoc` wrapper (an overlay copy
+of it would have to carry a copy of the binary), and the dma-heap udev rule is
+kept only because opening those heaps is not specific to Mali.
+`CONFIG_MALI_MIDGARD=m` with nothing loading the module is what keeps kbase off
+the node (`modprobe mali_kbase` is the way back).
 
 **What it does not get you: PanVK.**  Mesa has no Valhall v9 backend for it, by
 design -- `src/panfrost/vulkan/meson.build` builds `jm_archs = [6, 7]` and its

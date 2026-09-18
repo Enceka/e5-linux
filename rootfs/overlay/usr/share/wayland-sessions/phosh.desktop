@@ -1,0 +1,23 @@
+[Desktop Entry]
+Name=Phosh
+Comment=Phone Shell
+Comment=This session logs you into Phosh
+# e5-linux: phoc has to be told to use wlroots' GLES2 renderer without touching
+# the binary (an overlay copy of /usr/bin/phoc would have to carry a copy of the
+# binary too, because the real one has to stay available as phoc.orig).
+# WLR_RENDERER is *set* rather than left to wlroots' default so that an
+# /etc/environment still carrying WLR_RENDERER=pixman cannot win.
+#
+# What is deliberately not done here: splitting scanout from rendering with
+# WLR_DRM_DEVICES=/dev/dri/card0:/dev/dri/renderD128.  It is the shape this
+# hardware wants -- allocate on panfrost, import into the vendor KMS driver --
+# but with libseat/logind wlroots cannot open the devices from an explicit list
+# on this device ("Unable to open /dev/dri/card0 as KMS device", "Found 0 GPUs,
+# cannot create backend" and no session at all), so wlroots stays on its default
+# path: Mesa's kmsro renders on panfrost and the *display* device allocates the
+# swapchain with its own dumb buffers.  That is why
+# drivers/unisoc_platform/sprd_disp/sprd_gem.c's ten-dumb-buffers-per-boot cap
+# had to be raised.  See docs/FINDINGS.md section 20.7.
+Exec=env WLR_RENDERER=gles2 phosh-session
+Type=Application
+DesktopNames=Phosh;GNOME;

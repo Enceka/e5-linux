@@ -66,7 +66,7 @@ channels that survive a failed boot.
 | Re-arm from inside Linux (`e5-boot-ok`) | ✅ verified, `misc` byte-compared |
 | Touch panel under Linux | ⏳ `tlsc6x_touch` registers as `event1`, not yet exercised |
 | Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
-| Bluetooth | ⏳ HCI link live on `/dev/ttyBT0` (`hci0` with the chip's own BD address); `hciconfig hci0 up` still fails with EINVAL -- docs/FINDINGS.md section 8.6 |
+| Bluetooth | ✅ **verified on the device** — `hci0` comes up on its own (`e5-bt-attach.service` holds `/dev/ttyBT0`), bluez reports `Powered: yes`, an inquiry finds devices; the BD address is the chip's default rather than the factory MAC -- docs/FINDINGS.md section 8.7 |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
 | Modem / audio | ✗ not attempted, no UCM port |
 

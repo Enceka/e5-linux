@@ -23,6 +23,27 @@ def log(msg):
     print(msg, flush=True)
 
 
+def no_blank():
+    """Stop the compositor blanking the panel behind our back.
+
+    phoc blanks on idle (org.gnome.desktop.session idle-delay, 300s by default)
+    and it owns DPMS, so once it has blanked, this script writes bl_power all it
+    likes and the screen stays black -- the CRTC is off and only the compositor
+    can turn it back on.  Worse, bl_power still reads "0" at that point, so
+    locked() reports the panel as up, the power key therefore *turns it off*, and
+    the branch that is supposed to wake it can never run.  With idle blanking off
+    the backlight is the only thing controlling the panel and the toggle is
+    coherent again.
+    """
+    for key in ('idle-delay',):
+        try:
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.session', key, '0'],
+                           capture_output=True, timeout=10)
+            log('idle blanking disabled (%s)' % key)
+        except Exception as exc:
+            log('gsettings %s -> %s' % (key, exc))
+
+
 def panel(off):
     try:
         with open(BL, 'w') as f:
@@ -63,6 +84,7 @@ for path in (KEYS, TOUCH):
 if not fds:
     sys.exit('no input devices')
 
+no_blank()
 panel(False)
 log('watching %s' % ', '.join(fds.values()))
 while True:

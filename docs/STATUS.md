@@ -208,3 +208,28 @@ bottom.
   (`/etc/NetworkManager/conf.d/20-e5-wlan0-unmanaged.conf` was added so hostapd can own
   the interface) and `wpa_supplicant.service` is masked.  Remove both to go back to
   station mode.
+
+### 2026-09-18, late (accident and recovery)
+
+* **The device was flashed with an old-kernel image by mistake.**  `boot-linux-slotb.img`
+  was rebuilt with `--kernel work/Image` -- the *original vendor* Image (sha256
+  `c1ab1905...`) -- instead of the repository's rebuilt kernel (`7cf0a57f...`, fbdev + ION +
+  `kernel/patches/0001-0009`), and the result was flashed over `boot_b`.  The rebuilt
+  image file itself is not tracked (only its `.json`), so the previous good image was
+  overwritten.  Symptoms on the device: `panfrost` never loads, `/dev/dri` has no
+  `renderD128`, so phoc cannot initialise EGL, phosh never starts, and the panel keeps
+  showing the bootloader logo -- which reads as "stuck at the logo" even though the
+  system is up (telnet answers, getty is there).
+* **Recovery in progress:** `kernel/build-linux.sh` is being run on the build host (it
+  applies the patches and freezes `.scmversion`), after which the boot image is rebuilt
+  with that Image and flashed from Linux (the write-and-read-back sha256 check on
+  `boot_b` works, see the "flash from Linux" recipe).
+* **Two of my own changes made it worse and are reverted:** `/etc/sddm.conf` was
+  rewritten as an `[Autologin]`-only file and `rootfs/overlay/etc/systemd/system/
+  sddm.service.d/10-e5-env.conf` was added, forcing `WLR_RENDERER=pixman` +
+  `WLR_RENDERER_ALLOW_SOFTWARE=1` -- which is precisely what `/etc/environment`'s comment
+  in the repository says must **not** happen any more (the Mali-G57 runs panfrost, section
+  20.7).  The drop-in is deleted; `/etc/environment` is back to the repository's version.
+* Still useful from this stretch: `regulatory.db` (upstream-signed) in the initramfs, the
+  hostapd/dnsmasq hotspot on `192.168.9.0/24`, the USB gadget guard, and the adb gadget
+  script/unit (sections 20-21).

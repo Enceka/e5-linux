@@ -13,8 +13,6 @@ if [ -n "$cur" ]; then
     exit 0
 fi
 echo "gadget unbound -- rebinding to $UDC"
-mkdir -p "$G/functions/ffs.adb" 2>/dev/null
-[ -e "$G/configs/c.1/ffs.adb" ] || ln -sfn "$G/functions/ffs.adb" "$G/configs/c.1/ffs.adb" 2>/dev/null
 mkdir -p /dev/usb-ffs/adb
 mountpoint -q /dev/usb-ffs/adb || mount -t functionfs adb /dev/usb-ffs/adb 2>/dev/null
 echo "$UDC" > "$G/UDC" 2>/dev/null

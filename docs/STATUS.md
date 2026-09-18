@@ -33,11 +33,21 @@ work list.
     deciding whether that needs a hand.
   * PanVK stays out of reach -- Mesa has no Valhall v9 backend for it -- so this
     is GLES 3.1 and there is no Vulkan on this GPU either way.
-- **Wi-Fi throughput.**  Association, DHCP and a 100 MB transfer work; the data path
-  does not: 12.4 Mbit/s over 5 GHz against 199 Mbit/s for the same file over the USB
-  LAN -- ~3 % of the 433 Mbit/s the link negotiates.  Profile the SDIO transport /
-  the fullmac RX path.  Also `wlan0` comes up on a random MAC while
-  `/mnt/vendor/wifimac.txt` is readable.
+- **Wi-Fi and Bluetooth: the chip boots, and the driver dumps the card 20 s later
+  (2026-09-18).**  `docs/FINDINGS.md` section 8.5.  The firmware now has to live in
+  the initramfs's *early* overlay (`rootfs/overlay/lib/firmware/`, which
+  `rootfs/pull-wcn-firmware.sh` fills) or the GNSS half of the chip boot fails with
+  `-ENOENT` and takes the whole WCN core down with it; with that in place `phy0` +
+  `wlan0` appear, `/dev/ttyBT0` exists and `btattach` even creates `hci0`.  What
+  blocks both radios is the driver's own `loopcheck` ping: 20 s in it decides the
+  card is dead (`carddump flag set[1]`) and every `start_marlin()` after that is
+  refused, so Wi-Fi scans return `-EIO` (`CP2 assert`) and Bluetooth's power-on
+  returns `-1`.  Next: find out why `loopcheck` trips (`get_loopcheck_status() >= 2`
+  in `wcn_integrate_boot.c`, after a first round that succeeds) or stop it from
+  condemning a card that answers.  Then the old item comes back: association and
+  DHCP worked in an earlier session at 12.4 Mbit/s over 5 GHz against 199 Mbit/s
+  over the USB LAN (~3 % of the 433 Mbit/s the link negotiates), and `wlan0` came up
+  on a random MAC while `/mnt/vendor/wifimac.txt` was readable.
 - **Baseband stability.**  On the last session the modem stopped answering AT
   (`AT+CSQ` empty, `sipa_eth0` up with no address) and dmesg showed
   `sipa_delegate ... Modem assert ... MN_AL Task PS CP assert ... The queue was

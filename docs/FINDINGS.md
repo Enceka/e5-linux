@@ -582,6 +582,104 @@ module pass.
     ip link                               # wlan0 should appear
     cat /sys/class/net/wlan0/address      # factory MAC, or random if unset
 
+### 8.5 The chip boots now -- and the driver kills it 20 s later
+
+Everything above was measured before the kernel could boot the chip's *GNSS* half,
+which is fatal and silent: the WCN core downloads BT/Wi-Fi firmware first, then
+GNSS, and only then comes up.
+
+**The trap: the GNSS half has no filesystem wait.**  `gnss_download_firmware()`
+calls `request_firmware("gnssmodem.bin")` **once** and treats `-ENOENT` as a
+fallback trigger:
+
+```c
+	if (marlin_dev->is_gnss_in_sysfs) {
+		err = gnss_download_from_partition();
+		return err;
+	}
+	err = request_firmware(&firmware, "gnssmodem.bin", NULL);
+	if (err < 0) {
+		pr_err("%s no find gnssmodem.bin err:%d(ignore)\n", __func__, err);
+		marlin_dev->is_gnss_in_sysfs = true;      /* sticky, for the whole boot */
+		err = gnss_download_from_partition();
+```
+
+`gnss_download_from_partition()` reads the DT's `sprd,gnss-file-name`
+(`/vendor/firmware/gnssmodem.bin`), which does not exist in this rootfs, so it
+returns NULL -- and the `is_gnss_in_sysfs` flag stays set, so every later retry
+skips the firmware loader entirely.  Measured (modules loading from the
+initramfs, where `/lib/firmware` does not exist yet):
+
+    [15.621] gnss_download_firmware start from /system/etc/firmware/
+    [15.629] (NULL device *): Direct firmware load for gnssmodem.bin failed with error -2
+    [15.655] gnss_download_from_partition gnss buff is NULL
+    [25.823] GNSS download timeout
+    [38.4  ] marlin chip en pull down ... sprd-wlan: failed to power on WCN!
+    [38.4  ] probe of sprd-marlin3:wlan returned 19 after 12534326 usecs
+
+The BT/Wi-Fi half does not have this problem because
+`marlin_download_from_partition()`/`btwifi_download_firmware()` waits up to 80 s
+for a filesystem ("keep waiting for file system ready"), which is why Wi-Fi used
+to come up in some sessions and GNSS never did.  The fix is the one
+`rootfs/pull-wcn-firmware.sh` was written for: the firmware has to be in the
+initramfs's *early* overlay, not just in the root filesystem, so that
+`/lib/firmware` exists before the module pass (`boot/init` materialises
+`e5-overlay/lib/` first).  With `wcnmodem.bin`, `gnssmodem.bin` and
+`wifi_board_config*.ini` in `rootfs/overlay/lib/firmware/`:
+
+    [1.766] E5-LINUX: stage=overlay-early files=45 firmware=6
+    [13.907] gnss_download_firmware successfully through request_firmware!
+    [16.516] marlin btwifi_download_firmware successfully!
+    [17.214] sprd-wlan: sprd_wlan_probe sprd,sc2355-sdio-wifi 2.
+    [17.343] sprd-wlan: sprd_iface_set_power Power on WCN (0 time)
+
+and `phy0` + `wlan0` + `p2p-dev-wlan0` appear, with both rfkill switches
+unblocked.  Bluetooth gets further too: `sprdbt_tty.ko` (in
+`boot/module-order.extra`, it was never in the stock first-stage list either)
+brings up `/dev/ttyBT0` plus a bt rfkill, and `btattach -B /dev/ttyBT0 -S
+3000000` does create `hci0` (`Bus: UART`) -- bluez is installed and
+`bluetooth.service` is already running.
+
+**The blocker: the driver's own hang detector dumps the card.**  20 seconds
+after the chip comes up, `loopcheck` (an `AT+loopcheck` ping the driver runs to
+detect a stuck WCN core) decides the chip is dead and sets the SDIO card's dump
+flag, after which **every** power-on is refused:
+
+    [28.574] WCN BASE: start_loopcheck
+    [30.6]   rx:loopcheck_ack:ap_send=30591,cp2_bootup=28055,cp2_send=30613   <- chip answers
+    [34.758] WCN SDIO: carddump flag set[1]
+    [38.507] WCN BASEstop_marlin SDIO card dump
+    [38.627] WCN BASEstart_marlin [MARLIN_WIFI] ... start_marlin SDIO card dump
+    [62.661] WCN BASEstart_marlin [MARLIN_BLUETOOTH] ... start_marlin SDIO card dump
+
+`start_marlin()` (wcn_boot.c) refuses when `get_loopcheck_status() >= 2`, so the
+symptoms downstream are exactly what was reported -- Wi-Fi present but every
+scan `-EIO` with `sc2355_send_cmd_recv_rsp CP2 assert` (`hif->cp_asserted` is set
+by the reset notifier the dump triggers), and Bluetooth's `mtty_open power on
+state ret = -1!` / `sprdwcn_bus_push_list failed: -19`:
+
+    $ sudo iw dev wlan0 scan
+    command failed: Input/output error (-5)
+    $ sudo hciconfig -a
+    hci0: Type: Primary  Bus: UART   BD Address: 00:00:00:00:00:00   DOWN INIT RUNNING
+
+That is the state to pick up from: the chip is alive and both transports exist,
+so what is left is either to work out why `loopcheck` trips (its first round
+succeeds, the later ones apparently do not -- `loopcheck.o` in `wcn_bsp`, and
+`get_loopcheck_status()` at `boot/wcn_integrate_boot.c:3596`) or to stop it from
+condemning a working card (`sdiohal_main.c:762`,
+`sdiohal_set_carddump_status()`).
+
+Two smaller facts worth keeping: the vendor's board-level WCN set for this exact
+board (UM9621_1h10) is in `connconfig/marlin3_lite/ums9621_1h10/` -- and it
+contains `bt_configure_pskey*.ini`, `bt_configure_rf*.ini` and
+`fm_board_config*.ini`, which the *device* does not carry (the earlier pull only
+took `wifi_board_config*.ini` and the two MACs; nothing in the kernel reads the
+`bt_configure_*` files, so they are for a userspace BT HAL rather than for
+`btattach`).  And `wcn_wifi_driver.conf`, whose absence fills a line in dmesg,
+is optional tuning: `sprd_parse_wifi_driver_config()` returns silently when the
+file is missing.
+
 
 ## 9. The five-minute reset: the PMIC watchdog, not a panic
 

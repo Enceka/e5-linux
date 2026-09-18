@@ -64,3 +64,4 @@ sprd_wlan_combo.ko
 sprd_pmic_wdt.ko
 matrix-keymap.ko
 sprd_keypad.ko
+sprdbt_tty.ko

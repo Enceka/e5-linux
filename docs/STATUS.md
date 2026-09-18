@@ -33,6 +33,33 @@ work list.
     deciding whether that needs a hand.
   * PanVK stays out of reach -- Mesa has no Valhall v9 backend for it -- so this
     is GLES 3.1 and there is no Vulkan on this GPU either way.
+- **Bluetooth: the attach race and the dead scans (open, 2026-09-18).**
+  `docs/FINDINGS.md` sections 8.7 and 22.  What works: the controller
+  initialises, `hci0` comes up with the chip's own BD address, bluez reports
+  `Powered: yes`, and scans really did find devices on several boots (7 LE
+  devices at 14:22, 4 BR/EDR devices at 15:47).  Two things are open:
+  1. **One attach can fail and never recover.**  On the 15:36 boot the first HCI
+     Reset went out while the chip's BT channel was still coming up
+     (`mtty_sdio_write sprdwcn_bus_push_list failed: -ENODEV`); btattach then held
+     the tty with `hci0` reading `00:00:00:00:00:00` and zero events, and
+     `Restart=always` cannot help because the process never exits.  A wrapper that
+     starts btattach, waits for a real BD address, and deliberately exits non-zero
+     when none appears fixes that (closing and reopening the tty is also what asks
+     the chip to power BT up a second time) -- a draft of it sits in the working
+     tree, uncommitted, because of the next item.
+  2. **After repeated BT power cycles the chip stops answering new HCI commands.**
+     `command 0x2041/0x2042 tx timeout` (the LE scan parameters and scan enable),
+     `hcitool inq` -> `Connection timed out`, `Discovering: no`: a scan finds
+     nothing while the adapter still reads `UP RUNNING`, and the init sequence
+     right after an attach *is* answered.  Wi-Fi on the same chip keeps working at
+     the same time, so the SDIO path is fine and this is specific to the BT
+     channel.  Whether it is (a) the vendor BT configuration Android's HAL writes
+     (`bt_configure_pskey*.ini`, `bt_configure_rf*.ini` -- this image carries
+     neither) or (b) a state the chip is left in by repeated power cycles is not
+     settled: the first thing to do is repeat the clean-boot test (fresh boot, one
+     attach, scan immediately, then scan again after ten minutes idle) and let that
+     decide between the wrapper, a real power-cycle sequence, and chasing the
+     vendor config into the chip.
 - **Wi-Fi and Bluetooth both work (2026-09-18).**  `docs/FINDINGS.md` sections
   8.5-8.7.  Three things had to be true.  The WCN firmware has to be in the
   initramfs's *early* overlay, or the GNSS half of the chip boot fails with

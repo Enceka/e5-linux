@@ -225,6 +225,24 @@ bottom.
   `watch()` keeps separate interface and PDP-context counters (the one reset by the other
   hid the 23:07 deactivation for half an hour), and `sim-reset` drops `SFUN=5/3`, which
   leaves this modem's SIM undetected until a reboot.
+* **The reconnect storm barred the user's IoT SIM -- the guard is in now.**
+  Evidence: the network detached us at 23:07:12; after that
+  `e5-mobile-data.service` (`Restart=on-failure`, `RestartSec=30`) and
+  `e5-mobile-data-watch.service` (`Restart=always`, `RestartSec=15`) restarted the
+  bring-up over and over -- every attempt sending `AT+SFUN=2`/`AT+SFUN=4`, polling
+  `+CEREG` and trying `+CGACT`/`+CGCONTRDP` -- amplified by `sim-reset` (SFUN=5/3)
+  and by manual `AT+CGATT=1`/`AT+CGACT=1,1`/`CFUN` pokes.  The card (ICCID
+  **<iccid>**, China Unicom, an IoT/M2M SIM) stopped being accepted:
+  Android now shows the same emergency-only state with a healthy LTE band 1 cell
+  (rsrp -90) and `Uni-DNC-0: not allowed - PS is rejected`.  Fixes: `up()` records
+  failures in `/run/e5-mobile-data-fails` and refuses to try again after **5 in
+  30 min**; the watcher runs `up` in a subshell and backs off 60 s -> 30 min on
+  failure (a failing `up` used to `exit`, which took the watcher down and let
+  systemd restart it every 15 s); `e5-mobile-data.service` no longer has
+  `Restart=on-failure`; the watch unit's `RestartSec` is 60; `sim-reset` no longer
+  sends SFUN=5/3 (it left the SIM undetected until a reboot).  Lifting the bar is up
+  to the operator.
+
 
 * **wlan0 is currently NetworkManager-unmanaged**
   (`/etc/NetworkManager/conf.d/20-e5-wlan0-unmanaged.conf` was added so hostapd can own

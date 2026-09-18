@@ -38,6 +38,36 @@ KCFLAGS="-Wno-frame-larger-than -Wno-deprecated-declarations -Wno-constant-conve
 DECONF=arch/arm64/configs/e5_rongyue_defconfig
 [ -f "$DECONF" ] || { echo "defconfig not found: $DECONF"; exit 1; }
 
+# --- local patches ----------------------------------------------------------
+# A few things cannot be expressed as a config symbol.  The one that matters is
+# that the vendor KMS driver never calls drm_fbdev_generic_setup(), so
+# CONFIG_DRM_FBDEV_EMULATION=y on its own still gives no /dev/fb0 -- and
+# /dev/fb0 is what the fbdev Mali UMD talks to.  kernel/patches/ is applied
+# here, idempotently, so a fresh clone reproduces the build.
+#
+# scripts/setlocalversion appends -dirty to the release string of a patched
+# tree, which would move /lib/modules/$(uname -r) out from under the rootfs.
+# Freeze the scm part while the tree is still clean (this is what Android's
+# build does too); the file is untracked and reused on later runs.
+if [ ! -e .scmversion ]; then
+    ./scripts/setlocalversion --save-scmversion
+    echo "frozen scmversion: $(cat .scmversion)"
+fi
+if [ -d "$HERE/patches" ]; then
+    for p in "$HERE"/patches/*.patch; do
+        [ -e "$p" ] || continue
+        if git apply --check "$p" 2>/dev/null; then
+            echo "== applying $(basename "$p") =="
+            git apply "$p"
+        elif git apply --reverse --check "$p" 2>/dev/null; then
+            echo "== $(basename "$p") already applied =="
+        else
+            echo "patch neither applies nor is applied: $p" >&2
+            exit 1
+        fi
+    done
+fi
+
 # $O must exist before the first copy: "cp x $O/.config" fails silently when it
 # does not, and olddefconfig then quietly falls back to Kconfig defaults (this
 # is how MALI_PLATFORM_NAME ended up as "devicetree" instead of "qogirn6l").
@@ -52,7 +82,7 @@ make O="$O" olddefconfig
 
 # Fail loudly if a symbol the initramfs depends on did not survive.
 missing=""
-for sym in DEVTMPFS DEVTMPFS_MOUNT CONFIGFS_FS USB_F_ACM USB_F_ECM USB_CONFIGFS_ACM USB_CONFIGFS_ECM EXT4_FS BLK_DEV_LOOP F2FS_FS; do
+for sym in DEVTMPFS DEVTMPFS_MOUNT CONFIGFS_FS USB_F_ACM USB_F_ECM USB_CONFIGFS_ACM USB_CONFIGFS_ECM EXT4_FS BLK_DEV_LOOP F2FS_FS FB DRM_FBDEV_EMULATION FRAMEBUFFER_CONSOLE ION; do
     grep -q "^CONFIG_$sym=y" "$O/.config" || missing="$missing $sym"
 done
 [ -z "$missing" ] && echo "config check: ok" || { echo "config check FAILED:$missing"; exit 1; }

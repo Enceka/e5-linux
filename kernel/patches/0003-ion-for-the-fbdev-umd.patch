@@ -1,0 +1,22 @@
+diff --git a/drivers/staging/android/Kconfig b/drivers/staging/android/Kconfig
+index 9aca9ce10..549120c5d 100644
+--- a/drivers/staging/android/Kconfig
++++ b/drivers/staging/android/Kconfig
+@@ -25,6 +25,8 @@ config DEBUG_KINFO
+ 	   - UTS_RELEASE
+ 	   - BUILD_INFO(ro.build.fingerprint)
+ 
++source "drivers/staging/android/ion/Kconfig"
++
+ endif # if ANDROID
+ 
+ endmenu
+diff --git a/drivers/staging/android/Makefile b/drivers/staging/android/Makefile
+index b92c5fe69..ac9714f8d 100644
+--- a/drivers/staging/android/Makefile
++++ b/drivers/staging/android/Makefile
+@@ -3,3 +3,4 @@ ccflags-y += -I$(src)			# needed for trace events
+ 
+ obj-$(CONFIG_ASHMEM)			+= ashmem.o
+ obj-$(CONFIG_DEBUG_KINFO)	+= debug_kinfo.o
++obj-$(CONFIG_ION)			+= ion/

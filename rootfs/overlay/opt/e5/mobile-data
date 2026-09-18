@@ -84,8 +84,17 @@ up() {
     ip addr flush dev "$IFACE"
     ip addr add "$ip4/$prefix" dev "$IFACE"
     ip route replace default dev "$IFACE" metric 100
-    printf 'nameserver %s\n' "$dns1" > /etc/resolv.conf
-    [ -n "$dns2" ] && printf 'nameserver %s\n' "$dns2" >> /etc/resolv.conf
+    # The carrier's resolvers only exist behind this bearer, so they must not be
+    # the only entries: when the PDP context drops, or when traffic is going out
+    # over Wi-Fi instead, they become unreachable and *every* lookup fails even
+    # though the routing table is perfectly fine.  Public resolvers answer over
+    # both paths and go first; the carrier's stay as a secondary.
+    {
+        printf 'nameserver 223.5.5.5\n'
+        printf 'nameserver 119.29.29.29\n'
+        [ -n "$dns1" ] && printf 'nameserver %s\n' "$dns1"
+        [ -n "$dns2" ] && printf 'nameserver %s\n' "$dns2"
+    } > /etc/resolv.conf
     # share the bearer with the USB LAN clients: this image has nftables (no
     # iptables) and sipa_eth0 is a raw-IP link, so clamp the MSS as well
     sysctl -qw net.ipv4.ip_forward=1
@@ -166,7 +175,14 @@ watch() {
     while :; do
         sleep 30
         [ -e /run/e5-mobile-data-down ] && continue
+        # Registration is not enough.  When the PDP context deactivates the
+        # interface keeps its address and the default route keeps blackholing
+        # traffic, so "registered but no bearer" looks perfectly healthy here and
+        # nothing ever reconnects -- the only symptom is that the internet stops.
+        # Ask about the context itself.
         if ! at 'AT+CEREG?' 2>/dev/null | grep -qE '\+CEREG: [0-9],(1|5)'; then
+            fails=$((fails + 1))
+        elif ! at 'AT+CGACT?' 2>/dev/null | grep -qE "\+CGACT: *$CID,1"; then
             fails=$((fails + 1))
         elif ! ip -br addr show "$IFACE" 2>/dev/null | grep -q 'UP'; then
             fails=$((fails + 1))
@@ -175,6 +191,14 @@ watch() {
         fi
         if [ $fails -ge 2 ]; then
             echo "watcher: bearer lost, reconnecting"
+            # Drop the dead route before retrying, and do it inline rather than
+            # via down(): down() also touches /run/e5-mobile-data-down, which is
+            # what makes the watcher skip its checks, so calling it here would
+            # disable the watcher for good.  With the route gone, a failed
+            # reconnect leaves Wi-Fi as the working default instead of a
+            # blackhole.
+            ip route del default dev "$IFACE" 2>/dev/null || true
+            ip addr flush dev "$IFACE" 2>/dev/null || true
             up || true
             fails=0
         fi

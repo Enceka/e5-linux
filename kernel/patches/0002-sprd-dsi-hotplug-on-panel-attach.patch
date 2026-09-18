@@ -1,0 +1,70 @@
+diff --git a/drivers/unisoc_platform/sprd_disp/sprd_dsi.c b/drivers/unisoc_platform/sprd_disp/sprd_dsi.c
+index 96ef0209a..4172820db 100644
+--- a/drivers/unisoc_platform/sprd_disp/sprd_dsi.c
++++ b/drivers/unisoc_platform/sprd_disp/sprd_dsi.c
+@@ -494,6 +494,24 @@ static int sprd_dsi_umb9230s_attach(struct sprd_dsi *dsi)
+ 	return 0;
+ }
+ 
++/*
++ * e5-linux: the MIPI panel is a child device that probes *after*
++ * drm_dev_register(), so when drm_fbdev_generic_setup() ran the DSI connector
++ * still reported "disconnected" and no /dev/fb0 was ever created.  Once
++ * dsi->panel exists the DRM clients have to be told to look again -- and that
++ * has to happen from a workqueue (and a little later), because the hotplug ends
++ * in a modeset that walks the very panel/DSI paths the probe that got us here
++ * is still holding.
++ */
++static void sprd_dsi_fbdev_hotplug_work(struct work_struct *work)
++{
++	struct sprd_dsi *dsi = container_of(to_delayed_work(work),
++					    struct sprd_dsi, fbdev_hotplug_work);
++
++	if (dsi->connector.dev)
++		drm_kms_helper_hotplug_event(dsi->connector.dev);
++}
++
+ static int sprd_dsi_host_attach(struct mipi_dsi_host *host,
+ 			   struct mipi_dsi_device *slave)
+ {
+@@ -577,6 +595,9 @@ static int sprd_dsi_host_attach(struct mipi_dsi_host *host,
+ 		ctx_slave->esc_clk = ctx->esc_clk;
+ 	}
+ 
++	/* the panel is attached now: let the DRM clients re-probe (see above) */
++	schedule_delayed_work(&dsi->fbdev_hotplug_work, msecs_to_jiffies(1000));
++
+ 	return 0;
+ }
+ 
+@@ -888,6 +909,8 @@ static int sprd_dsi_bind(struct device *dev, struct device *master, void *data)
+ 	struct sprd_dsi *dsi = dev_get_drvdata(dev);
+ 	int ret;
+ 
++	INIT_DELAYED_WORK(&dsi->fbdev_hotplug_work, sprd_dsi_fbdev_hotplug_work);
++
+ 	ret = sprd_dsi_encoder_init(drm, dsi);
+ 	if (ret)
+ 		goto cleanup_host;
+diff --git a/drivers/unisoc_platform/sprd_disp/sprd_dsi.h b/drivers/unisoc_platform/sprd_disp/sprd_dsi.h
+index 0047bc663..f70ef44d9 100644
+--- a/drivers/unisoc_platform/sprd_disp/sprd_dsi.h
++++ b/drivers/unisoc_platform/sprd_disp/sprd_dsi.h
+@@ -8,6 +8,7 @@
+ 
+ #include <linux/of.h>
+ #include <linux/device.h>
++#include <linux/workqueue.h>
+ #include <video/videomode.h>
+ 
+ #include <drm/drm_bridge.h>
+@@ -246,6 +247,9 @@ struct sprd_dsi {
+ 	u32 dual_dsi_en;
+ 
+ 	struct umb9230s_device *umb9230s;
++
++	/* e5-linux: deferred DRM client re-probe, see sprd_dsi_host_attach() */
++	struct delayed_work fbdev_hotplug_work;
+ };
+ 
+ #ifdef CONFIG_DRM_SPRD_DSI

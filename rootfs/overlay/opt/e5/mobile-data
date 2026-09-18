@@ -67,17 +67,23 @@ at() {
 }
 
 radio_on() {
-    at 'AT+CFUN?' | grep -q '+CFUN: 1' && return 0
-    at 'AT+SFUN=2' 10 >/dev/null
-    at 'AT+SFUN=4' 40 >/dev/null
+    # Do *not* trust +CFUN here: after a cold CP boot it can already read 1 while
+    # the protocol stack is still off (measured 2026-09-18 after a reboot, the
+    # modem sat at +CEREG: 2,0 / +CSQ: 0,99 until SFUN=2/SFUN=4 were sent).  This
+    # is the pair Android's RIL uses: SFUN=2 = SIM on, SFUN=4 = protocol stack on.
+    at 'AT+SFUN=2' 20 >/dev/null
+    at 'AT+SFUN=4' 60 >/dev/null
 }
 
 wait_registered() {
     local n
-    # the first registration after a cold modem boot can take a minute or two
-    for n in $(seq 1 60); do
-        at 'AT+CEREG?' | grep -qE '\+CEREG: [0-9],(1|5)' && return 0
-        [ $((n % 5)) -eq 0 ] && radio_on
+    # the first registration after a cold modem boot can take a minute or two.
+    # "8" is this modem's own value for a camped PS (measured after the network
+    # detached us: +CEREG: 8,"DE0400","007E7493",11); whether the bearer can
+    # actually be built is decided by AT+CGACT below, not by this value.
+    for n in $(seq 1 30); do
+        at 'AT+CEREG?' | grep -qE '\+CEREG: [0-9],(1|5|8)' && return 0
+        [ "$n" = 15 ] && radio_on
         sleep 2
     done
     return 1
@@ -185,7 +191,13 @@ status() {
 
 sim_reset() {
     stty -F "$DEV" raw -echo 2>/dev/null || true
-    at 'AT+SFUN=5' 20; at 'AT+SFUN=3' 10; sleep 2; at 'AT+SFUN=2' 10; at 'AT+SFUN=4' 40
+    # SFUN=5/SFUN=3 (the sequence inherited from the MU300 port) is *not* safe on
+    # this NR modem: measured 2026-09-18, after it the SIM is no longer detected
+    # (AT+CPIN? -> +CME ERROR: 10, AT+SFUN=2 -> +CME ERROR: 3, AT+CFUN=1 ->
+    # +CME ERROR: 3) and only a reboot brings the modem back.  The watchdog must
+    # never call this.  SFUN=2 (SIM on) and SFUN=4 (protocol stack on) are what a
+    # working bring-up uses.
+    at 'AT+SFUN=2' 20; at 'AT+SFUN=4' 60
     local n
     for n in $(seq 1 30); do at 'AT+CPIN?' | grep -q READY && break; sleep 2; done
     at 'AT+CPIN?'
@@ -194,7 +206,7 @@ sim_reset() {
 # The modem firmware resets itself now and then; it comes back with the radio off
 # and no PDP context, so check the bearer and rebuild it when it is gone.
 watch() {
-    local fails=0 n=0
+    local ifails=0 dfails=0 n=0
     # a boot where the modem was not ready yet leaves the bearer down and the
     # oneshot unit failed; repair it here rather than waiting for the first check
     [ -e /run/e5-mobile-data-down ] || up || true
@@ -202,28 +214,29 @@ watch() {
         sleep 30
         [ -e /run/e5-mobile-data-down ] && continue
         n=$((n + 1))
-        # Registration is not enough.  When the PDP context deactivates the
-        # interface keeps its address and the default route keeps blackholing
-        # traffic, so "registered but no bearer" looks perfectly healthy here and
-        # nothing ever reconnects -- the only symptom is that the internet stops.
-        # Ask about the context itself.  Asking the modem is the expensive part,
-        # though (every command is CP work), so with atd holding the channel the
-        # context is only queried once every five minutes; the interface check
-        # stays at 30 s and catches the common case.
-        if ! ip -br addr show "$IFACE" 2>/dev/null | grep -q 'UP'; then
-            fails=$((fails + 1))
-        elif [ $((n % 10)) -eq 0 ]; then
-            if at 'AT+CEREG?' 2>/dev/null | grep -qE '\+CEREG: [0-9],(1|5)' &&
-               at 'AT+CGACT?' 2>/dev/null | grep -qE "\+CGACT: *$CID,1"; then
-                fails=0
-            else
-                fails=$((fails + 1))
-            fi
+        # Registration is not enough.  When the network deactivates the PDP context
+        # (measured 23:07:12: +CGEV: NW PDN DEACT 1 + +CGEV: NW DETACH, then
+        # AT+CGACT? -> +CGACT:1,0) the interface keeps its address and the default
+        # route keeps blackholing traffic, so "interface up" looks perfectly
+        # healthy and nothing reconnects -- the only symptom is that the internet
+        # stops.  The two checks therefore need *separate* counters: one reset by
+        # the other hid exactly this case for half an hour.
+        if ip -br addr show "$IFACE" 2>/dev/null | grep -q 'UP'; then
+            ifails=0
         else
-            fails=0
+            ifails=$((ifails + 1))
         fi
-        if [ $fails -ge 2 ]; then
-            echo "watcher: bearer lost, reconnecting"
+        # the context itself, once a minute (atd holds the channel, so this is one
+        # more command on a port that is open anyway)
+        if [ $((n % 2)) -eq 0 ]; then
+            if at 'AT+CGACT?' 2>/dev/null | grep -qE "\+CGACT: *$CID,1"; then
+                dfails=0
+            else
+                dfails=$((dfails + 1))
+            fi
+        fi
+        if [ $ifails -ge 2 ] || [ $dfails -ge 2 ]; then
+            echo "watcher: bearer lost (iface=$ifails ctx=$dfails), reconnecting"
             # Drop the dead route before retrying, and do it inline rather than
             # via down(): down() also touches /run/e5-mobile-data-down, which is
             # what makes the watcher skip its checks, so calling it here would
@@ -233,7 +246,7 @@ watch() {
             ip route del default dev "$IFACE" 2>/dev/null || true
             ip addr flush dev "$IFACE" 2>/dev/null || true
             up || true
-            fails=0
+            ifails=0; dfails=0
         fi
     done
 }

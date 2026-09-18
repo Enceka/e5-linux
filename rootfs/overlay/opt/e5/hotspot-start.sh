@@ -29,7 +29,23 @@ iw dev wlan0 set type __ap 2>/dev/null || true
 ip link set wlan0 up
 hostapd -B "$CONF"
 sleep 8
+if [ "$(pgrep -c hostapd)" = 0 ]; then
+    # The WCN firmware can refuse the first beacon right after a boot ("Failed to
+    # set beacon parameters"); re-doing the type/up dance and trying again has
+    # always worked.  Do not report success when the AP did not come up: that is
+    # how a boot with no hotspot and a green unit happened.
+    echo "hotspot: hostapd did not start, retrying" >&2
+    pkill -f hostapd 2>/dev/null || true
+    sleep 3
+    ip link set wlan0 down 2>/dev/null || true
+    iw dev wlan0 set type __ap 2>/dev/null || true
+    ip link set wlan0 up
+    hostapd -B "$CONF"
+    sleep 8
+fi
 echo "hostapd: $(pgrep -c hostapd) process(es)"
+[ "$(pgrep -c hostapd)" != 0 ] || { echo "hotspot: hostapd is not running" >&2; exit 1; }
+iw reg get | head -2
 iw dev wlan0 info | grep -E 'type|ssid' | head -2
 systemctl restart systemd-networkd
 systemctl restart dnsmasq

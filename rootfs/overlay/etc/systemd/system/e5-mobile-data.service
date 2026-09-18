@@ -1,15 +1,19 @@
 [Unit]
 Description=E5 mobile data (AT commands + sipa_eth0 bearer)
-After=e5-vendor.service e5-atd.service network-pre.target graphical.target
+After=e5-vendor.service e5-atd.service network-pre.target multi-user.target
 Wants=e5-vendor.service e5-atd.service
 ConditionPathExists=/dev/stty_nr1
-# Deliberately *after* the graphical session.  This unit used to sit in
-# "start running" for its whole TimeoutStartSec and then be restarted again
-# (Restart=on-failure with StartLimitIntervalSec=0), while network.target,
-# multi-user.target and sddm all waited on it -- so a modem that would not answer
-# turned into a device that booted to a black screen with no session at all.
-# Bringing the bearer up is allowed to take minutes or to fail; the boot is not
-# allowed to wait for it.
+# Deliberately *after* the boot targets.  This unit used to sit in "start running"
+# for its whole TimeoutStartSec and then be restarted again (Restart=on-failure
+# with StartLimitIntervalSec=0), while network.target, multi-user.target and sddm
+# all waited on it -- so a modem that would not answer turned into a device that
+# booted to a black screen with no session at all.  Bringing the bearer up is
+# allowed to take minutes or to fail; the boot is not allowed to wait for it.
+#
+# It used to be After=graphical.target, which tied the modem to the session: on
+# 2026-09-18 a boot whose session units were unhappy left the bearer unbuilt even
+# though the AT channel was fine.  multi-user.target is reached independently and
+# is still after the boot-critical path, so the same protection holds.
 
 [Service]
 Type=oneshot
@@ -25,4 +29,4 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target graphical.target

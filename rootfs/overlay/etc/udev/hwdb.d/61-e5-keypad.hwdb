@@ -1,15 +1,18 @@
-# The E5's 9-key keypad has neither Enter nor BackSpace: its confirm key (matrix
-# row 1, column 0) emits KEY_SELECT and its back key (row 0, column 0) emits
-# KEY_BACK -- neither of which anything in the session handles.  phosh's lock screen
-# submits on KP_Enter, and a locked screen with digits in it can then only be cleared
-# with the on-screen keypad, so the back key becomes BackSpace.
+# The E5's 9-key keypad has no Enter: its confirm key -- matrix row 1, column 0,
+# i.e. scancode 8 (MATRIX_SCAN_CODE(row, col, 3) with 4 rows x 7 columns) -- emits
+# KEY_SELECT, which nothing in the session handles.  phosh's lock screen has no
+# unlock key of its own (its on-screen keypad is 3x4 with [OSK] [0] [backspace]),
+# so a PIN typed on the physical keypad could never be submitted; it becomes
+# KP_Enter here, which is what the lock screen accepts.
 #
-# The scancode is the *matrix scan code* (MATRIX_SCAN_CODE(row, col, row_shift) with
-# 4 rows x 7 columns, so row_shift 3), not the keycode the key produces: evdev's
-# EVIOCSKEYCODE indexes dev->keycode[], whose size is rows*cols = 28, and using the
-# keycode (353) as the index is what makes such a call fail with EINVAL -- the
-# mistake that once made this look like "the keypad cannot be remapped at all".
+# The scancode is the *matrix scan code* (8), not the keycode it produces (353):
+# evdev's EVIOCSKEYCODE indexes dev->keycode[], whose size is rows*cols (28), and
+# an index of 353 is out of range and fails with EINVAL -- the mistake that once
+# made this look like "the keypad cannot be remapped at all".
 # tools/keycode-query.py reads and writes exactly this map.
+#
+# The back key (scancode 0) is deliberately *not* remapped: KEY_BACK is what the
+# session uses for "back", and the lock screen has an on-screen backspace.
 #
 # /etc lives in the initramfs overlay and is rewritten on every boot;
 # systemd-hwdb-update.service (WantedBy=sysinit.target) recompiles
@@ -17,4 +20,3 @@
 # the mapping when the keypad device appears.
 evdev:input:b0000v0000p0000e0000*
  KEYBOARD_KEY_8=kpenter
- KEYBOARD_KEY_0=backspace

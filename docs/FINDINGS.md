@@ -851,6 +851,24 @@ explicit `systemd-hwdb update`.  A userspace uinput re-emitter was the working p
 before this; it is not needed, and it would have added a process and a second
 keyboard device to the session.
 
+**Why the key had to change at all** is worth looking at, because it is not obvious
+from the phone: phosh 0.46's lock screen has **no unlock key**.  Its on-screen keypad
+is 3x4 with the bottom row `[OSK toggle] [0] [backspace]`, and the lock screen itself
+opens on the clock and has to be swiped (or tapped) before the keypad appears:
+
+    lock screen (355x533 at scale 0.9)          after a swipe
+    "10:35  Friday, September 18"               "Enter Passcode" + dots + 1..9 0 [keypad] [<-]
+
+So for someone typing on the *physical* keypad there was nothing to press: the PIN
+could be typed and never submitted, which is exactly the report ("the confirm key
+cannot confirm, the back key cannot go back, there is no unlock button").  With
+`KP_ENTER` the confirm key submits, and that is confirmed working on the device.
+
+The back key (scan code 0) was briefly remapped to `BackSpace` as well and then
+reverted: `KEY_BACK` is what the session uses for "back", and deleting a digit on the
+lock screen is what its on-screen backspace key is for.  The rule therefore carries
+only `KEYBOARD_KEY_8=kpenter`.
+
 ## 13. Baseband internet: Android's modem_control in a chroot
 
 The vendor kernel already carries the whole SIPC/SIPA modem stack: the modules are

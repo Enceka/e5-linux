@@ -7,14 +7,20 @@ work list.
 
 ## Now (目前要做)
 
-- **Wi-Fi association.** The blocker is gone: the DT insists on
-  `/dev/block/by-name/wcnmodem`, a partition this device does not have, so the chip used
-  to boot and then be powered back down.  Pointing that name at a loop device over
-  `lib/firmware/wcnmodem.bin` and reloading `wcn_bsp` + `sprd_wlan_combo` makes
-  `iw dev wlan0 scan` return real APs.  Next: associate with `wpa_supplicant`, then DHCP
-  and a transfer.  **The SSID/password go in a 0600 file on the device only -- never in
-  this repository and never in a log.**  Make the loop device permanent (a unit, or a
-  small file:// backed loop set up in `e5-vendor.service` style) once association works.
+- **Wi-Fi association.** `wlan0` is up and `iw dev wlan0 scan` returns real APs on
+  2.4 and 5 GHz — no loop device is involved and none is needed.  The partition theory
+  was wrong: `btwifi_download_firmware()` in `wcn_boot.c` calls
+  `request_firmware("wcnmodem.bin")` **first** and only falls back to the DT's
+  `/dev/block/by-name/wcnmodem` when that fails.  The `from /system/etc/firmware/`
+  line it logs is a misleading hardcoded string — that path does not exist on this
+  root filesystem at all.  What actually fixed it was getting `wcnmodem.bin` into
+  `/lib/firmware` early enough, which the initramfs overlay does; `no find
+  wcnmodem.bin` never appears in `dmesg`, so the fallback was never taken.
+  The scan also confirms the factory MAC is being ignored (`wlan0` comes up on a
+  random address while `/mnt/vendor/wifimac.txt` is readable) — worth chasing later.
+  Next: associate, then DHCP and a transfer.
+  **The SSID/password go in a 0600 file on the device only -- never in this repository
+  and never in a log.**
 - **Power key.** `e5-powerkey.service` toggles the panel (`bl_power`) on `KEY_POWER` and
   restores it on any touch or other key; suspend is not an option (see below).  The
   logind/ScreenSaver lock call was removed again after the user found the screen could no

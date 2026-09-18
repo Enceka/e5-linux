@@ -18,9 +18,20 @@ work list.
   wcnmodem.bin` never appears in `dmesg`, so the fallback was never taken.
   The scan also confirms the factory MAC is being ignored (`wlan0` comes up on a
   random address while `/mnt/vendor/wifimac.txt` is readable) — worth chasing later.
-  Next: associate, then DHCP and a transfer.
-  **The SSID/password go in a 0600 file on the device only -- never in this repository
-  and never in a log.**
+
+  **Associated, on DHCP, and transferring (2026-09-18).**  `nmcli device wifi connect`
+  against a 5 GHz AP: `Connected to ... freq: 5745.0`, signal -39 dBm, both directions
+  at `433.3 MBit/s VHT-MCS 9 80MHz`, DHCP lease `192.168.137.113/24` plus a link-local
+  address, and NetworkManager saved the profile to
+  `/etc/NetworkManager/system-connections/` (mode 0600) so it autoconnects.
+  A 100 MB fetch from the wired side of the same subnet ran end to end:
+  `http=200 bytes=104857600 time=67.7s speed=1548242 B/s` — **12.4 Mbit/s, about 3 % of
+  the negotiated rate**, so the bottleneck is not the radio.  Worth measuring properly
+  (an upload test to separate the RX and TX paths, then the SDIO transport) before
+  calling Wi-Fi done; the 5G link manages ~50 Mbit/s for comparison.
+
+  Credentials live in `/etc/e5/wifi.conf` (0600) **and** in the NetworkManager profile
+  on the device only — never in this repository and never in a log.
 - **Power key.** `e5-powerkey.service` toggles the panel (`bl_power`) on `KEY_POWER` and
   restores it on any touch or other key; suspend is not an option (see below).  The
   logind/ScreenSaver lock call was removed again after the user found the screen could no

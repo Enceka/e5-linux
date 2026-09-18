@@ -6,6 +6,10 @@ Address=192.168.78.1/24
 DHCPServer=yes
 
 [DHCPServer]
+# The E5 runs no DNS server (no dnsmasq, no systemd-resolved), so advertising our own
+# address would leave clients with a resolver that never answers -- "got an address, no
+# internet".  hotspot-start.sh writes the nameservers /etc/resolv.conf actually has into
+# a runtime drop-in instead.
+EmitDNS=no
 PoolOffset=10
 PoolSize=20
-EmitDNS=yes

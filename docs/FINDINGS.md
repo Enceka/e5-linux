@@ -1998,3 +1998,30 @@ clients get a lease from systemd-networkd's DHCPServer
 `sipa_eth0` by the rules `mobile-data up` installs.  SSID `E5-Linux`, password
 `12345678`; a 5 GHz profile is in `etc/hostapd/e5-5g.conf` for when the regulatory domain
 allows channel 36 (this one did not, `NO-IR`, until the database loaded).
+
+### 20.2 Clients got an address but no internet (two traps)
+
+1. **No resolver behind the address.**  systemd-networkd's `DHCPServer=yes` advertises its
+   own address as DNS by default, and this image runs no DNS server at all (no dnsmasq, no
+   systemd-resolved), so a client could ping IPs but resolve nothing.  The interface's
+   `.network` now sets `EmitDNS=no` and `hotspot-start.sh` writes the nameservers
+   `/etc/resolv.conf` actually has into
+   `/etc/systemd/network/20-e5-wlan0.network.d/10-dns.conf`, so the lease carries the
+   carrier's resolvers.
+2. **systemd ignores config files that are not root-owned.**  Files pushed from the host
+   keep the host uid (501) and a 0600 mode; hostapd did not care, but networkd silently
+   skipped the file -- `networkctl status wlan0` showed `Network File: n/a`, `State:
+   unmanaged` and no address, and for a while that looked like the DHCP server had broken.
+   Any config file that lands on the device by hand needs
+   `chown root:root` + a readable mode.
+
+Verified after both fixes:
+
+    Network File: /etc/systemd/network/20-e5-wlan0.network
+                  + .../20-e5-wlan0.network.d/10-dns.conf
+    State: routable (configured)   Address: 192.168.78.1
+    DNS: 223.5.5.5 119.29.29.29 58.240.57.33 221.6.4.66
+    DHCP server listening on 0.0.0.0%wlan0:67
+
+A client that already holds a lease has to reconnect (or let the lease renew) to pick up
+the new DNS option.

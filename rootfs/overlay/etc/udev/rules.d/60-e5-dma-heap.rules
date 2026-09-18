@@ -1,0 +1,6 @@
+# The Mali userspace (ARM's GBM implementation) allocates its window/scanout
+# buffers from a dma-buf heap, and the kernel creates /dev/dma_heap/* with mode
+# 0600 root:root.  The session user cannot open them, so gbm_create_device()
+# fails, wlroots logs "Failed to create GBM device" and quietly falls back to the
+# CPU renderer (pixman).  /dev/mali0 is 0666 for the same reason.
+SUBSYSTEM=="dma_heap", MODE="0666"

@@ -2045,3 +2045,25 @@ Verified: `dnsmasq --test` OK, `dnsmasq: active` (enabled), listening on
 `192.168.9.1:53`, `192.168.77.1:53` and `127.0.0.1:53`, and
 `busybox nslookup deb.debian.org 192.168.9.1` resolves -- so a client that renews its
 lease gets `192.168.9.x`, gateway `192.168.9.1` and a resolver that actually answers.
+
+## 21. ADB on the Linux side
+
+`CONFIG_USB_CONFIGFS_F_FS=y` is in the vendor kernel and Debian ships `adbd`
+(`34.0.5-12`, `/usr/lib/android-sdk/platform-tools/adbd`), so `adb shell` works from
+Linux too -- but not by starting the shipped unit:
+
+* `adbd.service` runs `/usr/lib/android-sdk/platform-tools/adbd-usb-gadget setup`, and
+  that helper **builds its own gadget** (`/sys/kernel/config/usb_gadget/g1`) and binds it
+  to the UDC.  A UDC takes one gadget, so doing that would displace the E5's NCM+ACM
+  gadget -- no USB network, no serial console.
+* `idVendor`/`idProduct` have to be set **before** the gadget is bound.  Changing them
+  while bound (which is what happened here first: Google's `0x18d1:0x4ee7` written after
+  `echo musb-hdrc.1.auto > UDC`) leaves a half-configured gadget: the ACM still
+  enumerates, the NCM interface never comes up and adb never appears.  Recovery is a
+  power cycle; the init rebuilds the gadget cleanly.
+
+`rootfs/overlay/opt/e5/adbd-gadget.sh` therefore adds `ffs.adb` to *our* gadget, mounts
+FunctionFS at `/dev/usb-ffs/adb`, sets Google's ids first, binds, and starts
+`adbd` -- as `e5-adbd.service` (`WantedBy=multi-user.target`).  The same gadget change
+belongs in `boot/init` so a freshly built image has it without the unit; that edit is
+still to be made (see STATUS).

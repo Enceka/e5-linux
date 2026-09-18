@@ -54,19 +54,32 @@ class InputEvent(ctypes.Structure):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    hold = 0.03
-    if '--hold' in sys.argv:
-        hold = float(sys.argv[sys.argv.index('--hold') + 1])
+    argv = sys.argv[1:]
+    args = []
+    name, keep, delay, hold = 'e5-key-inject', 0.0, 0.0, 0.03
+    i = 0
+    while i < len(argv):
+        if argv[i] == '--name':
+            name = argv[i + 1]; i += 2
+        elif argv[i] == '--keep':
+            keep = float(argv[i + 1]); i += 2
+        elif argv[i] == '--delay':
+            delay = float(argv[i + 1]); i += 2
+        elif argv[i] == '--hold':
+            hold = float(argv[i + 1]); i += 2
+        else:
+            args.append(argv[i]); i += 1
     codes = [KEYS[a] if a in KEYS else int(a, 0) for a in args]
     if not codes:
         sys.exit('no keys given')
+    if delay:
+        time.sleep(delay)
 
     fd = open('/dev/uinput', 'wb', buffering=0)
     fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
     for code in set(codes) | {28}:
         fcntl.ioctl(fd, UI_SET_KEYBIT, code)
-    setup = UinputSetup(InputId(0x03, 0x1234, 0x5678, 1), b'e5-key-inject', 0)
+    setup = UinputSetup(InputId(0x03, 0x1234, 0x5678, 1), name.encode(), 0)
     fcntl.ioctl(fd, UI_DEV_SETUP, setup, True)
     fcntl.ioctl(fd, UI_DEV_CREATE)
     time.sleep(1.0)
@@ -83,6 +96,12 @@ def main():
         emit(EV_SYN, SYN_REPORT, 0)
         time.sleep(hold)
     time.sleep(0.3)
+    if keep:
+        # stay alive: lets another process (e.g. /opt/e5/keypad-fix.py) read this
+        # device, which is how the keypad translation is tested end to end.
+        print('injected %d key(s), keeping %s for %.0fs' % (len(codes), name, keep),
+              flush=True)
+        time.sleep(keep)
     fcntl.ioctl(fd, UI_DEV_DESTROY)
     fd.close()
     print('injected %d key(s)' % len(codes))

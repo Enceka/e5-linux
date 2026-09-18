@@ -1,0 +1,19 @@
+[Unit]
+# Wi-Fi hotspot (hostapd + networkd DHCP on wlan0, NATed via sipa_eth0).
+# Needs the upstream-signed regulatory.db in the initramfs and iw reg set CN; see
+# docs/FINDINGS.md section 20.  The DT's wcnmodem partition is faked with a loop device
+# by the start script, so gate on the firmware file it needs, not on that node.
+Description=E5 Wi-Fi hotspot (hostapd on wlan0)
+After=network.target e5-mobile-data.service
+Wants=e5-mobile-data.service
+ConditionPathExists=/lib/firmware/wcnmodem.bin
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/e5/hotspot-start.sh
+ExecStop=/usr/bin/pkill -f hostapd
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

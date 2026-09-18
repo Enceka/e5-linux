@@ -1963,3 +1963,38 @@ For reference, the parameters this chip wants (from MU300's `hotspot-start`): 5 
 `hw_mode=a channel=36 ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40] ieee80211ac=1
 vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=42`, or 2.4 GHz `hw_mode=g channel=6
 ht_capab=[SHORT-GI-20]`, with `country_code=CN` and `ieee80211d=1`.
+
+### 20.1 What it took to get `AP-ENABLED`
+
+Four things, in the order they were discovered:
+
+1. **A signed regulatory database, upstream variant.** The kernel's own words were
+   `cfg80211: loaded regulatory.db is malformed or signature is missing/invalid`: Debian's
+   `wireless-regdb` build (`regulatory.db-debian`) is signed with Debian's key, while this
+   vendor kernel only carries the upstream `sforshee`/`wens` certificates.  The
+   `-upstream` pair works, and it has to be in the **initramfs** because cfg80211 asks for
+   it when the WCN modules load (see section 20 for why a late feed cannot work).
+2. **The country has to be set explicitly** even with the database present: cfg80211 starts
+   in the world domain (`country 00`).  With a valid database `iw reg set CN` finally takes
+   effect -- `country CN: DFS-FCC` with real rules -- and before that it silently did
+   nothing, which is why every channel read `NO-IR`.
+3. **The DT's `wcnmodem` partition** is still faked with a loop device over
+   `/lib/firmware/wcnmodem.bin`; the service gates on that file rather than on the node the
+   script creates.
+4. `wlan0` must be free: `wpa_supplicant.service` stopped and masked, and the interface
+   marked unmanaged in NetworkManager.
+
+Verified on the device:
+
+    iw reg get                     -> country CN: DFS-FCC
+    hostapd /etc/hostapd/e5.conf   -> wlan0: interface state COUNTRY_UPDATE->ENABLED
+                                      wlan0: AP-ENABLED
+    iw dev wlan0 info              -> type AP, ssid E5-Linux
+    ip -br addr show wlan0         -> 192.168.78.1/24
+    systemctl is-active e5-hotspot.service -> active
+
+clients get a lease from systemd-networkd's DHCPServer
+(`etc/systemd/network/20-e5-wlan0.network`, 192.168.78.10-29) and are NATed out through
+`sipa_eth0` by the rules `mobile-data up` installs.  SSID `E5-Linux`, password
+`12345678`; a 5 GHz profile is in `etc/hostapd/e5-5g.conf` for when the regulatory domain
+allows channel 36 (this one did not, `NO-IR`, until the database loaded).

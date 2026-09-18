@@ -23,10 +23,11 @@ ExecStop=/opt/e5/mobile-data down
 # Bounded so a wedged AT channel cannot hold anything else up.  Reconnection is
 # e5-mobile-data-watch.service's job, and it does not block the boot.
 TimeoutStartSec=120
-Restart=on-failure
-RestartSec=30
-StartLimitIntervalSec=300
-StartLimitBurst=5
+# Deliberately *not* Restart=on-failure: that turned a refusing network into an
+# attach attempt every 30 s, and an IoT SIM provider read that as abuse and
+# barred the card (2026-09-18).  The watcher retries with an exponential
+# backoff and up() has a hard cooldown.
+Restart=no
 
 [Install]
 WantedBy=multi-user.target graphical.target

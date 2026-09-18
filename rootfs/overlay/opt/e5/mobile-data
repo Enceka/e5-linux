@@ -10,6 +10,14 @@ CID=${E5_CID:-1}
 IFACE=${E5_IFACE:-sipa_eth$((CID - 1))}
 CONF=/etc/e5/mobile-data.conf
 AT_LOCK=/run/e5-at.lock
+# Anti-abuse state.  IoT SIMs are managed with rules that treat a device which
+# re-attaches every few seconds as abuse and bar the card -- measured
+# 2026-09-18, when exactly that happened to the user's card.  Failed bring-ups
+# are recorded here, up() refuses to keep hammering the modem after
+# COOLDOWN_MAX of them inside COOLDOWN_WINDOW seconds, and the watcher backs off.
+FAILS=${E5_FAILS:-/run/e5-mobile-data-fails}
+COOLDOWN_MAX=${E5_COOLDOWN_MAX:-5}
+COOLDOWN_WINDOW=${E5_COOLDOWN_WINDOW:-1800}
 # shellcheck disable=SC1090
 [ -r "$CONF" ] && . "$CONF"
 APN=${APN:-3gnet}
@@ -89,12 +97,35 @@ wait_registered() {
     return 1
 }
 
+fails_count() {
+    local now cutoff n=0 ts
+    now=$(date +%s); cutoff=$((now - COOLDOWN_WINDOW))
+    [ -f "$FAILS" ] || { echo 0; return; }
+    while read -r ts; do
+        [ -n "$ts" ] && [ "$ts" -ge "$cutoff" ] 2>/dev/null && n=$((n + 1))
+    done < "$FAILS"
+    echo $n
+}
+
+fails_add() {
+    { tail -n 20 "$FAILS" 2>/dev/null; date +%s; } > "$FAILS.tmp" && mv "$FAILS.tmp" "$FAILS"
+}
+
+fails_clear() { rm -f "$FAILS" "$FAILS.tmp"; }
+
 up() {
-    [ -c "$DEV" ] || { echo "no AT channel $DEV (is e5-vendor.service running?)" >&2; exit 3; }
+    # Leave a SIM/network that keeps rejecting us alone instead of retrying in a
+    # loop (see the note next to FAILS above): that loop is what got the user's
+    # IoT card barred on 2026-09-18.
+    if [ "$(fails_count)" -ge "$COOLDOWN_MAX" ]; then
+        echo "up: $COOLDOWN_MAX failed attach attempts in the last $((COOLDOWN_WINDOW / 60)) min; not retrying (anti-abuse cooldown)" >&2
+        return 1
+    fi
+    [ -c "$DEV" ] || { echo "no AT channel $DEV (is e5-vendor.service running?)" >&2; return 3; }
     rm -f /run/e5-mobile-data-down
     stty -F "$DEV" raw -echo 2>/dev/null || true
     radio_on
-    wait_registered || { echo "not registered on the network" >&2; exit 1; }
+    wait_registered || { echo "not registered on the network" >&2; return 1; }
     at "AT+CGDCONT?" | grep -q "CGDCONT: $CID," ||
         at "AT+CGDCONT=$CID,\"IPV4V6\",\"$APN\"" >/dev/null
     at "AT+CGACT?" | grep -q "+CGACT: $CID,1" || at "AT+CGACT=1,$CID" 30 >/dev/null
@@ -109,7 +140,7 @@ up() {
     mask=$(echo "$addrmask" | cut -d. -f5-8)
     dns1=$(echo "$rdp" | cut -d, -f6 | tr -d '"')
     dns2=$(echo "$rdp" | cut -d, -f7 | tr -d '"')
-    [ -n "$ip4" ] || { echo "no IPv4 address from AT+CGCONTRDP" >&2; exit 1; }
+    [ -n "$ip4" ] || { echo "no IPv4 address from AT+CGCONTRDP" >&2; return 1; }
     at "AT+CGDATA=\"M-ETHER\",$CID" 10 | grep -q CONNECT || true
     prefix=$(python3 -c "import ipaddress,sys;print(ipaddress.IPv4Network('0.0.0.0/'+sys.argv[1]).prefixlen)" "$mask" 2>/dev/null || echo 32)
     ip link set "$IFACE" up
@@ -206,7 +237,7 @@ sim_reset() {
 # The modem firmware resets itself now and then; it comes back with the radio off
 # and no PDP context, so check the bearer and rebuild it when it is gone.
 watch() {
-    local ifails=0 dfails=0 n=0
+    local ifails=0 dfails=0 n=0 backoff=0 next_attempt=0
     # a boot where the modem was not ready yet leaves the bearer down and the
     # oneshot unit failed; repair it here rather than waiting for the first check
     [ -e /run/e5-mobile-data-down ] || up || true
@@ -236,7 +267,12 @@ watch() {
             fi
         fi
         if [ $ifails -ge 2 ] || [ $dfails -ge 2 ]; then
-            echo "watcher: bearer lost (iface=$ifails ctx=$dfails), reconnecting"
+            now=$(date +%s)
+            if [ "$now" -lt "$next_attempt" ]; then
+                ifails=0; dfails=0
+                continue
+            fi
+            echo "watcher: bearer lost (iface=$ifails ctx=$dfails), reconnecting (backoff ${backoff}s)"
             # Drop the dead route before retrying, and do it inline rather than
             # via down(): down() also touches /run/e5-mobile-data-down, which is
             # what makes the watcher skip its checks, so calling it here would
@@ -245,14 +281,28 @@ watch() {
             # blackhole.
             ip route del default dev "$IFACE" 2>/dev/null || true
             ip addr flush dev "$IFACE" 2>/dev/null || true
-            up || true
+            # up() runs in a subshell on purpose: on failure it exits, and that
+            # must not take the watcher down -- systemd then restarted the unit
+            # every 15 s and every restart re-attached, which is what got an IoT
+            # SIM barred.  Failures back off exponentially instead.
+            if ( up ); then
+                fails_clear
+                backoff=0
+                next_attempt=0
+            else
+                fails_add
+                backoff=$(( backoff ? backoff * 2 : 60 ))
+                [ "$backoff" -gt 1800 ] && backoff=1800
+                next_attempt=$(( $(date +%s) + backoff ))
+                echo "watcher: reconnect failed; next attempt in ${backoff}s"
+            fi
             ifails=0; dfails=0
         fi
     done
 }
 
 case "${1:-}" in
-    up) up ;;
+    up) up && fails_clear || { fails_add; exit 1; } ;;
     down) down ;;
     status) status ;;
     sim-reset) sim_reset ;;

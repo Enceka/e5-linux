@@ -118,7 +118,7 @@ work list.
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s (modem asserted once, see above) |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
-| bluetooth | **works**: `hci0` comes up on its own (`e5-bt-attach.service` holds `/dev/ttyBT0` open), bluez `Powered: yes`, inquiry finds devices; BD address is the chip's default, not the factory MAC |
+| bluetooth | **up and scanning**: `hci0` comes up on its own (`e5-bt-attach.service` holds `/dev/ttyBT0` open), bluez `Powered: yes`, LE scan and BR/EDR inquiry both find devices; connecting/pairing not exercised yet (one settings-app attempt: `Page Timeout`); BD address is the chip's default |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
 | disk | 4.4 GiB used, 1.2 GiB free |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |

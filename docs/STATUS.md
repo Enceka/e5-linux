@@ -3,90 +3,114 @@
 _Last updated 2026-09-18._
 
 Reasoning, evidence and dead ends live in `docs/FINDINGS.md`.  This file is only the
-work list.
+work list.  Done work is removed from it once its result is in the table at the
+bottom.
 
 ## Now (目前要做)
 
-- **GPU: panfrost drives the G57 -- compositor *and* clients (2026-09-18).**
-  `docs/FINDINGS.md` section 20.7.  phoc renders with wlroots' GLES2 renderer on
-  `Mali-G57 (Panfrost)` and a client now gets the same renderer through the
-  Wayland platform, where it used to be llvmpipe -- which is the thing the blob
-  hunt in 20.1-20.6 could never reach.  The blob path is retired with it: no
-  `/opt/mali` blob, no `/usr/bin/phoc` wrapper, `/etc/environment` no longer
-  forces software rendering, and `rootfs/overlay/opt/e5/gpu-mali-setup` is gone.
-  kbase is a module that nothing loads (`CONFIG_MALI_MIDGARD=m` in
-  `kernel/e5-linux.fragment`); `modprobe mali_kbase` (or putting it back to `=y`)
-  is the way back to the blob.  Open, in the order I would pick them up:
-  * the output scale stays at `phoc.ini`'s 0.9.  Section 21 picked it for
-    sharpness and in-system text size, and the GPU does not argue against it --
-    the panel is what it should be, so this is settled rather than pending.  (The
-    "still scales to 0.75" this list used to carry was stale: 0.75 was the option
-    section 21 rejected as visibly soft.)
-  * the scanout buffers are still the vendor KMS driver's dumb buffers, because
-    wlroots allocates the swapchain on the *display* device (section 20.7); that
-    is why `DUMB_CREATE_TIMES_LIMIT` had to be raised from 10 to 64.  If the GPU
-    ever looks slow, the fix is to allocate on panfrost instead -- and
-    `WLR_DRM_DEVICES` is not it, because libseat refuses the list on this
-    device (20.7 records the log).
-  * the frequency is pinned at DVFS index 3 (384 MHz): devfreq is skipped on this
-    board (20.7), so watch thermals and GPU throughput under a real load before
-    deciding whether that needs a hand.
-  * PanVK stays out of reach -- Mesa has no Valhall v9 backend for it -- so this
-    is GLES 3.1 and there is no Vulkan on this GPU either way.
+- **Mobile data dies with a modem CP assert, and nothing on our side recovers it.**
+  Measured on 2026-09-18, twice, in one afternoon:
+  * a fresh boot brings the bearer up properly -- `+CPIN: READY`,
+    `+CEREG: 2,1,...,11` (NR SA), `+COPS: 0,2,"46001",11` (China Unicom),
+    `sipa_eth0` with `10.103.9.38/8` + an IPv6 address and a `metric 100` default
+    route;
+  * about 9.5 minutes later the CP stops answering: the last `sipa_dele: smsg_*`
+    heartbeat is at 574 s, the AT channel goes silent (`mobile-data status` prints
+    its header only, a bare `AT` probe on `/dev/stty_nr1` returns nothing, one
+    earlier probe returned just a `+SPERRLOG:` URC), and the bearer stops passing
+    traffic (TX errors climb, RX stays at a couple of packets, TCP to a resolver
+    times out -- note ICMP is not a usable test here);
+  * Trusty restarts the CP at 599 s (`trusty: enter SEC_KBC_START_CP` ->
+    `kbc_start_cp() enter MODEM_IMG`) and **the AT channel does not come back**;
+  * the CP's own words, from the kernel log:
+    `modem cmd Modem Assert: MN_AL Task PS CP assert in file
+    MS_System/RTOS/source/src_osa/c/threadx_os_iram.c line 1115
+    exp=ASSERT: Error 0xb, The queue was full info=[], [dfs=5]`;
+  * restarting `e5-vendor.service` is not a recovery: `modem_control` sends
+    `cmd 0x43c84e06` and 19 s later the same assert arrives again.  No userspace
+    modem reset exists (`/sys/class/misc` has no node for it, the only related
+    kernel thread is `slog-0-0`), so today only a reboot brings it back -- and
+    then it dies again ~10 minutes in.
+  Android, on the same hardware and the same SIM, is healthy: `gsm.sim.state
+  LOADED`, `gsm.operator.numeric 46001`, `gsm.network.type LTE`, baseband
+  `5G_MODEM_V2_23B_W24.16.1_P1|ums9621_modem`, and it runs
+  `modem_control` + `slogmodem` (`/system_ext/bin/`, a CP *log* service -- pulled
+  and looked at; it is not the AT server) + `urild` + `thermald`, where our chroot
+  runs only `modem_control`.
+
+  Next, and cheap: **the empty-run experiment.**  Boot Linux and do nothing -- no
+  AT, no bearer, just the kernel's smsg heartbeat -- and see whether the CP still
+  asserts at ~10 minutes.  If it does, our AT usage is not the trigger and the
+  missing `urild` (or the firmware itself) is; if it does not, our AT/polling is
+  what fills the CP's queue, and the fix is to copy what Android's RIL does
+  instead.  Then, whichever way it goes, mobile data needs a watchdog: with AT
+  gone the watcher cannot do anything, so "detect the CP is dead and reboot" is
+  the only honest recovery until the assert itself is understood.
 - **Bluetooth: the attach race and the dead scans (open, 2026-09-18).**
-  `docs/FINDINGS.md` sections 8.7 and 22.  What works: the controller
-  initialises, `hci0` comes up with the chip's own BD address, bluez reports
-  `Powered: yes`, and scans really did find devices on several boots (7 LE
-  devices at 14:22, 4 BR/EDR devices at 15:47).  Two things are open:
+  `docs/FINDINGS.md` section 8.7.  What works: the controller initialises, `hci0`
+  comes up with the chip's own BD address, bluez reports `Powered: yes`, and scans
+  really did find devices (7 LE devices at 14:22, 4 BR/EDR at 15:47).  What does
+  not:
   1. **One attach can fail and never recover.**  On the 15:36 boot the first HCI
      Reset went out while the chip's BT channel was still coming up
      (`mtty_sdio_write sprdwcn_bus_push_list failed: -ENODEV`); btattach then held
-     the tty with `hci0` reading `00:00:00:00:00:00` and zero events, and
-     `Restart=always` cannot help because the process never exits.  A wrapper that
-     starts btattach, waits for a real BD address, and deliberately exits non-zero
-     when none appears fixes that (closing and reopening the tty is also what asks
-     the chip to power BT up a second time) -- a draft of it sits in the working
-     tree, uncommitted, because of the next item.
+     the tty with `hci0` at `00:00:00:00:00:00` and zero events, and
+     `Restart=always` cannot help because the process never exits.  A self-healing
+     wrapper for that was written, found to have a fatal `exec wait` bug of its
+     own, fixed -- and then **discarded on request**; the tree carries the plain
+     `ExecStart=/usr/bin/btattach`, and the device still runs an image whose
+     wrapper is the buggy one.
   2. **After repeated BT power cycles the chip stops answering new HCI commands.**
-     `command 0x2041/0x2042 tx timeout` (the LE scan parameters and scan enable),
+     `command 0x2041/0x2042 tx timeout` (LE scan parameters and scan enable),
      `hcitool inq` -> `Connection timed out`, `Discovering: no`: a scan finds
      nothing while the adapter still reads `UP RUNNING`, and the init sequence
      right after an attach *is* answered.  Wi-Fi on the same chip keeps working at
-     the same time, so the SDIO path is fine and this is specific to the BT
-     channel.  Whether it is (a) the vendor BT configuration Android's HAL writes
-     (`bt_configure_pskey*.ini`, `bt_configure_rf*.ini` -- this image carries
-     neither) or (b) a state the chip is left in by repeated power cycles is not
-     settled: the first thing to do is repeat the clean-boot test (fresh boot, one
-     attach, scan immediately, then scan again after ten minutes idle) and let that
-     decide between the wrapper, a real power-cycle sequence, and chasing the
-     vendor config into the chip.
-- **Wi-Fi and Bluetooth both work (2026-09-18).**  `docs/FINDINGS.md` sections
-  8.5-8.7.  Three things had to be true.  The WCN firmware has to be in the
-  initramfs's *early* overlay, or the GNSS half of the chip boot fails with
-  `-ENOENT` and takes the whole WCN core down with it.  The WCN drivers have to be
-  built as the vendor's production (*user*) variant, or one missed `loopcheck`
-  answer dumps the chip's memory and condemns the SDIO card for the rest of the
-  boot.  And the kernel has to tolerate the controller refusing the default link
-  policy (`kernel/patches/0008`), or `hciconfig hci0 up` fails with `EINVAL` on a
-  controller that is otherwise fully initialized.  With all three, a freshly
-  flashed device scans 18 APs on 2.4 and 5 GHz, and brings `hci0` up on its own
-  through `e5-bt-attach.service` -- bluez reports `Powered: yes` and an inquiry
-  finds nearby devices.  Still open, none of it blocking: the BD address is the
-  chip's default rather than the factory one in `/mnt/vendor/btmac.txt` (bluez no
-  longer sets it and the kernel's ioctl is gone, so it needs a vendor command),
-  pairing has not been exercised, and association/DHCP measured 12.4 Mbit/s over
-  5 GHz against 199 Mbit/s over the USB LAN while `wlan0` still comes up on a
-  per-boot random MAC.  Then the two older items: association and DHCP measured
-  12.4 Mbit/s over 5 GHz against 199 Mbit/s over the USB LAN (~3 % of the
-  433 Mbit/s negotiated), and `wlan0` comes up on a per-boot random MAC while
-  `/mnt/vendor/wifimac.txt` is readable.
-- **Baseband stability.**  On the last session the modem stopped answering AT
-  (`AT+CSQ` empty, `sipa_eth0` up with no address) and dmesg showed
-  `sipa_delegate ... Modem assert ... MN_AL Task PS CP assert ... The queue was
-  full`; earlier boots had a working NR SA bearer at ~50 Mbit/s.  Reproduce, then
-  decide whether `mobile-data`'s retry path should reset the modem (`AT+SFUN`)
-  instead of only re-activating the context.
-
+     the same moment.
+  The vendor BT configuration Android's HAL uses is **now in the image**:
+  `bt_configure_pskey.ini` and `bt_configure_rf.ini` were pulled out of
+  `/odm/firmware` into `rootfs/overlay/lib/firmware/` (the `_aa`/`.xpe` variants
+  are still on the device; `.gitignore` keeps vendor blobs out of git).  Nothing
+  in our kernel or userspace reads them yet, so the open question is who sends
+  them to the chip -- Android's BT HAL does.  The first thing to do is still the
+  clean-boot test (fresh boot, one attach, scan immediately, then scan again after
+  ten minutes idle) to decide whether the death is our attach sequence or the
+  chip's state.
+- **Wi-Fi hotspot (in progress, 2026-09-18).**  `hostapd` 2.10 is installed on
+  the device and `rootfs/overlay/opt/e5/hotspot` (uncommitted) generates a 5 GHz,
+  channel 149, 80 MHz (VHT80, segment centre 155) AP plus a dnsmasq on
+  `192.168.78.1/24`.  Two things came out of the first test:
+  * the driver reports `#{ managed, AP } <= 1` -- the radio cannot be an AP and a
+    station at once, so starting the hotspot necessarily drops the Wi-Fi uplink
+    (clients then share the modem, or get a LAN with no way out while the modem is
+    unhappy);
+  * hostapd starts and then **stalls in `COUNTRY_UPDATE`**: 5 GHz AP operation
+    needs a country, and setting one through nl80211 does not complete.  The
+    vendor board configs carry `reg_domain1`/`reg_domain2` fields
+    (`wifi_board_config*.ini`) that are probably how Android gets its regulatory
+    settings, and Android's own `wlan0` country is not visible in props or
+    `/vendor/etc/wifi/*.conf` -- either way the country is the thing to fix next.
+- **Shutdown takes ~32 s and it is all NetworkManager (deferred).**  Everything
+  else stops inside 1.3 s (`bluetooth.service` in 0.25 s); the journal is then
+  silent from NM's `modem-manager: ModemManager no longer available` at
+  14:57:01.108 to its own `exiting (success)` at 14:57:33.001, i.e. NM's shutdown
+  path waits on device teardown that does not complete here (the WLAN is on the
+  WCN chip, whose firmware does not answer a disconnect promptly).
+  `NetworkManager.service.d/20-e5-shutdown-timeout.conf` (`TimeoutStopSec=5`) is
+  in the tree and did **not** shorten the total in the one test since -- NM's
+  stop is issued late in the sequence, so the time is spent *before* it, not
+  inside it.  Measure again with the drop-in in a booted image before believing
+  anything here.
+- **GPU: the two open ends left by panfrost.**  The backport itself is done
+  (`kernel/patches/0005`, `MALI_MIDGARD=m`, `docs/FINDINGS.md` 20.7) and clients
+  now render on `Mali-G57 (Panfrost)`; what is left is (a) the scanout buffers are
+  still the vendor KMS driver's dumb buffers, which is why
+  `DUMB_CREATE_TIMES_LIMIT` sits at 64, and (b) the frequency is pinned at DVFS
+  index 3 (384 MHz) because devfreq is skipped on this board -- watch thermals
+  under real load.  PanVK stays out of reach: Mesa has no Valhall v9 backend.
+- **Documentation debt:** `rootfs/overlay/etc/machine-info` and this file refer to
+  `docs/FINDINGS.md` section 22, which does not exist yet -- it owes the identity
+  strings (pretty hostname `Rongyue E5`, `Processor: Unisoc T158` from
+  `kernel/patches/0009`) and the 32 s shutdown measurement above.
 
 ### Traps found the hard way
 
@@ -130,22 +154,35 @@ work list.
 - **Suspend is unusable** while the modem data path refuses it
   (`sipa 25220000.sipa: thread prepare suspend err`), which is why the power key cannot
   mean "suspend".
-- **Wi-Fi hotspot** (`hostapd`) after the station test, and Wi-Fi at 5 GHz if the firmware
-  allows it.
+- **The hotspot's own uplink:** with no AP+STA concurrency the only uplink an AP can
+  share is the modem, so it needs the CP problem above solved to be more than an
+  isolated LAN.
 - **Battery, charging and thermals** under the 5G link have only been observed in passing.
 
 ## Where things stand (短状态)
 
 | | |
 |---|---|
-| board | Rongyue E5 (`ums9158_1h10`, UMS9621/qogirn6lite), 1450 MB RAM |
-| kernel | rebuilt `Image` (sha256 `97082a76...`): fbdev + ION + `kernel/patches/0001-0006`; slot-b trial boot |
+| board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
+| kernel | rebuilt `Image` (sha256 `7cf0a57f...`): fbdev + ION + `kernel/patches/0001-0009`; slot-b trial boot |
+| identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57** -- and clients on the same renderer through the Wayland platform |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
-| baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s (modem asserted once, see above) |
+| baseband | 5G NR SA (n78) works for ~10 min after a boot, then the CP asserts and only a reboot recovers it; see "Now" (Android, same SIM: LTE, healthy) |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
-| bluetooth | **up and scanning**: `hci0` comes up on its own (`e5-bt-attach.service` holds `/dev/ttyBT0` open), bluez `Powered: yes`, LE scan and BR/EDR inquiry both find devices; connecting/pairing not exercised yet (one settings-app attempt: `Page Timeout`); BD address is the chip's default |
+| hotspot | `hostapd` 2.10 on the device, `opt/e5/hotspot` (uncommitted) for 5G/ch149/VHT80; stalls in `COUNTRY_UPDATE`; no AP+STA concurrency |
+| bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
 | disk | 4.4 GiB used, 1.2 GiB free |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
+
+## Uncommitted in the working tree (2026-09-18)
+
+- `rootfs/overlay/opt/e5/mobile-data`: URC filtering in `at()` (`+CESQ/+CIND/+SIND/
+  +CIEV/+CREG/+CGREG/^CONN/+SPERRLOG` dropped, the prefixes this script itself
+  queries kept).  Written but never validated: the AT channel was dead by the time
+  a comparison was possible.
+- `rootfs/overlay/opt/e5/hotspot`: new (see "Now").
+- `rootfs/overlay/lib/firmware/bt_configure_{pskey,rf}.ini`: pulled from Android
+  (`.gitignore` keeps them out of git, like the other vendor blobs).

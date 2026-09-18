@@ -864,10 +864,16 @@ could be typed and never submitted, which is exactly the report ("the confirm ke
 cannot confirm, the back key cannot go back, there is no unlock button").  With
 `KP_ENTER` the confirm key submits, and that is confirmed working on the device.
 
-The back key (scan code 0) was briefly remapped to `BackSpace` as well and then
-reverted: `KEY_BACK` is what the session uses for "back", and deleting a digit on the
-lock screen is what its on-screen backspace key is for.  The rule therefore carries
-only `KEYBOARD_KEY_8=kpenter`.
+The back key (scan code 0) was briefly remapped to `BackSpace` with hwdb and then
+reverted, because `KEY_BACK` is what the session uses for "back" -- but a keypad-only
+phone also has no delete key, so `kernel/patches/0004` makes the *driver* report
+BackSpace next to KEY_BACK for that one key.  One key, both jobs, and nothing in
+userspace: entries ignore KEY_BACK, navigation ignores BackSpace.  The capability is
+visible in the device's key bitmap once the patched module is loaded:
+
+    /proc/bus/input/devices, sprd-keypad:  BACKSPACE(14) yes  KP_ENTER(96) yes  BACK(158) yes
+
+The hwdb rule therefore still carries only `KEYBOARD_KEY_8=kpenter`.
 
 ## 13. Baseband internet: Android's modem_control in a chroot
 
@@ -1466,78 +1472,37 @@ All of it is installed by `rootfs/overlay/opt/e5/gpu-mali-setup`: the
 `/usr/bin/phoc.orig`), and the chmod that makes the current boot work before udev's
 rule is in place.
 
-## 21. Display scaling on a 320x480 panel: crisp beats roomy
+## 21. Display scaling on a 320x480 panel: what fits, and what the resampling costs
 
-The panel is 320x480 physical at ~166 DPI, and phosh's layout assumes roughly
-360 logical pixels of width.  `phoc.ini` therefore had `[output:DSI-1] scale =
-0.75`, which buys 426x640 logical pixels -- enough for the on-screen keyboard --
-at a price that is easy to miss: a Wayland output scale below 1 is *fractional*,
-and a client that does not implement `wp_fractional_scale_v1` renders at buffer
-scale 1 anyway and lets the compositor resample.  That is what made the text look
-soft, and it is measurable from the capture size alone:
+The panel is 320x480 at ~166 DPI while phosh lays its UI out for something closer to
+360x720, so `[output:DSI-1] scale` in phoc.ini is a three-way compromise between the
+on-screen keyboard, the lock screen and text size.  All five options were measured on
+the device (grim captures; the "logical" column is exactly the capture size):
 
-    scale = 0.75  ->  grim output 426 x 640   (1x buffer, resampled down to 320x480)
-    scale = 1     ->  grim output 320 x 480   (1:1, no resampling)
+| scale | logical | resample | on-screen keyboard | lock screen | text-scaling |
+|---|---|---|---|---|---|
+| 1.0 | 320x480 | 0 % | cut on the right | unlock button off-screen | 0.85 |
+| **0.9** | **355x533** | **10 %** | fits | unlock button half off | **0.85** (set) |
+| 0.85 | 376x565 | 15 % | fits | unlock button just cut | 0.90 |
+| 0.8 | 400x600 | 20 % | fits | fits | 0.85 (text too small) |
+| 0.75 | 426x640 | 25 % | fits | fits | 1.0 (visibly soft) |
 
-This GTK (4.18.6) and this phoc do not offer the fractional-scale protocol --
-`strings libgtk-4.so.1 | grep -c fractional_scale` is 0, same for phoc -- so
-"fits but soft" and "crisp but tight" really are the only two options, and the
-current choice is crisp:
-
-* `rootfs/overlay/etc/phosh/phoc.ini`: `scale = 1`;
-* `org.gnome.desktop.interface text-scaling-factor = 0.85` for the `e5` user --
-  text is rasterised at that size, so it stays sharp, and the effective size
-  (0.85) is still larger than what the old setup produced (0.75 x 1.0);
-* `sm.puri.phoc scale-to-fit = true` -- phoc scales down windows that are larger
-  than the output, which is what makes apps written for >=360 px usable;
-* the OSK in use is `phosh-osk-stub`, whose layout is full width and fits 320 px
-  (a grim capture at scale 1 shows ten keys across the screen, nothing clipped;
-  `squeekboard` is installed too and can be activated as `sm.puri.OSK0`).
-
-If something still overflows, the next knobs are a smaller
-`text-scaling-factor` (~0.8) and a per-app fix; going back to a fractional output
-scale is the only way to fit *everything* at once, and it costs the sharpness
-above.
-
-### 20.7 The apps are still software-rendered -- measured, and it is the WSI, not a setting
-
-`About` and `fastfetch` report llvmpipe because a Wayland *client* has no GPU
-driver to use, and that is two facts stacked:
-
-* `/etc/environment` (in the overlay) still forces Mesa's software stack for every
-  client -- `LIBGL_ALWAYS_SOFTWARE=1`, `MESA_LOADER_DRIVER_OVERRIDE=kms_swrast`,
-  `GALLIUM_DRIVER=llvmpipe`.  That was necessary before there was any GPU driver
-  (and it is why `kms_swrast` was chosen: it is what a KMS/GBM compositor needs
-  when there is no hardware driver).  Removing it is not enough on its own:
-  **Mesa has no kbase driver**, so a client that ignores those variables still
-  ends up on llvmpipe.
-* The only userspace that talks to this GPU is ARM's blob, and the build that
-  works here (Allwinner r32p0, section 20.6) is **GBM-only**.  Measured as a
-  client would do it, against the running session's socket:
-
-      EGL_LIB=/opt/mali/libMali-r32p0-sunxi.so EGL_PLATFORM=wayland
-        wl_display_connect(wayland-0) -> 0x3afddd40
-        eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_KHR) -> EGL_NO_DISPLAY
-        FAIL: eglGetDisplay failed (EGL_BAD_PARAMETER)
-      (system Mesa libEGL, same command)
-        wl_display_connect(wayland-0) -> 0x2d7bf7f0
-        eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_KHR) -> 0x2da4d4f0
-        eglInitialize -> OK, EGL 1.5
-
-  Its client extension string is `EGL_EXT_client_extensions EGL_EXT_platform_base
-  EGL_KHR_client_get_all_proc_addresses EGL_KHR_platform_gbm` and the blob has
-  **zero** `wl_display`/`libwayland` references: it can drive KMS (the compositor)
-  but it cannot hand a client an EGL display, so GTK falls back to its software
-  renderer.  That is why phoc says `GL renderer: Mali-G57` while `About` says
-  llvmpipe -- both are correct, they are different processes with different EGL
-  libraries.
-
-Making the apps use the GPU needs a **Wayland-WSI** Mali userspace that this
-kernel accepts.  The published r44p0 wayland blob is exactly that
-(`EGL_KHR_platform_wayland` + GBM, measured in 20.4), but kbase r41p0 refuses it,
-so this is the same fork in the road as 20.5: port kbase to r44p0, or run the
-Android blob through libhybris/a bionic chroot (what the UMS9620 Linux community
-does -- `mu300-linux` `android-gpu-run`).
-
+* A Wayland output scale below 1 is *fractional*: the compositor renders the output at
+  `mode/scale` (grim reports 426x640 at 0.75 and 355x533 at 0.9) and the display
+  controller scales that down to 320x480.  Both GTK 4.18.6 and wlroots 0.18.2 *do*
+  implement `wp_fractional_scale_v1` (grepping the libraries directly for
+  `wp_fractional_scale[a-z_]*` hits in both; `strings` is not installed on the
+  device, which is what made an earlier check report zero), so the softness is the
+  resampling itself, not a missing protocol.
+* Physical text size is roughly `text-scaling-factor * scale`, and the keyboard
+  constraint caps that product at about 0.8 whatever the split is: the OSK's layout is
+  ~339 logical px wide at ts 0.85, so `320/scale >= 339 * ts/0.85`.
+* The lock screen needs ~575 logical px of height, i.e. `scale <= ~0.84`; above that
+  its unlock button sits half below the screen.  That no longer matters -- the keypad's
+  confirm key submits the PIN (section 12.1) and the arrow keys can move the focus to
+  the button -- so 0.9 was chosen, for the sharpest text whose keyboard still fits and
+  for the in-system text size that was found comfortable.
+* `sm.puri.phoc scale-to-fit = true` makes phoc scale down windows that are larger than
+  the output, which is what keeps apps written for >=360 px usable.
 
 

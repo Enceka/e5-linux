@@ -180,8 +180,15 @@ def main():
             if path.is_dir():
                 dirs.add(name)
             elif path.is_file():
-                files[name] = (path.read_bytes(),
-                               stat.S_IFREG | (path.stat().st_mode & 0o777))
+                # Never ship a file the session's user cannot read: the build
+                # host's umask has nothing to do with what the device needs, and
+                # a 0600 /etc/phosh/phoc.ini silently cost the e5 user its whole
+                # session (phoc is started with an explicit -C and exits when it
+                # cannot read the file).  Executables keep their bits; everything
+                # else is at least a+r.
+                mode = path.stat().st_mode & 0o777
+                mode |= 0o055 if mode & 0o100 else 0o044
+                files[name] = (path.read_bytes(), stat.S_IFREG | mode)
                 overlay_files += 1
     print('overlay: %d files from %s' % (overlay_files, a.overlay))
 

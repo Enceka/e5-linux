@@ -137,11 +137,19 @@ ar x busybox-static_*.deb && tar --zstd -xf data.tar.zst ./usr/bin/busybox
 boot/build-boot-image.py \
   --stock-boot dumps/boot_b.img --misc-head dumps/misc-head.bin \
   --kernel out_linux/arch/arm64/boot/Image --modules out_modules \
-  --busybox usr/bin/busybox --out boot-linux-slotb.img
+  --busybox work/busybox/ext/usr/bin/busybox --overlay rootfs/overlay \
+  --out boot-linux-slotb.img
 ```
 
 It writes `boot-linux-slotb.img`, a `.json` manifest and a
 `.misc-slot-b-trial.bin` slot-arming block.
+
+**`--overlay` is not optional.**  Without it the initramfs carries no
+`e5-overlay/` at all: no `wcnmodem.bin`, no systemd units, no `/etc/environment` --
+the device boots, but as a bare system with no Wi-Fi firmware and no services.
+The builder packs the overlay with `a+r` (and `a+rx` for executables) rather than
+whatever mode the checkout happens to have; a 0600 `phoc.ini` from a build host
+with a strict umask once cost the `e5` user its entire session.
 
 ### 4. Trial boot
 

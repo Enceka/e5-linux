@@ -56,16 +56,17 @@ channels that survive a failed boot.
 | Ramdisk in boot.img (LK's generic ramdisk path) | ✅ verified in the stock LK log |
 | `boot_b` trial + one-shot slot arming in `misc` | ✅ **boots** |
 | Rollback to Android when Linux never reaches userspace | ✅ verified — the device lands back on slot a |
-| Initramfs: 60 dependency-ordered modules, USB ECM + ACM console | ✅ |
-| **Linux boots on the device** | ✅ **60/60 modules load, nothing left deferred** |
+| Initramfs: 67 dependency-ordered modules, USB ECM + ACM console | ✅ |
+| **Linux boots on the device** | ✅ **67/67 modules load, nothing left deferred** |
 | USB gadget network (NCM, 192.168.77.1, DHCP via systemd-networkd) | ✅ verified live: host gets 192.168.77.x, ping 0% loss |
 | Battery charging under Linux | ✅ **verified — `battery/status = Charging`** |
-| DRM/KMS display (`/dev/dri/card0`, 480x320 DSI panel) | ✅ KWin modesets it (active plane `320x480`, `allocated by = kwin_wayland`) |
-| Debian 13 + Plasma Mobile root filesystem | ✅ 1518 packages, SDDM autologins `plasma-mobile.desktop` |
-| Plasma Mobile session (KWin DRM backend + llvmpipe) | ✅ `kwin_wayland` and `plasmashell` run; the panel is being scanned out |
+| DRM/KMS display (480x320 DSI panel, now `card1` -- panfrost takes `card0`) | ✅ phoc modesets it (active plane `320x480`, `allocated by = phoc.orig`) |
+| Debian 13 + Phosh root filesystem | ✅ SDDM autologins `phosh.desktop` |
+| Phosh session (phoc, wlroots' GLES2 renderer on the Mali-G57) | ✅ **verified** — `GL renderer: Mali-G57 (Panfrost)`, and the clients are on it too; docs/FINDINGS.md section 20.7 |
 | Re-arm from inside Linux (`e5-boot-ok`) | ✅ verified, `misc` byte-compared |
 | Touch panel under Linux | ⏳ `tlsc6x_touch` registers as `event1`, not yet exercised |
-| Wi-Fi | ⏳ **driver packaged and loading** (sprd_wlan_combo, wcn_bsp, cfg80211 all insmod on the device); the chip fails to power on because its DT firmware path is a wcnmodem partition this device lacks -- docs/FINDINGS.md section 8 |
+| Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
+| Bluetooth | ⏳ HCI link live on `/dev/ttyBT0` (`hci0` with the chip's own BD address); `hciconfig hci0 up` still fails with EINVAL -- docs/FINDINGS.md section 8.6 |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
 | Modem / audio | ✗ not attempted, no UCM port |
 

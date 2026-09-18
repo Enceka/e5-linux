@@ -33,21 +33,25 @@ work list.
     deciding whether that needs a hand.
   * PanVK stays out of reach -- Mesa has no Valhall v9 backend for it -- so this
     is GLES 3.1 and there is no Vulkan on this GPU either way.
-- **Wi-Fi and Bluetooth: the chip boots, and the driver dumps the card 20 s later
-  (2026-09-18).**  `docs/FINDINGS.md` section 8.5.  The firmware now has to live in
-  the initramfs's *early* overlay (`rootfs/overlay/lib/firmware/`, which
-  `rootfs/pull-wcn-firmware.sh` fills) or the GNSS half of the chip boot fails with
-  `-ENOENT` and takes the whole WCN core down with it; with that in place `phy0` +
-  `wlan0` appear, `/dev/ttyBT0` exists and `btattach` even creates `hci0`.  What
-  blocks both radios is the driver's own `loopcheck` ping: 20 s in it decides the
-  card is dead (`carddump flag set[1]`) and every `start_marlin()` after that is
-  refused, so Wi-Fi scans return `-EIO` (`CP2 assert`) and Bluetooth's power-on
-  returns `-1`.  Next: find out why `loopcheck` trips (`get_loopcheck_status() >= 2`
-  in `wcn_integrate_boot.c`, after a first round that succeeds) or stop it from
-  condemning a card that answers.  Then the old item comes back: association and
-  DHCP worked in an earlier session at 12.4 Mbit/s over 5 GHz against 199 Mbit/s
-  over the USB LAN (~3 % of the 433 Mbit/s the link negotiates), and `wlan0` came up
-  on a random MAC while `/mnt/vendor/wifimac.txt` was readable.
+- **Bluetooth: the HCI link is live, `hciconfig hci0 up` is not (2026-09-18).**
+  `docs/FINDINGS.md` sections 8.5 and 8.6.  Wi-Fi works: the firmware lives in the
+  initramfs's *early* overlay (or the GNSS half of the chip boot fails with
+  `-ENOENT` and takes the whole WCN core down with it), and the WCN drivers are
+  built as the vendor's production (*user*) variant (or one missed `loopcheck`
+  answer dumps the chip's memory and condemns the SDIO card for the rest of the
+  boot).  With both in place a freshly flashed device scans 18 APs on 2.4 and
+  5 GHz with no manual step.  Bluetooth gets as far as a live link -- the chip
+  answers the whole HCI init sequence, `hci0` exists with a real BD address and
+  sane ACL/SCO MTUs, `MARLIN_BLUETOOTH` powers on cleanly -- but
+  `hciconfig hci0 up` ends in `Can't init device hci0: Invalid argument`.  Next:
+  the vendor-side init Android performs from its BT HAL, i.e. the
+  `bt_configure_pskey*.ini` / `bt_configure_rf*.ini` pair (the vendor's board set
+  for this exact board is `connconfig/marlin3_lite/ums9621_1h10/`, and it is *not*
+  what `rootfs/pull-wcn-firmware.sh` copies today), or a baud-rate switch that
+  `btattach` does not do.  Then the two older items: association and DHCP measured
+  12.4 Mbit/s over 5 GHz against 199 Mbit/s over the USB LAN (~3 % of the
+  433 Mbit/s negotiated), and `wlan0` comes up on a per-boot random MAC while
+  `/mnt/vendor/wifimac.txt` is readable.
 - **Baseband stability.**  On the last session the modem stopped answering AT
   (`AT+CSQ` empty, `sipa_eth0` up with no address) and dmesg showed
   `sipa_delegate ... Modem assert ... MN_AL Task PS CP assert ... The queue was
@@ -112,6 +116,8 @@ work list.
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57** -- and clients on the same renderer through the Wayland platform |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s (modem asserted once, see above) |
+| wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
+| bluetooth | HCI link live (`hci0` with the chip's own BD address, tty `/dev/ttyBT0`); `hciconfig hci0 up` still fails with EINVAL |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
 | disk | 4.4 GiB used, 1.2 GiB free |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |

@@ -248,6 +248,18 @@ CONFIG_LEGACY_PTYS=y
 # makes panfrost able to bind at all.
 CONFIG_MALI_MIDGARD=m
 
+# --- WCN (Wi-Fi/BT) build variant ---------------------------------------------
+# The vendor's Kbuild takes the WCN assert policy (and one qogirl6 reset-pad
+# write) from Android's TARGET_BUILD_VARIANT, which a hand-run `make` never sets,
+# so the driver came up with the "userdebug" behaviour: the loopcheck ping gives
+# the chip 4 s to answer, and the first round that is missed dumps its memory and
+# marks the SDIO card dead -- after which every start_marlin() is refused and both
+# radios are dead until the next reboot.  Wi-Fi registered but every scan returned
+# -EIO, Bluetooth could not power on.  The user variant resets the chip instead
+# and carries on, which is what production Android runs; measured on the device,
+# see docs/FINDINGS.md section 8.6 and the Kconfig help.
+CONFIG_UNISOC_WCN_BSP_USER_VARIANT=y
+
 # --- build speed: no DWARF/BTF for a bring-up kernel (kallsyms still gives
 #     symbol names in oops/panic output)
 # CONFIG_DEBUG_INFO is not set

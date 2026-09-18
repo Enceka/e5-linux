@@ -114,6 +114,34 @@ work list.
     from Android (the partition is erofs inside `super`, so it cannot be mounted
     from Linux -- same constraint as the WCN firmware in section 8), stage it into
     the rootfs, and point EGL at it.  No kernel change at all.
+
+    **Update: that is not what the Android blob is.**  It is
+    `/vendor/lib64/egl/libGLES_mali.so`, 43.7 MiB, and `readelf -d` says it needs 19
+    shared objects: bionic `libc.so`/`libdl.so`/`libm.so`, `libc++.so`, `liblog`,
+    `libcutils`, `libutils`, `libbase`, `libhardware`, `libbinder_ndk`, `libhidlbase`,
+    `libnativewindow`, `libsync`, `libdmabufheap`, `libgralloctypes`, plus the
+    graphics HALs `android.hardware.graphics.allocator-V1-ndk`,
+    `android.hardware.graphics.mapper@4.0` and
+    `android.hardware.graphics.common-V3-ndk`.  `libc.so` there is **bionic**, and the
+    allocator/mapper are HIDL services that only exist under Android's
+    hwservicemanager, so it cannot simply be dropped into a Debian rootfs.
+
+    **The glibc equivalent exists though.**  CoreELEC packages ARM's Linux UMD as
+    `opengl-meson`; commit `8bfb8ebe38f615907852ada7ff375a04f53f3e81` carries
+    `lib/arm64/valhall/r41p0/fbdev/libMali.so` -- 21.9 MiB, and its `NEEDED` list is
+    nothing but ordinary glibc libraries: `libdrm.so.2`, `libpthread.so.0`,
+    `libdl.so.2`, `libstdc++.so.6`, `libm.so.6`, `libc.so.6`, `libgcc_s.so.1`.
+    **r41p0 is exactly the kbase version this kernel reports**, so the UMD/kernel
+    handshake should pass.  Staged at `work/mali/libMali.so` (gitignored, it is a
+    vendor blob).
+
+    The catch is the variant: only **fbdev** is published for arm64, never gbm or
+    wayland.  fbdev talks to `/dev/fb0`, and this kernel has no fbdev at all
+    (`CONFIG_DRM_FBDEV_EMULATION` is off), so it needs that turned on -- and even
+    then a Wayland compositor wants EGL on GBM with DRM modifiers, which the fbdev
+    build does not provide.  It is still worth loading, because proving the UMD
+    talks to kbase r41p0 is the real unknown; a GBM build for Valhall r41p0 would
+    then be the thing to hunt for.
   * **Panfrost (mainline, no blobs).**  `CONFIG_DRM_PANFROST=y` is already set and
     panfrost does support Valhall.  But it cannot bind while kbase owns
     `sprd,mali-natt`, and the node describes its power and DVFS with vendor syscons

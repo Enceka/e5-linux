@@ -33,3 +33,7 @@ rootfs/*.ext4
 # blobs, never committed; the firmware/ rule above already covers /lib/firmware)
 rootfs/overlay/mnt/vendor/wifimac.txt
 rootfs/overlay/mnt/vendor/btmac.txt
+
+# Vendor blob bundles fetched from upstream (e.g. CoreELEC opengl-meson):
+# 100 MB of GPU binaries that the repo must never carry.
+opengl-meson.tgz

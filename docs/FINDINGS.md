@@ -1461,7 +1461,8 @@ against kbase r41p0**.  The alternatives, in order of effort:
    which is a real kernel port, not a config change.
 3. libhybris around the device's own Android blob (bionic + the graphics
    allocator/mapper HIDL services) -- how Ubuntu Touch and Sailfish do it.
-4. Panfrost, which needs a DT port (section in `docs/STATUS.md`).
+4. Panfrost, which turned out to need a driver backport rather than a DT port --
+   done since, see section 20.7.
 
 ### 20.6 The compositor runs on the GPU: an *older* GBM UMD, and a 0600 dma-heap
 
@@ -1539,6 +1540,68 @@ All of it is installed by `rootfs/overlay/opt/e5/gpu-mali-setup`: the
 `/opt/mali/gbm/*` symlinks, the `/usr/bin/phoc` wrapper (the real binary stays as
 `/usr/bin/phoc.orig`), and the chmod that makes the current boot work before udev's
 rule is in place.
+
+### 20.7 Panfrost: what it takes to drive this GPU without a blob
+
+Everything above is about finding a blob that matches kbase r41p0.  The other
+route is panfrost, and the question that matters is what it costs on *this*
+kernel rather than on a mainline one.  The answer, after doing it, is: a small
+driver backport plus the platform sequencing nobody upstream had a reason to
+write.
+
+**The driver was not there.**  The tree's `drivers/gpu/drm/panfrost` is upstream
+v5.15 with a couple of ACK backports and stops at Bifrost -- its model table
+ends at `GPU_MODEL(g31, 0x7003)` and there is no `hw_features_g57` at all.
+Upstream added Valhall to panfrost in 6.0, in the nine-commit "Valhall (JM)
+support" series (G57's entry is named "Natt", which is also what the vendor DT
+calls the node: `compatible = "sprd,mali-natt"`).  That series is small and
+self-contained enough to carry back; it is in the kernel tree now, along with
+the `HW_FEATURE_IDVS_GROUP_SIZE` support it depends on.  `arm,mali-valhall-jm`
+is registered as a compatible too.
+
+**The platform side was neither upstream nor in this tree.**  The GPU has no
+power domain in the device tree, and the sequence that switches it on lives in
+kbase's platform code: GPLL forced on, the PMIC's GPU DCDC enabled, the forced
+shutdown released, the GPU APB clock gate opened, a DVFS index written.  What
+makes that portable is that the DT already carries every one of those registers
+as an opaque `<&syscon REG MASK>` triple -- so a driver needs the *order*, not
+the addresses.  `panfrost_sprd.c` is `mali_kbase_config_qogirn6l.c`'s
+`mali_freq_init()` plus `mali_power_on()`/`mali_clock_on()` with the DVFS and
+thermal governance dropped.
+
+Three details that each cost an hour to find and would cost it again:
+
+* `dcdc_gpu_pd` points at `&pmu_apb_regs`, but kbase replaces the regmap
+  underneath it with the PMIC's (`sprd,ump962x-syscon`) before using it; the DT
+  comment calls the address fake.  `sprd_pmic_regmap()` does the same, and
+  falls back to the unhelpful regmap rather than dereferencing NULL.
+* the vendor DT names its three interrupts `"JOB"`, `"MMU"` and `"GPU"` -- all
+  three on the same GIC line -- and `of_irq_get_byname()` is case sensitive, so
+  a mainline driver finds no interrupts at all.  `panfrost_irq_get()` falls
+  back to a case-insensitive walk of `interrupt-names` by index.
+* the frequency is set by writing a DVFS *index* into a syscon, and the clocks
+  in the node are shared PLL parents, so `clk_set_rate()` must not be used:
+  devfreq is skipped for this board through a new
+  `panfrost_compatible.no_devfreq` flag, otherwise `dev_pm_opp_set_rate()` would
+  reach for a PLL the whole SoC is clocked from.
+
+**Flipping over.**  Both drivers match `sprd,mali-natt` and kbase is built in
+and probes first (the device core will not re-probe a bound device), so
+panfrost can only bind if kbase is gone: `CONFIG_MALI_MIDGARD=m` in
+`kernel/e5-linux.fragment`, with nothing in module-order asking for the module.
+That is also the way back -- `modprobe mali_kbase` returns the device to the
+vendor blob path without a reflash.  The first thing to look for is
+`mali-g57 id 0x9001` in dmesg: `panfrost_gpu_init()` reads `GPU_ID` off the
+hardware, so it only prints if the sequence above actually powered the GPU up.
+
+**What it does not get you: PanVK.**  Mesa has no Valhall v9 backend for it, by
+design -- `src/panfrost/vulkan/meson.build` builds `jm_archs = [6, 7]` and its
+arch loop skips 9, because the `jm/` command-buffer code is Bifrost-only.  The
+only v9 Vulkan that exists is a reverse-engineering bring-up with compute and
+offscreen draws working and no WSI/present, i.e. no swapchain and therefore no
+compositor.  So G57 gets OpenGL/GLES 3.1 from panfrost and no Vulkan at all --
+which is enough for the actual problem (the clients stuck on llvmpipe are a
+GL/EGL problem, not a Vulkan one), but Vulkan is off the table either way.
 
 ## 21. Display scaling on a 320x480 panel: what fits, and what the resampling costs
 

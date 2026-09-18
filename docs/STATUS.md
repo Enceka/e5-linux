@@ -12,9 +12,10 @@ work list.
   (`docs/FINDINGS.md` section 20), but every *client* is still llvmpipe -- `About`
   and `fastfetch` are right.  Measured: the working blob is GBM-only
   (`EGL_KHR_platform_gbm`, no Wayland platform, zero `wl_display` references), so a
-  Wayland client cannot even create an EGL display on it (section 20.7); Mesa has
-  no kbase driver, so removing the software-forcing `/etc/environment` variables
-  would not help either.  Getting apps on the GPU needs a **Wayland-WSI** Mali
+  Wayland client cannot even create an EGL display on it (section 20.6); and Mesa
+  cannot drive kbase, so deleting the software-forcing `/etc/environment`
+  variables would not have helped either -- panfrost needed the backport in
+  section 20.7 first.  Getting apps on the GPU needs a **Wayland-WSI** Mali
   userspace the kernel accepts: the published r44p0 wayland blob is exactly that
   and kbase r41p0 refuses it, i.e. port kbase to r44p0, or run the Android blob
   through libhybris / a bionic chroot.  Remaining polish for what works today:
@@ -28,6 +29,16 @@ work list.
   * watch GPU DVFS, thermals and buffer churn under a real load (the panel is the
     only load so far; the vendor DRM driver's `DUMB_CREATE_TIMES_LIMIT` is a
     one-shot failure at the 11th dumb buffer).
+- **Panfrost for the G57: backported, not yet on hardware (2026-09-18).**
+  `docs/FINDINGS.md` section 20.7.  Valhall (G57) support and the Unisoc power
+  sequencing are in the kernel tree (exported as
+  `kernel/patches/0005-panfrost-valhall-g57.patch`), and `CONFIG_MALI_MIDGARD=m`
+  in `kernel/e5-linux.fragment` is what hands the `sprd,mali-natt` node to
+  panfrost.  Until it is tested the session renders on the CPU, because nothing
+  loads kbase any more -- `modprobe mali_kbase` (or putting MALI_MIDGARD back to
+  `=y`) is the way back to the Allwinner blob.  First check on the device:
+  `mali-g57 id 0x9001` in dmesg, then a job on the render node.  PanVK is not
+  part of this: Mesa has no v9 backend for it, so this is GLES only.
 - **Wi-Fi throughput.**  Association, DHCP and a 100 MB transfer work; the data path
   does not: 12.4 Mbit/s over 5 GHz against 199 Mbit/s for the same file over the USB
   LAN -- ~3 % of the 433 Mbit/s the link negotiates.  Profile the SDIO transport /

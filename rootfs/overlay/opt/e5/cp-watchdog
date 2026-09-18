@@ -131,6 +131,7 @@ def main(argv):
     report('cp-watchdog started (action=%s dead_after=%ss check=%ss guard=%ss)'
            % (ACTION, DEAD_AFTER, CHECK, GUARD))
     dead_since = 0.0
+    atd_stale = False
     while True:
         time.sleep(CHECK)
         try:
@@ -144,6 +145,21 @@ def main(argv):
         if now - ref <= DEAD_AFTER:
             dead_since = 0.0
             continue
+        # A stale last_ok only means a dead CP if the daemon is still writing the
+        # state file.  If it is not, atd itself is the problem (systemd restarts
+        # it) and a reboot would be a false positive.
+        try:
+            age = now - os.path.getmtime(STATE)
+        except OSError:
+            age = None
+        if age is None or age > DEAD_AFTER:
+            if not atd_stale:
+                report('atd has not updated %s for %s s; not treating that as CP '
+                       'death' % (STATE, 'unknown' if age is None else int(age)))
+            atd_stale = True
+            dead_since = 0.0
+            continue
+        atd_stale = False
         if not dead_since:
             dead_since = now
             report('AT channel has not answered for %d s:\n%s'

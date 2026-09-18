@@ -740,8 +740,14 @@ whole HCI init sequence and `hci0` comes up with a real BD address
 (`27:93:31:14:22:11`) and sane ACL/SCO MTUs, where before the policy change its
 power-on returned -1.
 
-**Still open on Bluetooth, and now located exactly.**  `hciconfig hci0 up` runs the
-kernel's whole HCI init request and fails on its *last* command:
+**What that leaves is a second, unrelated failure**, which the carddump flag had
+been hiding the whole time: 8.7.
+
+
+### 8.7 Bluetooth: one rejected HCI command was all of it
+
+With the carddump trap out of the way the controller initialized completely and
+then refused to be powered on, and btmon says why:
 
     < HCI Command: Write Default Link Policy Settings (0x02|0x000f) plen 2
             Link policy: 0x000f   (Role Switch + Hold + Sniff + Park)
@@ -749,28 +755,43 @@ kernel's whole HCI init request and fails on its *last* command:
           Status: Invalid HCI Command Parameters (0x12)
     Can't init device hci0: Invalid argument (22)
 
-`hci_setup_link_policy()` builds that value from the LMP features the controller
-itself reported (`lmp_hold_capable()` and friends), and sends the command because
-`hdev->commands[5] & 0x10` claims support -- so this firmware advertises
-hold/sniff/park and then refuses to enable them.  `hci_req_sync()` treats a
-non-zero status anywhere in the request as fatal, which is why one rejected
-command takes the whole controller down with it.  Android never meets this:
-Bluedroid does not send Write Default Link Policy Settings at all, so the vendor
-firmware was never asked for it.  The candidates, in the order I would try them:
+45 commands and their events had crossed `/dev/ttyBT0` before it.  The value comes
+from the LMP features the controller itself reported (`lmp_hold_capable()` and
+friends) and the command is only sent because `hdev->commands[5] & 0x10` claims
+support, so this firmware advertises hold/sniff/park and then refuses to enable
+them.  `hci_req_cmd_complete()` turns that status into a request error -- and the
+request is the one that brings the controller up, so a controller that answers
+`0x12` here can never be powered on, with the controller sitting there fully
+initialized.  Android never meets this: Bluedroid does not send this command at
+all, so the firmware was never asked.
 
-* make that one request tolerate a rejection for this controller -- a quirk, or
-  clamping the policy to `HCI_LP_RSWITCH`, which every BR/EDR controller has to
-  accept;
-* or keep the kernel out of it and let userspace own the setup
-  (`HCI_UART_RAW_DEVICE`, i.e. attach the tty as a raw device and run bluez's own
-  init sequence).
+`kernel/patches/0008` (`3bd2464a8`) makes that one command non-fatal: it warns
+(`Bluetooth: hci0: controller rejected the default link policy (0x12)`) and clears
+the status, which is exactly how `hci_cc_write_def_link_policy()` already treats
+a rejection.  With it, `hciconfig hci0 up` succeeds, bluez reports
+`Controller 27:93:31:14:22:11` with `Powered: yes`, and an inquiry lists nearby
+devices.
 
-Everything up to that command works: the init sequence runs to its 46th exchange
-over `/dev/ttyBT0` (btmon), `hci0` comes up with the chip's own BD address
-(`27:93:31:14:22:11`) and sane ACL/SCO MTUs, and the reset path powers
-MARLIN_BLUETOOTH up cleanly (`mtty_open power on state ret = 0`).  `sudo hciconfig
-hci0 up` on a booted device reproduces the failure.
+`rootfs/overlay/etc/systemd/system/e5-bt-attach.service` keeps it that way.  It
+has to be btattach rather than nothing at all because *opening* `/dev/ttyBT0` is
+what powers MARLIN_BLUETOOTH on (`mtty_open` -> `start_marlin`), and the tty has
+to stay open for the controller to exist.  The unit is deliberately not ordered
+against `bluetooth.service`: bluetoothd hot-plugs the adapter whenever it appears,
+and a wedged BT core must not be able to hold up the boot (section 9 is what that
+costs).  systemd wants a `*.wants/` *link* to consider a unit enabled, and neither
+`boot/build-boot-image.py` nor the overlay staging loop in `boot/init` can carry a
+symlink, so `boot/init` makes that one link while it materialises the overlay.
 
+Two things are still open on Bluetooth, and neither is a blocker:
+
+* the BD address is the chip's own default (`27:93:31:14:22:11`), not the factory
+  one in `/mnt/vendor/btmac.txt`.  Android's BT HAL writes it with a vendor
+  command; bluez 5.82 no longer has `hciconfig hci0 bdaddr` and the kernel's
+  `HCISETBDADDR` ioctl is gone as well, so setting it means a small tool driving
+  the vendor command, or accepting an address that is stable but wrong (a peer
+  that paired with the Android BT stack will not recognise this device).
+* pairing and a data transfer have not been exercised -- an inquiry only proves
+  the radio, the stack and the HCI transport work.
 
 ## 9. The five-minute reset: the PMIC watchdog, not a panic
 

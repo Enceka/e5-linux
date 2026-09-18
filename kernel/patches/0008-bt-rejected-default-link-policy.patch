@@ -1,0 +1,30 @@
+diff --git a/net/bluetooth/hci_event.c b/net/bluetooth/hci_event.c
+index 7ce4ae5a6..f07749867 100644
+--- a/net/bluetooth/hci_event.c
++++ b/net/bluetooth/hci_event.c
+@@ -3436,6 +3436,25 @@ static void hci_cmd_complete_evt(struct hci_dev *hdev, struct sk_buff *skb,
+ 
+ 	case HCI_OP_WRITE_DEF_LINK_POLICY:
+ 		hci_cc_write_def_link_policy(hdev, skb);
++		/*
++		 * The handler above already treats a rejection as "nothing to
++		 * do": the controller keeps its own default link policy, and
++		 * the only thing lost is sniff/hold/park.  The status, though,
++		 * still reaches hci_req_cmd_complete() -- where any non-zero
++		 * value fails the whole request, and this command is sent from
++		 * the request that brings the controller up.  A controller that
++		 * answers "Invalid HCI Command Parameters" here (the Unisoc WCN
++		 * chip in this device does, right after advertising
++		 * hold/sniff/park in its LMP features) can therefore never be
++		 * powered on: hciconfig hci0 up dies with -EINVAL with the
++		 * controller sitting there fully initialized.  Report the
++		 * rejection and let bring-up continue.
++		 */
++		if (*status) {
++			bt_dev_warn(hdev, "controller rejected the default link policy (0x%2.2x)",
++				    *status);
++			*status = 0;
++		}
+ 		break;
+ 
+ 	case HCI_OP_RESET:

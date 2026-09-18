@@ -1,0 +1,25 @@
+[Unit]
+Description=E5 Bluetooth: attach the WCN controller on /dev/ttyBT0
+After=e5-vendor.service
+ConditionPathExists=/dev/ttyBT0
+# The tty appears during the module pass in the initramfs, and bluetoothd
+# hot-plugs adapters whenever they show up, so this does not have to be ordered
+# against bluetooth.service.  Not being ordered against it is the point: a
+# wedged BT core then cannot hold up the boot (the same lesson as
+# e5-mobile-data.service, which used to leave the device with no session).
+
+[Service]
+Type=simple
+# Opening the tty is what powers MARLIN_BLUETOOTH on (mtty_open -> start_marlin),
+# so btattach has to stay in the foreground and stay alive: it holds the HCI
+# line discipline on the tty for as long as the controller exists.
+ExecStart=/usr/bin/btattach -B /dev/ttyBT0 -S 3000000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+# Note: this image is booted with the overlay copied over /etc on every boot
+# (boot/init stages /e5-overlay), so the enable symlink next to this unit in
+# rootfs/overlay/ is what turns it on.  A rootfs built from scratch also gets
+# `systemctl enable e5-bt-attach.service` from rootfs/configure-rootfs.sh.

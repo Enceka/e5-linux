@@ -33,23 +33,23 @@ work list.
     deciding whether that needs a hand.
   * PanVK stays out of reach -- Mesa has no Valhall v9 backend for it -- so this
     is GLES 3.1 and there is no Vulkan on this GPU either way.
-- **Bluetooth: the HCI link is live, `hciconfig hci0 up` is not (2026-09-18).**
-  `docs/FINDINGS.md` sections 8.5 and 8.6.  Wi-Fi works: the firmware lives in the
-  initramfs's *early* overlay (or the GNSS half of the chip boot fails with
-  `-ENOENT` and takes the whole WCN core down with it), and the WCN drivers are
-  built as the vendor's production (*user*) variant (or one missed `loopcheck`
+- **Wi-Fi and Bluetooth both work (2026-09-18).**  `docs/FINDINGS.md` sections
+  8.5-8.7.  Three things had to be true.  The WCN firmware has to be in the
+  initramfs's *early* overlay, or the GNSS half of the chip boot fails with
+  `-ENOENT` and takes the whole WCN core down with it.  The WCN drivers have to be
+  built as the vendor's production (*user*) variant, or one missed `loopcheck`
   answer dumps the chip's memory and condemns the SDIO card for the rest of the
-  boot).  With both in place a freshly flashed device scans 18 APs on 2.4 and
-  5 GHz with no manual step.  Bluetooth gets as far as a live link -- the chip
-  answers the whole HCI init sequence, `hci0` exists with a real BD address and
-  sane ACL/SCO MTUs, `MARLIN_BLUETOOTH` powers on cleanly -- but
-  `hciconfig hci0 up` ends in `Can't init device hci0: Invalid argument`, and
-  btmon puts the blame on the last command of that sequence: the chip refuses
-  `Write Default Link Policy Settings` with `0x12` after advertising hold/sniff/
-  park support, and the kernel treats that as fatal.  Next: make that one request
-  tolerant (a quirk, or clamp the policy to `HCI_LP_RSWITCH`), or keep the kernel
-  out and let userspace own the setup through a raw attach.  Section 8.6 has the
-  btmon trace and the reasoning.  Then the two older items: association and DHCP measured
+  boot.  And the kernel has to tolerate the controller refusing the default link
+  policy (`kernel/patches/0008`), or `hciconfig hci0 up` fails with `EINVAL` on a
+  controller that is otherwise fully initialized.  With all three, a freshly
+  flashed device scans 18 APs on 2.4 and 5 GHz, and brings `hci0` up on its own
+  through `e5-bt-attach.service` -- bluez reports `Powered: yes` and an inquiry
+  finds nearby devices.  Still open, none of it blocking: the BD address is the
+  chip's default rather than the factory one in `/mnt/vendor/btmac.txt` (bluez no
+  longer sets it and the kernel's ioctl is gone, so it needs a vendor command),
+  pairing has not been exercised, and association/DHCP measured 12.4 Mbit/s over
+  5 GHz against 199 Mbit/s over the USB LAN while `wlan0` still comes up on a
+  per-boot random MAC.  Then the two older items: association and DHCP measured
   12.4 Mbit/s over 5 GHz against 199 Mbit/s over the USB LAN (~3 % of the
   433 Mbit/s negotiated), and `wlan0` comes up on a per-boot random MAC while
   `/mnt/vendor/wifimac.txt` is readable.
@@ -118,7 +118,7 @@ work list.
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s (modem asserted once, see above) |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
-| bluetooth | HCI link live (`hci0` with the chip's own BD address, tty `/dev/ttyBT0`); `hciconfig hci0 up` still fails with EINVAL |
+| bluetooth | **works**: `hci0` comes up on its own (`e5-bt-attach.service` holds `/dev/ttyBT0` open), bluez `Powered: yes`, inquiry finds devices; BD address is the chip's default, not the factory MAC |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
 | disk | 4.4 GiB used, 1.2 GiB free |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |

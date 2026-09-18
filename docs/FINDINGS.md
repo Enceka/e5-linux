@@ -1208,26 +1208,50 @@ instant and safe.
 
 ### Verification (measured on the device)
 
-With `org.gnome.desktop.session idle-delay` temporarily at 15 s and the session left
+**A real short press locks, and phosh then blanks the panel itself** -- the press does
+*not* just sit there waiting for the idle timer.  One press, logged at 1 Hz (the panel
+had been blanked by idle beforehand):
+
+| t | `LockedHint` (logind) | `card0-DSI-1/dpms` | `sprd_backlight/bl_power` | what happened |
+|---|---|---|---|---|
+| 11:22:26 | no | Off | 4 | idle blank: panel off, session *not* locked |
+| 11:22:27 | no | **On** | 4 -> 0 | press wakes the panel |
+| 11:22:31 | **yes** | **Off** | **4** | logind locks; the lock screen blanks the panel |
+| 11:22:34 | yes | **On** | 0 | a tap wakes it, straight to the lock screen |
+
+`org.gnome.ScreenSaver.ActiveChanged` fires on the session bus at the same moment as
+`LockedHint` flips, so the dark screen after a press *is* the locked state, not a
+missing one.  `sm.puri.phosh.lockscreen require-unlock=true`, so getting back in needs
+the unlock gesture on the lock screen.
+
+**Idle blanking alone does not lock.**  With `idle-delay` at 15 s and the session left
 alone:
 
-| t | `card0-DSI-1/dpms` | `sprd_backlight/bl_power` |
-|---|---|---|
-| 8 s, 16 s | On | 0 |
-| 24 s ... 64 s | **Off** | **4** |
-| after one injected `KEY_WAKEUP` | **On** | **0** |
+| t | `LockedHint` | `dpms` | `bl_power` |
+|---|---|---|---|
+| 5 s ... 20 s | no | On | 0 |
+| 25 s ... 50 s | **no** | **Off** | **4** |
+| after one injected `KEY_WAKEUP` | no | **On** | **0** |
 
-i.e. the compositor blanks the panel on idle (it does not depend on the session being
-locked) and the panel driver is the one that kills the backlight -- the two states are
-set together, by the same idle transition, which is exactly what the script used to
-approximate from the outside.  `idle-delay` is back at 300 s afterwards.
+The compositor's idle blank is a DPMS blank and nothing else: the session stays
+unlocked behind a dark panel, so the only thing that locks this device is the power key.
+`idle-delay` is back at 300 s afterwards.
 
-The cost of dropping the script, stated plainly: a **short press no longer turns the
-panel off immediately**.  It locks, and the panel then blanks on the idle timer (up to
-`idle-delay` later, 5 minutes at the current setting, or instantly if you also touch
-nothing for that long).  Turning the panel off on the press itself would need a process
-that reacts to the key press, i.e. the script again; the alternative is a much shorter
-`idle-delay`, at the price of blanking while you are reading.
+That is not a phosh default we can flip: `org.gnome.desktop.screensaver` already has
+`lock-enabled=true` (set here while testing), `idle-activation-enabled=true` and
+`lock-delay=0`, and the session still does not lock on idle.  The piece that is missing
+is the idle *activator*: GNOME does that in gsd-screensaver, which this gnome-settings-daemon
+does not ship and the phosh session does not start (the running plugins are a11y-settings,
+color, datetime, housekeeping, keyboard, media-keys, power, print-notifications, rfkill,
+**screensaver-proxy**, sharing, smartcard, sound, usb-protection, wacom, wwan).  Locking
+on idle would therefore need something that reacts to the idle transition -- an autostart
+helper, i.e. the kind of process this section just removed -- or logind's
+`IdleAction=lock`, which needs the session to report an idle hint and phoc does not
+(`IdleHint` stayed `no` through every blank above).
+
+The long press is also no longer the "Power Off" dialog with its countdown and Cancel
+(that came from `gnome-session-quit --power-off`, i.e. from the script).  It powers off
+at once.
 
 The long press is also no longer the "Power Off" dialog with its countdown and Cancel
 (that came from `gnome-session-quit --power-off`, i.e. from the script).  It powers off

@@ -50,6 +50,13 @@ work list.
   `mobi.phosh.Shell.service` hits "Start request repeated too quickly".  The
   `DisplayServer=wayland` line in `rootfs/overlay/etc/sddm.conf.d/10-e5.conf` is the
   fix; a plain reboot is the recovery.
+- **The power-key drop-in exists on the device and in the repo, but not in the image
+  the device is running.**  The flashed `boot_b` still carries the old
+  `/etc/systemd/logind.conf.d/20-e5-pwrkey.conf` (`HandlePowerKeyLongPress=ignore`), and
+  the overlay copies it back over `/etc` on every boot, so a reboot *before* the next
+  flash turns the long press back into a no-op (the short press keeps locking).  The
+  rebuilt `boot-linux-slotb.img` (sha256 `ee696331...`, kernel unchanged) has it baked;
+  flashing is the fix.
 - **The device's initramfs overlay is baked into the flashed image.**  Editing
   `rootfs/overlay/...` changes nothing until the image is rebuilt and flashed, and
   until then the *old* overlay is copied over `/etc` on every single boot.  The
@@ -58,6 +65,14 @@ work list.
   is the only reason autologin kept working.
 
 ## Next (后续要做)
+
+- **An idle blank does not lock the session.**  After `idle-delay` (300 s) the panel
+  goes off (`dpms=Off`, `bl_power=4`) and `LockedHint` stays `no`, so a dark phone is
+  still unlocked; only the power key locks.  Not a settable default: `lock-enabled` and
+  `idle-activation-enabled` are both `true` and still nothing activates the screen
+  saver on idle, because this gnome-settings-daemon ships no `gsd-screensaver` and the
+  phosh session does not start one; `logind`'s `IdleAction=lock` would need an idle
+  hint that phoc never sets (`docs/FINDINGS.md` section 18).
 
 - **Calls and SMS** need a RIL: this port drives the modem over raw AT
   (`e5-vendor.service` + `mobile-data`), so `gnome-calls`/`chatty` would have nothing to
@@ -82,6 +97,6 @@ work list.
 | session | Phosh 0.46.0, `phoc` on the **Mali-G57** via the Allwinner r32p0 GBM UMD; kernel log on the panel |
 | gpu | kbase r41p0 + ARM fbdev UMD (handshake) and the r32p0 GBM UMD (compositor); r44p0 blobs are refused |
 | baseband | 5G NR SA (n78), `mobile-data` + nftables NAT for the USB LAN, ~50 Mbit/s (modem asserted once, see above) |
-| keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short locks, long powers off, panel blank/wake is phoc's idle) |
+| keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
 | disk | 4.4 GiB used, 1.2 GiB free |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |

@@ -12,7 +12,7 @@ index b71935862..10da26fe3 100644
  
  obj-$(CONFIG_DRM_PANFROST) += panfrost.o
 diff --git a/drivers/gpu/drm/panfrost/panfrost_device.c b/drivers/gpu/drm/panfrost/panfrost_device.c
-index bd9b7be63..148bddf49 100644
+index bd9b7be63..9f17f234e 100644
 --- a/drivers/gpu/drm/panfrost/panfrost_device.c
 +++ b/drivers/gpu/drm/panfrost/panfrost_device.c
 @@ -3,18 +3,22 @@
@@ -50,7 +50,7 @@ index bd9b7be63..148bddf49 100644
  	pfdev->regulators = devm_kcalloc(pfdev->dev, pfdev->comp->num_supplies,
  					 sizeof(*pfdev->regulators),
  					 GFP_KERNEL);
-@@ -195,6 +204,34 @@ static int panfrost_pm_domain_init(struct panfrost_device *pfdev)
+@@ -195,6 +204,42 @@ static int panfrost_pm_domain_init(struct panfrost_device *pfdev)
  	return err;
  }
  
@@ -59,6 +59,11 @@ index bd9b7be63..148bddf49 100644
 + * device trees use ("JOB", "MMU", "GPU"): of_irq_get_byname() is case
 + * sensitive, and on some SoCs the only device tree we can use is the one the
 + * vendor BSP wrote for kbase.
++ *
++ * The first attempt is the *_optional() variant, which does not log: with the
++ * plain one a device tree that needs the fallback prints "IRQ gpu not found"
++ * (and one per interrupt) before each lookup succeeds, which reads like a
++ * failure and is not one.
 + */
 +int panfrost_irq_get(struct panfrost_device *pfdev, const char *name)
 +{
@@ -66,7 +71,7 @@ index bd9b7be63..148bddf49 100644
 +	const char *irq_name;
 +	int irq, i;
 +
-+	irq = platform_get_irq_byname(pfdev->pdev, name);
++	irq = platform_get_irq_byname_optional(pfdev->pdev, name);
 +	if (irq != -EPROBE_DEFER && irq >= 0)
 +		return irq;
 +
@@ -75,8 +80,11 @@ index bd9b7be63..148bddf49 100644
 +						  &irq_name))
 +			break;
 +
-+		if (!strcasecmp(irq_name, name))
++		if (!strcasecmp(irq_name, name)) {
++			dev_dbg(pfdev->dev, "irq \"%s\" is \"%s\" in this dtb\n",
++				name, irq_name);
 +			return platform_get_irq(pfdev->pdev, i);
++		}
 +	}
 +
 +	return irq;
@@ -85,7 +93,7 @@ index bd9b7be63..148bddf49 100644
  int panfrost_device_init(struct panfrost_device *pfdev)
  {
  	int err;
-@@ -212,11 +249,13 @@ int panfrost_device_init(struct panfrost_device *pfdev)
+@@ -212,11 +257,13 @@ int panfrost_device_init(struct panfrost_device *pfdev)
  		return err;
  	}
  
@@ -104,7 +112,7 @@ index bd9b7be63..148bddf49 100644
  	}
  
  	/* OPP will handle regulators */
-@@ -232,9 +271,23 @@ int panfrost_device_init(struct panfrost_device *pfdev)
+@@ -232,9 +279,23 @@ int panfrost_device_init(struct panfrost_device *pfdev)
  		goto out_regulator;
  	}
  
@@ -129,7 +137,7 @@ index bd9b7be63..148bddf49 100644
  
  	res = platform_get_resource(pfdev->pdev, IORESOURCE_MEM, 0);
  	pfdev->iomem = devm_ioremap_resource(pfdev->dev, res);
-@@ -274,6 +327,8 @@ int panfrost_device_init(struct panfrost_device *pfdev)
+@@ -274,6 +335,8 @@ int panfrost_device_init(struct panfrost_device *pfdev)
  	panfrost_regulator_fini(pfdev);
  out_devfreq:
  	panfrost_devfreq_fini(pfdev);
@@ -138,7 +146,7 @@ index bd9b7be63..148bddf49 100644
  out_clk:
  	panfrost_clk_fini(pfdev);
  	return err;
-@@ -290,6 +345,7 @@ void panfrost_device_fini(struct panfrost_device *pfdev)
+@@ -290,6 +353,7 @@ void panfrost_device_fini(struct panfrost_device *pfdev)
  	panfrost_devfreq_fini(pfdev);
  	panfrost_regulator_fini(pfdev);
  	panfrost_clk_fini(pfdev);
@@ -146,7 +154,7 @@ index bd9b7be63..148bddf49 100644
  }
  
  #define PANFROST_EXCEPTION(id) \
-@@ -382,9 +438,13 @@ const char *panfrost_exception_name(u32 exception_code)
+@@ -382,9 +446,13 @@ const char *panfrost_exception_name(u32 exception_code)
  bool panfrost_exception_needs_reset(const struct panfrost_device *pfdev,
  				    u32 exception_code)
  {

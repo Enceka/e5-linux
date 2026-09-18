@@ -2067,3 +2067,37 @@ FunctionFS at `/dev/usb-ffs/adb`, sets Google's ids first, binds, and starts
 `adbd` -- as `e5-adbd.service` (`WantedBy=multi-user.target`).  The same gadget change
 belongs in `boot/init` so a freshly built image has it without the unit; that edit is
 still to be made (see STATUS).
+
+### 21.1 How to add ADB without breaking the gadget (and two other lessons)
+
+**Add the function, never rebind the UDC.**  configfs accepts `functions/ffs.adb` and the
+symlink into `configs/c.1/` while the configuration is *already bound*; the host sees a
+re-enumeration and nothing else changes.  Verified:
+
+    functions: acm.GS0 ffs.adb ncm.usb0      (added while bound)
+    UDC: musb-hdrc.1.auto                    (unchanged)
+    adbd log: opening control endpoint /dev/usb-ffs/adb/ep0
+
+Twice, an explicit `echo '' > UDC` followed by a rebind left the gadget half-configured
+instead: the ACM console still enumerated, the NCM interface never came back, adb never
+appeared, and the only recovery was a power cycle.  `adbd-gadget.sh` therefore does not
+touch the UDC at all, and `e5-gadget-guard.service` rebinds *only* if the UDC is empty.
+The host's `adb` sees the new interface after a re-enumeration -- a cable replug, or
+simply the next boot with `e5-adbd.service` enabled.
+
+**Modes matter, and they live in git.**  The overlay is copied with `cp -a`, so the mode
+of a script in the image is the mode git records.  `adbd-gadget.sh` and
+`hotspot-start.sh` were created 0644, which gave
+`/opt/e5/adbd-gadget.sh: Permission denied` and `status=203/EXEC` until they were
+`git add --chmod=+x`-ed.
+
+**Ordering cycles are easy to create.**  `e5-hotspot.service` originally had
+`After=network.target` while `e5-mobile-data.service` is `Before=network.target` and the
+hotspot wanted it too; systemd answered `Transaction order is cyclic`.  Ordering the
+hotspot `After=e5-vendor.service` (and not through the target) fixed it.
+
+Verified with all of it in place: `e5-hotspot.service` active, `hostapd` `AP-ENABLED` on
+`ssid E5-Linux`, `dnsmasq` active and serving `192.168.9.1/24` (address, gateway and
+resolver to clients), `e5-adbd.service` active with `ffs.adb` bound, and the graphical
+session up on the patched kernel (`/dev/dri/renderD128` present, `phoc` owning the DRM
+device, `phosh` running).

@@ -249,3 +249,42 @@ bottom.
   the interface) and `wpa_supplicant.service` is masked.  Remove both to go back to
   station mode.
 
+
+### 2026-09-19, early morning (audio: the sound stack works, the AGDSP power domain does not)
+
+The audio modules were missing from the image entirely (`out_modules` had no
+`snd_soc_*`), which is why the port had no sound card.  With the vendor set added
+(`sound/soc/sprd/unisoc/*` + `drivers/unisoc_platform/sprd_audio/*`, 24 modules, the
+same set Android loads) the Linux side comes up with the full stack:
+
+* `/proc/asound/cards` -> `sprdphone-sc2730`, codec `ump9620`, and the AW87xxx
+  smart PA probing on i2c 6-0058 and parsing its profile
+  (`aw87xxx_fw_load_work: acf parse succeed`, products `aw87390`, profiles
+  Music/Receiver/Off) from `/vendor/firmware/aw87xxx_acf.bin` (now in
+  `rootfs/overlay/lib/firmware/`);
+* the speaker path controls were identified: `VBC_SYSTEM_DEV_CHANGE` /
+  `VBC_CUSTM_DEV_CHANGE` = `TYPE_SPK`, `Speaker Function` = 1, `Speaker Mute` = 0 and the
+  FE->BE DAPM switches `S_NORMAL_AP01_P_*` (the routing driver's
+  `sprd_pcm_routing_intercon[]`); without them a plain PCM open fails with
+  `FE_NORMAL_AP01: ASoC: no backend DAIs enabled`.
+
+**The blocker is `agdsp_pd.ko`**, the vendor AGDSP (audio DSP) power-domain module:
+
+* as shipped, loading it takes the board down within seconds -- no oops survives, the
+  reset comes from the PMIC watchdog (docs/FINDINGS.md 9);
+* with its SIPC kthread and its `pm_genpd_init()`/`of_genpd_add_provider_simple()`
+  skipped, the board survives but the sound card defers **forever**:
+  `vbc-rxpx-codec-sc27xx sound@0: asoc_sprd_card_parse_of: Parsing dai link 0
+  failed(-517)` (the codec and the VBC dai take that domain as their
+  `power-domains` provider);
+* with the genpd registered but `sprd_agdsp_pw_on/off` made no-ops, the same `-517`
+  loop still floods the console and the board resets again after a few minutes.
+
+So the AGDSP must be *powerable* for the card to bind, and powering it is what kills
+the board -- the same "bring up a DSP that our port never boots" class of problem as
+the modem CP.  The patch (three `if (0)` cuts: kthread, and the two power callbacks)
+is kept in `work/agdsp-patch/agdsp_pd.patch` and is applied in the vendor tree; the
+last known-good image is `work/boot-noaudio-stable.img` (78 modules, no audio,
+sddm masked).  Next ideas: give the codec its own power domain via DT, or find what the
+card's dai link 0 is actually waiting for (`/sys/firmware/devicetree/base/sound@0/`).
+

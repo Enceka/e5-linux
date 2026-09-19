@@ -1,6 +1,6 @@
 # Status
 
-_Last updated 2026-09-18._
+_Last updated 2026-09-19._
 
 Reasoning, evidence and dead ends live in `docs/FINDINGS.md`.  This file is only the
 work list.  Done work is removed from it once its result is in the table at the
@@ -8,21 +8,48 @@ bottom.
 
 ## Now (目前要做)
 
-- **Baseband: RIL-shaped AT channel + CP watchdog deployed, soak running (2026-09-18).**
-  The empty run proved the `MN_AL Task PS CP assert ... The queue was full` is our
-  own AT usage, so the fix is to give the CP what Android's RIL gives it:
-  `opt/e5/atd.py` (`e5-atd.service`) opens `/dev/stty_nr0` (the URC channel) and
-  `/dev/stty_nr1` (the command channel) once and keeps them open, drains the URC
-  stream continuously, serialises commands with a minimum gap, and publishes
-  `/run/e5-atd.state`; `mobile-data` now asks it for AT and the watcher's context
-  poll dropped from every 30 s to every 5 min.  `opt/e5/cp-watchdog`
-  (`e5-cp-watchdog.service`) treats "no AT answer for 120 s" as CP death, logs
-  the evidence, re-arms the boot slot and reboots, with a 900 s guard against a
-  boot loop.  Deployed on the device and measured for 31 minutes (watcher up for
-  17): `CP assert` = 0, `+COPS: 0,2,"46001",11`, `wget` fine -- against the ~9.5
-  minutes the old regime survived.  **Still to do:** a longer soak (an hour, and
-  one with hotspot clients), then bake `opt/e5` into the next image.
-  Full reasoning: `docs/FINDINGS.md` section 22.
+- **Baseband: rewritten as a straight port of mu300-linux, aligned with upstream
+  `ccc9bb9` (2026-09-19).**
+  The Python `atd.py` + `cp-watchdog` pair is gone; what is in the tree now is the
+  upstream MU300 design with the E5's names, and its units are installed and
+  enabled again:
+  * `opt/e5/e5-atd` + `opt/e5/e5-at` -- the `mu300-atd`/`mu300-at` port.  A sh
+    daemon owns `/dev/stty_nr1` for the whole boot, serves `/run/e5-at/cmd` (fifo,
+    "SECONDS /answer-file AT+CMD") with an atomic answer file and a mkdir lock per
+    client, drains before each command, applies `stty` to the open descriptor, and
+    closes + reopens the device after two unanswered commands.  That is what makes
+    the SIPC channel's "one reader only" rule hold, and an AT command costs one
+    open per boot instead of one per call.
+  * `opt/e5/mobile-data` -- the `mu300` script ported: `at`/`up [APN]`/`down`/
+    `status`/`signal`/`at "CMD"`/`sim-reset`/`watch`, the bring-up lock in
+    `/run/e5-mobile-data-up.lock` (`up` -> `up_locked "$@"`), `tty_setup` (never
+    `stty -F` while the daemon owns the tty), the 30 s watchdog with its two-strike
+    rule, `radio_on` (CFUN -> SFUN=4 -> SFUN=2/4), and `down`'s "system is stopping"
+    exit with the short `E5_AT_LOCK_WAIT=5`.  AT goes through `e5-atd` when its
+    fifo exists and only opens the tty itself when the daemon is absent.
+    The five differences from upstream, all of them E5-shaped: the `E5_AT_*`
+    variable names (upstream hardcodes `/run/mu300-at`, `/dev/stty_nr1`), no
+    netifd/OpenWrt branch (this image is systemd-only), the APN read from
+    `/etc/e5/mobile-data.conf` when `up` is called without an argument, a
+    `/etc/resolv.conf` fallback where upstream only uses `resolvectl`, and the NAT
+    table named `e5_nat`.  `E5_AT_CLIENT` exists so `mobile-data` can be pointed at
+    a non-`/opt/e5` copy of `e5-at` (the offline self-test uses it).
+  * `opt/e5/android-run` + `e5-cp_diskserver.service` / `e5-refnotify.service` --
+    the two Android vendor daemons mu300 runs and this port did not, so modem NV
+    writes (fixed by Android's RIL) are persisted now.
+  * Units: `e5-atd`, `e5-mobile-data` (After/Wants `e5-atd`, `TimeoutStopSec=15`),
+    `e5-mobile-data-watch`, `e5-cp_diskserver` (`Before=e5-vendor.service` and no
+    start delay: `android-run` waits for the chroot itself), `e5-refnotify`, plus
+    `e5-vendor` -- enabled in `rootfs/configure-rootfs.sh` and
+    `rootfs/device-finalize.sh`.  They gate on `|/dev/modem` only: upstream also
+    writes `|/dev/pmsys`, a node this board does not have.
+  What the port dropped, on purpose: the CP watchdog, the `nr0` URC log, the
+  `/run/e5-atd.state` file, the SIM-storm cooldown and the `sim-reset` avoidance
+  of `SFUN=5/3`.  Those were our own answers to the `CP assert ... queue was full`
+  and the barred IoT card of 2026-09-18/19 (`docs/FINDINGS.md` 22) and the mu300
+  design has no place for them -- so those two problems are, as of now, unhandled.
+  **Not yet on the device:** nothing here has been booted, let alone soaked.
+  The AT layer is checked offline on a pseudo-terminal (`work/atd-selftest.py`).
 - **Bluetooth: the attach race and the dead scans (open, 2026-09-18).**
   `docs/FINDINGS.md` section 8.7.  What works: the controller initialises, `hci0`
   comes up with the chip's own BD address, bluez reports `Powered: yes`, and scans
@@ -144,7 +171,7 @@ bottom.
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57** -- and clients on the same renderer through the Wayland platform |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
-| baseband | 5G NR SA (n78); the CP asserted ~10 min into a session that polled AT. `e5-atd.service` (persistent URC drain + serialised commands) + `e5-cp-watchdog.service` are deployed; 31 min soak clean, longer soak pending (`docs/FINDINGS.md` 22) |
+| baseband | mu300-linux's design, ported: `e5-atd` owns `/dev/stty_nr1` and brokers AT over `/run/e5-at/cmd`, `e5-mobile-data.service` + `e5-mobile-data-watch.service` drive the bearer, `cp_diskserver`/`refnotify` persist the NV; not booted or soaked yet |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
 | hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at **80 MHz VHT80 (centre 155)**; the old `HT_SCAN` stall was the missing `country CN`, not the width; no AP+STA concurrency |
 | bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |
@@ -152,14 +179,66 @@ bottom.
 | disk | 4.4 GiB used, 1.2 GiB free |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
 
-## Uncommitted in the working tree (2026-09-18)
+## Committed on 2026-09-19
 
-- `rootfs/overlay/lib/firmware/bt_configure_{pskey,rf}.ini`: pulled from Android
-  (`.gitignore` keeps them out of git, like the other vendor blobs).
-- Nothing else: `opt/e5/mobile-data`, the new `opt/e5/atd.py` +
-  `opt/e5/cp-watchdog` and their units are committed (see the baseband bullet),
-  and the earlier "URC filtering in `at()`" note was a dead edit -- the tree was
-  already clean when the AT channel came back.
+- The baseband rewrite (`b36e86b`): `opt/e5/{e5-atd,e5-at,android-run}` are new,
+  `opt/e5/mobile-data` is rewritten, `opt/e5/{atd.py,cp-watchdog,e5-at.sh}` and
+  `etc/e5/cp-watchdog.conf` are deleted, five units are back and the two build
+  scripts enable them.  (The previous baseband bullet in this file is history.)
+- `opt/e5/e5-next-boot`, the `mu300-next-boot` port: `linux` records
+  `/etc/e5linux/default-boot=linux` and arms slot b, `android` records the other
+  choice and writes the recorded slot-a block back, `--rearm` is what
+  `/usr/local/sbin/e5-boot-ok` now execs (one implementation of "which slot comes
+  next"), and it acts only when the recorded default is linux, so a one-off trial
+  boot does not re-arm itself.  `status` prints the recorded default and the misc
+  block for both slots; the byte layout was re-checked against `dumps/misc-head.bin`
+  (slot a at byte 12, `9f` = prio 15/tries 9/successful 1) and the trial block
+  (slot b at byte 14, `2f` = prio 15/tries 2/successful 0).  The image ships
+  `default-boot=linux`, so a fresh install behaves as before and this is the scripted
+  way back to Android from a running Linux (`e5-next-boot android`, then reboot).
+- `opt/e5/rootfs-fixups` + `e5-fixups.service`, the `mu300-fixups` port: restores
+  ping's `cap_net_raw` (tar/docker export drops xattrs) and links
+  `e5-next-boot`/`mobile-data`/`e5-at` into `/usr/local/bin`, which is what makes
+  `sudo e5-next-boot android` work at all.  Enabled in both build scripts.
+- `tools/verify-device.py`: the read-only audit described below.
+- `boot/init`: the comment that still named the removed `e5-adbd.service` now points
+  at `docs/FINDINGS.md` 21.
+- `.gitignore` takes `out/` (the 8 GiB `rootfs.ext4`) and `.DS_Store`; the tracked
+  `rootfs/.DS_Store` is gone.
+
+### What the device is actually running (audit, 2026-09-19)
+
+`tools/verify-device.py` mounts `/data/e5linux/rootfs.ext4` read-only on the (rooted)
+Android side, compares it file by file with the tree, and reads the flashed image's own
+overlay list out of the initramfs.  On this unit:
+
+    boot image   device boot_b head56m == boot-linux-slotb.img (99d9d453...), so the
+                 image being audited is the one the device boots
+    overlay      70 files in the tree, 3 not in the image: tonight's e5-next-boot,
+                 rootfs-fixups and e5-fixups.service
+    rootfs       77 files checked, 4 wrong: those 3 plus usr/local/sbin/e5-boot-ok
+    leftovers    etc/e5/cp-watchdog.conf and e5-cp-watchdog.service -- the Python CP
+                 watchdog, deleted in b36e86b; the overlay only ever adds, so nothing
+                 on the device removes them
+    units        e5-hotspot, e5-regdb-load and e5-gadget-guard are enabled by the build
+                 scripts but neither linked nor pulled in on this device: this install
+                 predates that part of configure-rootfs.sh (its comment says the same).
+                 e5-telnetd is pulled in by the NetworkManager drop-in, and e5-atd,
+                 e5-mobile-data(+watch), e5-cp_diskserver, e5-refnotify, e5-vendor,
+                 e5-boot-ok and e5-zram all have their *.wants/ links.
+
+The device is on Android (slot a) as of this audit.
+
+## Open questions
+
+- **`packages.list` still installs the Plasma half of the session.**  The comment above
+  it now describes reality (phosh is the session, panfrost does the rendering), but the
+  list still pulls in `plasma-mobile`, `plasma-workspace`, `kwin-wayland`,
+  `kwin-x11` and `xdg-desktop-portal-kde`, and `etc/sddm.conf.d/10-e5.conf` says the
+  X11/KDE session "is purged".  Either drop those five (a fresh install is then
+  phosh-only) or keep Plasma selectable and fix that comment -- it is a decision, not a
+  bug, and it is the last thing in the fresh-install path that still carries the old
+  design.
 
 ### 2026-09-18, late (this round)
 
@@ -288,3 +367,32 @@ last known-good image is `work/boot-noaudio-stable.img` (78 modules, no audio,
 sddm masked).  Next ideas: give the codec its own power domain via DT, or find what the
 card's dai link 0 is actually waiting for (`/sys/firmware/devicetree/base/sound@0/`).
 
+### 2026-09-19, AGDSP hybrid genpd test
+
+The first Linux-style AGDSP port is now in the kernel tree. `agdsp_pd` no longer
+uses the legacy PSCP `smsg` kthread or PSCP shared-memory handshake. It keeps the
+PMU/mailbox wake path, reads the PMU state before sending the wake command, and
+leaves AP access and the DSP awake across runtime-PM idle instead of executing the
+vendor power-off sequence.
+
+The test image loaded all 91 modules. `audio_sipc` created the AGDSP ring, DSP
+commands received replies, UMP9620/VBC/TDM and AW87390 all probed, and the ASoC
+route setup completed without the earlier `-517` storm. Repeated logical
+`power_on`/`power_off` cycles did not reset the board.
+
+The test was then followed by an unexpected reboot after `switch-root`, despite
+no user action. The device automatically returned to Android slot A. The
+available `sysdumpdb` report is still the earlier `systemd-shutdow` fault
+(`device_shutdown -> _dev_info -> page fault`), while this boot's persistent log
+ends at `switch-root`; therefore the post-switch-root trigger is not yet proven
+to be the old shutdown callback or an AGDSP fault. The test image was
+`work/boot-linux-slotb-agdsp-test3.img`; initialization success is not yet a
+stability claim.
+
+The follow-up test disabled the CP watchdog reboot action (`ACTION=log`) and
+cleared `sysdumpdb`, pstore, last-kmsg and the boot persistent-log area first.
+It still returned to Android after `switch-root`. No new sysdump report survived,
+but that is not evidence against a kernel panic: this device's reset path clears
+the ramoops/sysdump area before the next boot. The fresh boot log ends at
+`switch-root`; audio initialization is proven, while the post-systemd panic
+needs live serial or vendor minidump capture.

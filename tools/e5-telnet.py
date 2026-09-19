@@ -84,7 +84,17 @@ def login(s, log):
     if m != 'Password:':
         return False
     s.sendall(PASS.encode() + b'\n')
-    out, m = read_until(s, ['# ', '$ ', 'Login incorrect'], limit=15)
+    # Deciding "logged in" from the prompt is unreliable here: bash's
+    # bracketed-paste escapes and the login banner arrive interleaved, and the
+    # prompt is usually consumed by the read that was waiting for the password,
+    # so a successful login was being reported as "login failed".  Ask a question
+    # that only a shell answers, and count its echo as well as its output.
+    s.sendall(b'echo __E5_LOGIN_OK__\n')
+    out, m = _read_n(s, '__E5_LOGIN_OK__', 2, 20)
+    log.write(out)
+    if m == '__E5_LOGIN_OK__':
+        return True
+    out, m = read_until(s, ['Login incorrect', '# ', '$ '], limit=10)
     log.write(out)
     return m in ('# ', '$ ')
 

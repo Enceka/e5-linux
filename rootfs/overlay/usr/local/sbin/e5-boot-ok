@@ -7,11 +7,11 @@
 # refilled from userspace -- and only once the system is demonstrably usable,
 # which is what makes this safe: a kernel that panics or a session that never
 # starts does not re-arm anything, so the tries run out and LK boots Android.
+#
+# The write itself lives in e5-next-boot (the mu300-next-boot port), so that
+# "which slot comes next" has a single implementation: --rearm acts only when the
+# recorded default is linux, and the image ships that file, so this is the same
+# behaviour as before -- a system that was only asked for a trial boot does not
+# re-arm itself, and `e5-next-boot android` is what sends it back to stock.
 set -e
-misc=$(cat /run/e5linux/misc-dev 2>/dev/null)
-trial=/run/e5linux/misc-bc-slot-b-trial.bin
-[ -n "$misc" ] || { echo "e5-boot-ok: no misc device recorded"; exit 0; }
-[ -f "$trial" ] || { echo "e5-boot-ok: no $trial"; exit 0; }
-dd if="$trial" of="$misc" bs=1 seek=2048 conv=notrunc status=none
-sync
-echo "e5-boot-ok: slot b re-armed on $misc"
+exec /opt/e5/e5-next-boot --rearm

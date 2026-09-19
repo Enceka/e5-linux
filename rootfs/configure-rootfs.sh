@@ -38,8 +38,12 @@ bash "$HERE/e5-chroot.sh" '
     systemctl enable NetworkManager.service >/dev/null 2>&1 || echo "warn: NM enable failed"
     systemctl enable e5-zram.service >/dev/null 2>&1 || echo "warn: zram enable failed"
     systemctl enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
-    systemctl enable e5-atd.service >/dev/null 2>&1 || echo "warn: e5-atd enable failed"
-    systemctl enable e5-cp-watchdog.service >/dev/null 2>&1 || echo "warn: cp-watchdog enable failed"
+    # The modem control units (e5-atd, e5-cp-watchdog, e5-mobile-data and its
+    # watcher) are deliberately not installed.  Talking to the CP is what has
+    # barred the SIM: the 2026-09-18 reconnect storm, and 2026-09-19 where a
+    # single AT+CFUN=1,1 left the CP at +CFUN: 0 until the host brought it back.
+    # The scripts stay in opt/e5; restore the units from cce7283/4c74e84 once
+    # the bring-up can pace AT the way the vendor RIL does.
     systemctl enable serial-getty@ttyGS0.service >/dev/null 2>&1 || echo "warn: getty enable failed"
     systemctl set-default graphical.target >/dev/null 2>&1 || true
     echo "enabled:"; ls /etc/systemd/system/graphical.target.wants/ /etc/systemd/system/multi-user.target.wants/ 2>/dev/null | head -30

@@ -37,8 +37,14 @@ stage_pack() {
           "$ROOT"/dev/tty "$ROOT"/dev/full "$ROOT"/dev/ptmx "$ROOT/binfmt_misc" 2>/dev/null || true
     rm -rf "$ROOT/proc/"* "$ROOT/sys/"* "$ROOT/run/"* 2>/dev/null || true
 
+    # The image is 8 GiB by default, not "just enough": the loop file is the only
+    # writable filesystem on the device, so a rootfs packed to its own size leaves
+    # no room for the first apt-get install (or for the session's own logs).
+    # E5_IMG_MIB overrides it; the computed minimum below is a floor, not a target.
     used=$(du -sm "$ROOT" | cut -f1)
-    size=$((used + used / 4 + 512))
+    size=${E5_IMG_MIB:-8192}
+    floor=$((used + used / 4 + 256))
+    [ "$size" -lt "$floor" ] && size=$floor
     echo "== rootfs is ${used} MiB, image will be ${size} MiB"
     rm -f "$OUT/rootfs.ext4"
     truncate -s "${size}M" "$OUT/rootfs.ext4"

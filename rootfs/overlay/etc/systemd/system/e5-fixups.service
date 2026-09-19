@@ -1,0 +1,17 @@
+[Unit]
+Description=E5 rootfs fixups lost by tar/docker export (file capabilities, PATH links)
+Documentation=https://github.com/ (see /opt/e5/rootfs-fixups)
+# Early on purpose, and with DefaultDependencies=no to match: the capabilities and the
+# /usr/local/bin links have to exist before any service or session can use ping or call
+# e5-next-boot.  This is the same ordering mu300-fixups.service uses.
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/e5/rootfs-fixups
+
+[Install]
+WantedBy=sysinit.target

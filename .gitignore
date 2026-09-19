@@ -1,7 +1,10 @@
 # e5-linux: build outputs, device dumps and vendor blobs are never committed.
-# The two reference checkouts used while bringing this up are not part of the repo.
+# The reference checkouts used while bringing this up are not part of the repo:
+# mu300-linux/ and kernel_sprd_ums9158/ (upstream sources to compare against) and
+# UFI-TOOLS/, which is a checkout with a git repository of its own.
 mu300-linux/
 kernel_sprd_ums9158/
+UFI-TOOLS/
 
 # build trees / outputs
 out_linux/
@@ -37,3 +40,8 @@ rootfs/overlay/mnt/vendor/btmac.txt
 # Vendor blob bundles fetched from upstream (e.g. CoreELEC opengl-meson):
 # 100 MB of GPU binaries that the repo must never carry.
 opengl-meson.tgz
+
+# rootfs build output (out/rootfs.ext4 is 8 GiB) and macOS droppings: the repo
+# carries the scripts that build these, never the results.
+out/
+.DS_Store

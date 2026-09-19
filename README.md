@@ -75,8 +75,8 @@ channels that survive a failed boot.
 | Path | Contents |
 |---|---|
 | `kernel/` | `e5-linux.fragment` (Linux additions on top of the device defconfig), `build-linux.sh` |
-| `boot/` | `init` (initramfs), `build-boot-image.py`, `module-order.stock`, `stage-modules.sh`, `flash-trial.sh`, `android-boot-linux.sh` |
-| `rootfs/` | `fetch-debian-rootfs.py`, `e5-chroot.sh`, `install-packages.sh`, `packages.list`, `build-rootfs.sh` |
+| `boot/` | `init` (initramfs), `build-boot-image.py`, `module-order.stock`, `module-order.extra`, `stage-modules.sh`, `flash-trial.sh`, `android-boot-linux.sh`, `flash-from-linux.sh` |
+| `rootfs/` | `build-rootfs-container.sh` (the build host, a Debian arm64 container), `install-rootfs.sh` (push + publish on the device), `packages.list`, `configure-rootfs.sh`, `build-rootfs.sh`, `e5-chroot.sh`, `fetch-debian-rootfs.py`, `install-packages.sh`, `overlay/`, `extract-android-vendor.sh` |
 | `tools/` | `collect-logs.sh` and device helpers |
 | `docs/` | `FINDINGS.md` |
 
@@ -88,9 +88,21 @@ scripts read those from *your* device.
 * A Rongyue E5 with an unlocked bootloader (`ro.boot.verifiedbootstate=orange`),
   rooted Android with working `adb` + `su`, and a way to recover (SPD download
   mode or a known-good stock image).
-* Linux build host with `clang`/`lld` (LLVM), `make`, `python3`, `lz4`.
+* Linux build host with `clang`/`lld` (LLVM), `make`, `python3`, `lz4`.  On macOS
+  that means brew's `make` (the system one is GNU Make 3.81, kbuild wants ≥ 3.82),
+  `coreutils` + `gnu-sed` for kbuild's scripts, `llvm` for `llvm-objdump`/`llvm-nm`/
+  `llvm-objcopy`, and a directory with `elf.h` for `scripts/mod` (`work/hostinc/`
+  in this tree).
+* Docker, for the root filesystem: `rootfs/build-rootfs-container.sh` runs the
+  install inside `debian:trixie` on arm64, where the packages install at native
+  speed.  `rootfs/e5-chroot.sh` is the unprivileged qemu path for a Linux host and
+  cannot run on macOS.
 * Dumps you make yourself: a stock slot-b boot image and the first 4 KiB of
   `misc` (see below).
+* For the modem, the Android vendor subset (`rootfs/extract-android-vendor.sh`
+  pulls it off the device, ~49 MiB): without it `e5-vendor.service` is skipped and
+  there is no CP, no `/dev/stty_nr1` and no baseband.  It is proprietary, so it is
+  never in the image and has to be pushed into `/opt/e5/android/` separately.
 
 ## Build and run
 
@@ -132,7 +144,55 @@ curl -O http://ports.ubuntu.com/ubuntu-ports/pool/main/b/busybox/busybox-static_
 ar x busybox-static_*.deb && tar --zstd -xf data.tar.zst ./usr/bin/busybox
 ```
 
-### 3. Boot image
+### 3. Root filesystem (fresh install)
+
+The rootfs is a loop file inside Android's `/data`, not a partition, so it is built
+once, pushed, and does not have to be rebuilt when the boot image changes:
+
+```sh
+rootfs/build-rootfs-container.sh            # all stages -> out/rootfs.ext4 (8 GiB)
+rootfs/install-rootfs.sh out/rootfs.ext4    # push in 1 GiB chunks, verify, publish
+```
+
+`build-rootfs-container.sh` installs `rootfs/packages.list` (phosh and
+plasma-mobile, `hostapd`/`iw` for the hotspot, `nftables` for NAT, pipewire, ...)
+into a Debian trixie arm64 tree, copies `rootfs/overlay/` over it, creates the `e5`
+user, enables the units and packs the result.  The image is **8 GiB by default**
+(`E5_IMG_MIB=N` overrides it): the loop file is the only writable filesystem on the
+device, and one packed to exactly its own size leaves no room for the first
+`apt install`.
+
+Stages can be re-run on their own, which is what a later overlay or package change
+actually needs:
+
+```sh
+rootfs/build-rootfs-container.sh configure pack           # overlay change only
+rootfs/build-rootfs-container.sh install configure pack   # package set changed
+```
+
+`install-rootfs.sh` runs against rooted Android (`adb` + `su`): it removes the
+previous `/data/e5linux/rootfs.ext4` to make room, pushes the new image in chunks,
+compares the sha256 on the device and renames it into place.  The accounts it
+creates are `e5`/`123456` and `root`/`root` (autologin is on, so the touchscreen
+session never asks).
+
+The modem is the one piece that is **not** in the image.  The Android vendor subset
+is proprietary and is neither committed nor packed; extract it from your own device
+and copy it into the rootfs once the system is up (it survives, the loop file is
+writable):
+
+```sh
+rootfs/extract-android-vendor.sh                          # -> work/android-subset/
+adb push work/android-subset /data/local/tmp/
+# in the e5-linux shell (telnet 192.168.77.1, or the USB serial console):
+cp -a /data/local/tmp/android-subset /opt/e5/android && systemctl restart e5-vendor
+```
+
+Until that is done `e5-vendor.service` is skipped (`ConditionPathExists=`) and the
+device comes up as a Linux system with no baseband, no `/dev/stty_nr1` and an
+`e5-atd` that keeps retrying.
+
+### 4. Boot image
 
 ```sh
 boot/build-boot-image.py \
@@ -152,7 +212,7 @@ The builder packs the overlay with `a+r` (and `a+rx` for executables) rather tha
 whatever mode the checkout happens to have; a 0600 `phoc.ini` from a build host
 with a strict umask once cost the `e5` user its entire session.
 
-### 4. Trial boot
+### 5. Trial boot
 
 ```sh
 boot/flash-trial.sh boot-linux-slotb.img
@@ -174,7 +234,7 @@ panics. To boot the Linux image already in
 boot/android-boot-linux.sh boot-linux-slotb.img
 ```
 
-### 5. Read the result
+### 6. Read the result
 
 ```sh
 tools/collect-logs.sh logs

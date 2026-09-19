@@ -35,7 +35,9 @@ run 'id e5 >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo,video,render,input
      id e5'
 
 echo "=== services ==="
-run 'for s in sddm e5-boot-ok e5-zram NetworkManager serial-getty@ttyGS0; do
+run 'for s in sddm e5-boot-ok e5-zram NetworkManager serial-getty@ttyGS0 \
+                e5-vendor e5-atd e5-mobile-data e5-mobile-data-watch e5-cp_diskserver e5-refnotify \
+                e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do
         systemctl enable $s.service >/dev/null 2>&1 && echo "enabled $s" || echo "FAILED $s"
      done
      systemctl set-default graphical.target >/dev/null 2>&1

@@ -1,13 +1,14 @@
 # e5-linux root filesystem package set.
 #
-# Plasma Mobile is the session the E5 is being built for.  The device has a
-# 480x320 DSI panel (lcd_st7365p_mipi_hdp) driven by the SPRD DRM/KMS driver, so
-# the session is Wayland with the DRM backend.
+# Phosh is the session the E5 runs (etc/sddm.conf autologins phosh.desktop).  The
+# device has a 480x320 DSI panel (lcd_st7365p_mipi_hdp) driven by the SPRD DRM/KMS
+# driver, so the session is Wayland with the DRM backend.  Plasma Mobile is still
+# installed and selectable from sddm -- docs/STATUS.md "Next" keeps whether it should
+# stay as an open question.
 #
-# No GPU driver exists for the UMS9621 in mainline Mesa, so rendering falls back
-# to llvmpipe (libgl1-mesa-dri / libegl-mesa0).  That is software rasterisation
-# at 480x320, which is slow but workable; it is the only option that does not
-# depend on a vendor blob we do not have.
+# Rendering is on the Mali-G57 through panfrost (kernel/patches/0005, MALI_MIDGARD=m),
+# which is what libgl1-mesa-dri / libegl-mesa0 carry.  llvmpipe is the fallback when a
+# client asks for what Valhall v9 cannot do; no vendor blob is involved either way.
 
 # --- base system ---
 systemd
@@ -57,6 +58,31 @@ libdrm-tests
 # --- networking ---
 network-manager
 rfkill
+# nftables: e5-mobile-data creates the NAT table for the USB/Wi-Fi clients and
+# the hotspot's forwarding depends on it.  ethtool: the sipa driver reports wrong
+# hardware checksums and mobile-data turns rx offload off.
+nftables
+ethtool
+
+# --- session ---
+# sddm autologins phosh.desktop (etc/sddm.conf in the overlay), so a fresh install
+# without it comes up to a display manager that has no session to start.  Plasma
+# Mobile stays installed and selectable.
+phosh
+phoc
+phosh-osk-stub
+squeekboard
+foot
+
+# --- Wi-Fi hotspot ---
+# hostapd runs the AP and iw sets the regulatory domain (regdb-load): with a
+# country and the signed regulatory.db the driver advertises 5725-5850 @ 80 MHz
+# and hostapd reaches AP-ENABLED (docs/FINDINGS.md 20).
+iw
+hostapd
+
+# --- UFI-TOOLS' terminal panel ---
+ttyd
 
 # --- audio (UCM for the UMS9621 codec is not ported; PipeWire is here so the
 #     stack exists once it is) ---

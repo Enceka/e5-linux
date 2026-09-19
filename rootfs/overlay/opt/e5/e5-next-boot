@@ -1,0 +1,53 @@
+#!/bin/bash
+# Choose what the E5 boots next and keep Linux as default safely.
+#   e5-next-boot linux    Linux stays the default (re-armed on every successful boot)
+#   e5-next-boot android  the next reboot, and every one after it, goes to Android
+#   e5-next-boot --rearm  used by e5-boot-ok after a successful boot
+#   e5-next-boot status
+#
+# Slot b is armed with tries=2 and successful=0 (misc-bc-slot-b-trial.bin).  LK decrements
+# tries on every boot, so if Linux never reaches e5-boot-ok the next boot sees tries=1 and
+# rolls back to slot a (Android) on its own.  boot/init works from the other side: it writes
+# the recorded slot-a block back unless /etc/e5linux/default-boot says linux, so a Linux boot
+# that dies before userspace cannot loop either.
+#
+# That is also why --rearm does nothing unless the default is linux: an image that was asked
+# for one trial boot must not keep re-arming itself.  Turning Linux into the persistent
+# default is therefore explicit -- "e5-next-boot linux" -- and it is the same command that
+# arms slot b, so the two can never disagree.
+#
+# `e5-next-boot android` is the way back to the stock system from a running Linux: it writes
+# the slot-a block and records the choice; reboot afterwards.
+#
+# (port of mu300-linux/rootfs/overlay/opt/mu300/bin/mu300-next-boot.  The E5 image has no
+#  .e5linux/boot-tries counter: the initramfs restore above is what plays that role.)
+set -eu
+CONF=/etc/e5linux/default-boot
+BC_A=/run/e5linux/misc-bc-slot-a.bin
+BC_B=/run/e5linux/misc-bc-slot-b-trial.bin
+MISC=$(cat /run/e5linux/misc-dev 2>/dev/null || readlink -f /dev/block/by-name/misc)
+
+write_bc() {
+    dd if="$1" of="$MISC" bs=1 seek=2048 conv=notrunc 2>/dev/null
+    sync
+    [ "$(dd if="$MISC" bs=1 skip=2048 count=32 2>/dev/null | od -An -tx1 -v | tr -d ' \n')" = "$(od -An -tx1 -v "$1" | tr -d ' \n')" ] \
+        || { echo "misc verify failed" >&2; exit 1; }
+}
+
+slot_state() {
+    b=$(dd if="$MISC" bs=1 skip=2048 count=32 2>/dev/null | od -An -tx1 -v | tr -d ' \n')
+    echo "misc bootloader_control: $b"
+    # This LK keeps one status byte per slot at 12 (a) and 14 (b) -- checked against
+    # dumps/misc-head.bin (a: 9f = prio 15/tries 9/successful 1) and the trial block
+    # (a: 9e, b: 2f = prio 15/tries 2/successful 0), which is what arming slot b does.
+    echo "  slot a info: ${b:24:2}  slot b info: ${b:28:2}  (prio<<0|tries<<4|successful<<7)"
+}
+
+case "${1:-status}" in
+    linux)   mkdir -p /etc/e5linux; echo linux > "$CONF"; write_bc "$BC_B"; echo "default boot: linux (slot b armed)" ;;
+    android) mkdir -p /etc/e5linux; echo android > "$CONF"; write_bc "$BC_A"; echo "next boot: android (slot a)" ;;
+    --rearm) [ "$(cat "$CONF" 2>/dev/null)" = linux ] && write_bc "$BC_B" && echo "slot b re-armed" || echo "default boot is not linux, nothing to do" ;;
+    status)  echo "default boot: $(cat "$CONF" 2>/dev/null || echo android)"
+             slot_state ;;
+    *) echo "usage: $0 linux|android|status" >&2; exit 2 ;;
+esac

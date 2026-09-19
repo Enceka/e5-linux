@@ -1,0 +1,25 @@
+#!/bin/sh
+# Repairs that the root filesystem build cannot guarantee.
+#
+# The tree is unpacked from a container image (fetch-debian-rootfs.py +
+# install-packages.sh) and pushed as a raw ext4 file, so xattrs do not always
+# survive: file capabilities in particular come out empty, and then ping fails
+# with "Operation not permitted" on a plain user account.
+#
+# (port of mu300-linux's rootfs-fixups.  Its third job -- replacing an empty
+#  /etc/resolv.conf with the systemd-resolved stub -- is deliberately not done
+#  here: on this image e5-mobile-data writes resolv.conf with the baseband's DNS
+#  servers, public resolvers first, and a symlink would fight with it.)
+for f in /usr/bin/ping /usr/bin/mtr-packet /usr/bin/arping; do
+    [ -x "$f" ] || continue
+    getcap "$f" 2>/dev/null | grep -q cap_net_raw || setcap cap_net_raw+ep "$f" 2>/dev/null || true
+done
+
+# /opt/e5 is on nobody's PATH, and sudo's secure_path cannot see it at all, so the
+# commands the documentation tells people to run need links from a directory that
+# is: `sudo e5-next-boot android`, `mobile-data status`, `e5-at "AT+CSQ"`.
+for c in e5-next-boot mobile-data e5-at; do
+    [ -x "/opt/e5/$c" ] || continue
+    [ -e "/usr/local/bin/$c" ] || ln -sfn "/opt/e5/$c" "/usr/local/bin/$c" 2>/dev/null || true
+done
+true

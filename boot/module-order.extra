@@ -123,3 +123,41 @@ matrix-keymap.ko
 # story in docs/FINDINGS.md section 8: the WCN modules cannot do anything until
 # /lib/firmware carries the firmware, and they now load with it in place.
 sprdbt_tty.ko
+
+# --- UMS9620 audio ------------------------------------------------------------
+# The audio card is a vendor UMP9620/VBC stack.  These modules are intentionally
+# staged together: the AGDSP genpd provider must precede its consumers, and the
+# card/dma symbol dependencies are resolved by gen-module-order.py.
+#
+# Commented out on 2026-09-19.  With them in the initramfs the device comes up,
+# reaches the login prompt, and then hard-resets about twenty seconds later --
+# the same "reboot after switch-root" the audio session of 2026-09-19 was left
+# with (docs/STATUS.md).  Measured: the same rootfs and the same boot image minus
+# these modules (the 78-module build the session called its last known-good) runs
+# for 16+ minutes with the session up.  Uncommenting is all it takes to go back
+# to the audio experiment; whatever starts the AGDSP (pipewire probing the card)
+# is what takes the board down.
+#agdsp_pd.ko
+#audio_mem.ko
+#audio_sipc.ko
+#mcdt_hw_r2p0.ko
+#sprd_audcp_boot.ko
+#sprd_audcp_dvfs.ko
+#audio-pipe.ko
+#audio-dsp-dump.ko
+#voice_trigger_irq.ko
+#sprd_apipe.ko
+#snd-soc-fsa4480.ko
+#snd-soc-sprd-pa-aw87xxx.ko
+#snd-soc-sprd-card.ko
+#snd-soc-sprd-codec-ump9620.ko
+#snd-soc-sprd-codec-ump9620-power.ko
+#snd-soc-sprd-codec-ump9620-power-dev.ko
+#snd-soc-sprd-dummy-codec.ko
+#snd-soc-sprd-pdm-r2p0.ko
+#snd-soc-sprd-tdm.ko
+#snd-soc-sprd-vbc-v4.ko
+#snd-soc-sprd-vbc-fe.ko
+#sprd-compr-2stage-dma.ko
+#sprd-dmaengine-pcm.ko
+#sprd-platform-pcm-routing.ko

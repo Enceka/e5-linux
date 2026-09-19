@@ -51,6 +51,10 @@ MANAGED_DIRS = ['opt/e5', 'usr/local/sbin', 'etc/e5', 'etc/e5linux', 'etc/phosh'
 # a device through rootfs.ext4 -- worth saying out loud when one differs.
 DOT_EXCLUDED = re.compile(r'(^|/)\.[^/]')
 
+# macOS droppings: gitignored, skipped by the builder as a dot-path anyway, and
+# recreated by Finder the moment anyone opens the directory.  Not a device fault.
+JUNK = {'.DS_Store'}
+
 
 def sh(cmd, **kw):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, **kw)
@@ -116,14 +120,15 @@ def tree_overlay(root):
     out = set()
     for path in Path(root).rglob('*'):
         rel = path.relative_to(root)
-        if path.is_file() and not any(p.startswith('.') for p in rel.parts):
+        if path.is_file() and path.name not in JUNK and not any(p.startswith('.') for p in rel.parts):
             out.add(str(rel))
     return out
 
 
 def tree_overlay_all(root):
     """Everything the overlay would put on a device, dot-directories included."""
-    return set(str(p.relative_to(root)) for p in Path(root).rglob('*') if p.is_file())
+    return set(str(p.relative_to(root)) for p in Path(root).rglob('*')
+               if p.is_file() and p.name not in JUNK)
 
 
 # ------------------------------------------------------------------- device

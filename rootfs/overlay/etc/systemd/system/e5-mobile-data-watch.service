@@ -1,0 +1,14 @@
+[Unit]
+ConditionPathExists=|/dev/modem
+Description=E5 mobile data watchdog (reconnect after modem resets)
+After=e5-mobile-data.service
+Wants=e5-mobile-data.service
+
+[Service]
+Type=simple
+ExecStart=/opt/e5/mobile-data watch
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

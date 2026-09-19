@@ -1,0 +1,13 @@
+#!/bin/sh
+# Run an Android vendor daemon inside the chroot prepared by vendor-start.sh
+# (e5-vendor.service).  Port of mu300-linux's android-run: the binary is exec'd
+# directly so its task name (comm) matches what the vendor drivers expect, and
+# the chroot's mounts are waited for instead of assuming the vendor service has
+# finished.
+set -e
+A=/opt/e5/android
+for n in $(seq 1 60); do mountpoint -q "$A/dev" && break; sleep 1; done
+# a preloaded library from the host cannot be loaded by bionic's linker
+unset LD_PRELOAD
+export LD_LIBRARY_PATH=/apex/com.android.runtime/lib64/bionic:/system/lib64:/vendor/lib64
+exec chroot "$A" /vendor/bin/"$1"

@@ -1,0 +1,129 @@
+#!/bin/sh
+# Keep the modem's AT channel open and hand it out one command at a time.
+# (port of mu300-linux/rootfs/overlay/opt/mu300/bin/mu300-atd)
+#
+# /dev/stty_nr* are SIPC channels, not real serial ports, and only one reader gets the data: while this daemon
+# holds the channel, a second process that opens the device reads nothing. Android's RIL keeps its port open for
+# the lifetime of the system, and so does this daemon, so that AT commands cost one open instead of one per call.
+#
+# The one case where the descriptor has to be replaced is a modem restart (AT+SFUN=4, or a CP crash): the old
+# descriptor then refers to a channel that no longer exists and stays silent for ever, while still occupying the
+# device. The loop below notices that and reopens - see the comment there.
+#
+#   e5-atd               run in the foreground (used by the service)
+#   e5-at "AT+CSQ"       ask the daemon (see e5-at)
+#
+# Reading this tty needs a shell with "read -t":
+#   * dash (which is /bin/sh on Ubuntu and Debian) has no -t at all. Every read fails instantly with "Illegal
+#     option", the reply loop spins through its timeout and the command comes back empty.
+#   * The tty's own timer cannot replace it: "stty min 0 time 5" is ignored by this driver, which blocks in
+#     sbuf_read until the modem says something - possibly for ever.
+# bash and busybox ash both implement -t with poll(), which this driver does support, so run under one of them.
+set -u
+# this image keeps the applets it needs in /usr/bin, and /opt/e5/bin next to us
+export PATH="$PATH:/opt/e5/bin:/usr/sbin:/sbin"
+if [ -n "$(read -t 1 _probe </dev/null 2>&1)" ]; then
+    for sh in /bin/bash /usr/bin/bash /bin/busybox; do
+        [ -x "$sh" ] || continue
+        case $sh in */busybox) exec "$sh" ash "$0" "$@" ;; *) exec "$sh" "$0" "$@" ;; esac
+    done
+    echo "e5-atd: need bash or busybox ash (this shell has no 'read -t')" >&2; exit 1
+fi
+DEV=${E5_AT_DEV:-/dev/stty_nr1}
+DIR=${E5_AT_DIR:-/run/e5-at}
+CMD=$DIR/cmd
+CR=$(printf '\r')
+
+[ -c "$DEV" ] || { echo "e5-atd: $DEV is not a character device" >&2; exit 1; }
+mkdir -p "$DIR"
+rm -f "$CMD"
+mkfifo -m 600 "$CMD"
+
+# the one open that everything else borrows
+open_tty() {
+    # upstream closes fd 3 with "exec 3<&- 2>/dev/null", which would also silence this shell's stderr for good
+    if [ -e /proc/self/fd/3 ]; then exec 3<&-; fi
+    exec 3<>"$DEV" || return 1
+    # on fd 3, not "stty -F $DEV": the -F form opens and closes the tty a second time
+    stty raw -echo <&3 2>/dev/null || true
+}
+open_tty || { echo "e5-atd: cannot open $DEV" >&2; exit 1; }
+
+trap 'rm -f "$CMD"; exit 0' INT TERM
+trap "" PIPE   # a client that gave up waiting must not kill the daemon
+silent=0       # consecutive commands the modem did not answer
+
+now() { date +%s; }
+
+drain() {  # throw away whatever the modem sent while nobody was asking (URCs), so replies are not mixed up
+    end=$(( $(now) + 3 ))
+    while [ "$(now)" -lt "$end" ]; do
+        junk=
+        IFS= read -r -t 1 junk <&3 || break   # nothing for a second: the channel is quiet again
+    done
+}
+
+collect() {  # collect TIMEOUT -> the reply lines, up to the final result code
+    end=$(( $(now) + $1 ))
+    while [ "$(now)" -lt "$end" ]; do
+        l=
+        IFS= read -r -t 2 l <&3 || continue
+        l=${l%"$CR"}
+        [ -n "$l" ] || continue
+        echo "$l"
+        case $l in
+            OK|ERROR|+CME\ ERROR*|+CMS\ ERROR*|CONNECT*|NO\ CARRIER) return 0 ;;
+        esac
+    done
+}
+
+echo "e5-atd: holding $DEV, serving $CMD" >&2
+
+while :; do
+    line=
+    # blocks until a client sends something
+    if ! read -r line 2>/dev/null < "$CMD"; then
+        # EINTR because a client went away, or the fifo being replaced: do not spin
+        [ -p "$CMD" ] || sleep 1
+        continue
+    fi
+    [ -n "$line" ] || continue
+    # "SECONDS /path/to/answer AT+COMMAND": the answer goes into a file of the client's choosing. A fifo needs
+    # both ends at once, and a client that gave up (or was killed) left the daemon or a leftover writer blocked
+    # on it for ever, which wedged every later command.
+    t=${line%% *}
+    case $t in
+        [0-9]|[0-9][0-9]) rest=${line#* } ;;
+        *) t=6; rest=$line ;;
+    esac
+    answer=
+    case $rest in
+        /*) answer=${rest%% *}; cmd=${rest#* } ;;
+        *) cmd=$rest ;;
+    esac
+    drain
+    printf '%s\r' "$cmd" >&3
+    reply=$(collect "$t")
+    # When the modem restarts (AT+SFUN=4 during a bring-up, or a CP crash) this descriptor is left attached to a
+    # channel that no longer exists: it reads nothing for ever, and because it still holds the channel, nobody
+    # else can talk to the modem either - which is what used to look like "the tty is wedged until the modem is
+    # restarted". Reopening it is all that is needed, so do that after two silent commands and try once more.
+    if [ -z "$reply" ]; then
+        silent=$((silent + 1))
+        if [ "$silent" -ge 2 ]; then
+            echo "e5-atd: no reply twice, reopening $DEV" >&2
+            if open_tty; then
+                silent=0
+                drain
+                printf '%s\r' "$cmd" >&3
+                reply=$(collect "$t")
+            fi
+        fi
+    else
+        silent=0
+    fi
+    if [ -n "$answer" ]; then
+        # write it complete, then move it into place, so the client never reads half an answer
+        printf '%s\n' "$reply" > "$answer.part" 2>/dev/null && mv "$answer.part" "$answer" 2>/dev/null
+    fi
+done

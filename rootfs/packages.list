@@ -1,10 +1,9 @@
 # e5-linux root filesystem package set.
 #
-# Phosh is the session the E5 runs (etc/sddm.conf autologins phosh.desktop).  The
-# device has a 480x320 DSI panel (lcd_st7365p_mipi_hdp) driven by the SPRD DRM/KMS
-# driver, so the session is Wayland with the DRM backend.  Plasma Mobile is still
-# installed and selectable from sddm -- docs/STATUS.md "Next" keeps whether it should
-# stay as an open question.
+# Phosh is the session the E5 runs (etc/sddm.conf autologins phosh.desktop) and the only
+# one installed: the Plasma Mobile half was dropped on 2026-09-19, together with the X11
+# it dragged in.  The device has a 480x320 DSI panel (lcd_st7365p_mipi_hdp) driven by
+# the SPRD DRM/KMS driver, so the session is Wayland with the DRM backend.
 #
 # Rendering is on the Mali-G57 through panfrost (kernel/patches/0005, MALI_MIDGARD=m),
 # which is what libgl1-mesa-dri / libegl-mesa0 carry.  llvmpipe is the fallback when a
@@ -34,16 +33,17 @@ e2fsprogs
 dosfstools
 parted
 
-# --- Plasma Mobile session ---
-plasma-mobile
-plasma-workspace
-kwin-wayland
-kwin-x11
+# --- session: phosh on Wayland ---
+# The whole X11/KDE side is gone -- no plasma-mobile, plasma-workspace, kwin-wayland,
+# kwin-x11 or xdg-desktop-portal-kde.  Plasma was what put /usr/bin/X on this image,
+# which is why etc/sddm.conf.d/10-e5.conf has to force DisplayServer=wayland
+# (docs/STATUS.md, "Traps found the hard way").  qt6-wayland stays for sddm's own QML
+# greeter; xdg-desktop-portal is the daemon, and a fresh install currently has no backend
+# for it -- see "Open questions" in docs/STATUS.md.
 sddm
 polkitd
 qt6-wayland
 xdg-desktop-portal
-xdg-desktop-portal-kde
 fonts-noto-core
 fonts-noto-color-emoji
 fonts-dejavu-core
@@ -64,10 +64,9 @@ rfkill
 nftables
 ethtool
 
-# --- session ---
+# --- phosh: the session itself ---
 # sddm autologins phosh.desktop (etc/sddm.conf in the overlay), so a fresh install
-# without it comes up to a display manager that has no session to start.  Plasma
-# Mobile stays installed and selectable.
+# without these comes up to a display manager that has no session to start.
 phosh
 phoc
 phosh-osk-stub

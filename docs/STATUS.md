@@ -231,14 +231,14 @@ The device is on Android (slot a) as of this audit.
 
 ## Open questions
 
-- **`packages.list` still installs the Plasma half of the session.**  The comment above
-  it now describes reality (phosh is the session, panfrost does the rendering), but the
-  list still pulls in `plasma-mobile`, `plasma-workspace`, `kwin-wayland`,
-  `kwin-x11` and `xdg-desktop-portal-kde`, and `etc/sddm.conf.d/10-e5.conf` says the
-  X11/KDE session "is purged".  Either drop those five (a fresh install is then
-  phosh-only) or keep Plasma selectable and fix that comment -- it is a decision, not a
-  bug, and it is the last thing in the fresh-install path that still carries the old
-  design.
+- **`xdg-desktop-portal` has no backend in a fresh install.**  The Plasma half of the
+  session was dropped on 2026-09-19: `packages.list` no longer installs `plasma-mobile`,
+  `plasma-workspace`, `kwin-wayland`, `kwin-x11` or `xdg-desktop-portal-kde`, and the
+  five `home/e5/.config/autostart/*.desktop` stubs that suppressed KDE's own autostart
+  entries went with them (packages.list keeps the reasoning).  That leaves
+  `xdg-desktop-portal` with nothing to hand requests to, so the next thing to decide is
+  which backend the phosh session wants: `xdg-desktop-portal-gtk` (file chooser,
+  notifications) or `xdg-desktop-portal-wlr` (screencast -- phoc is wlroots-based).
 
 ### 2026-09-18, late (this round)
 

@@ -1,7 +1,7 @@
 #!/bin/sh
-# The E5 has 1.5 GiB of RAM and Plasma Mobile is not small, so a compressed swap
-# device is not optional.  zram is built into the kernel (CONFIG_ZRAM=y), so this
-# needs no module load.
+# The E5 has 1.5 GiB of RAM and a Wayland session with a browser is not small, so a
+# compressed swap device is not optional.  zram is built into the kernel (CONFIG_ZRAM=y),
+# so this needs no module load.
 set -e
 size=${E5_ZRAM_SIZE:-4G}
 comp=${E5_ZRAM_COMP:-zstd}

@@ -154,8 +154,9 @@ rootfs/build-rootfs-container.sh            # all stages -> out/rootfs.ext4 (8 G
 rootfs/install-rootfs.sh out/rootfs.ext4    # push in 1 GiB chunks, verify, publish
 ```
 
-`build-rootfs-container.sh` installs `rootfs/packages.list` (phosh and
-plasma-mobile, `hostapd`/`iw` for the hotspot, `nftables` for NAT, pipewire, ...)
+`build-rootfs-container.sh` installs `rootfs/packages.list` (phosh -- the only session
+since 2026-09-19, Plasma Mobile and its X11 are no longer in the list --,
+`hostapd`/`iw` for the hotspot, `nftables` for NAT, pipewire, ...)
 into a Debian trixie arm64 tree, copies `rootfs/overlay/` over it, creates the `e5`
 user, enables the units and packs the result.  The image is **8 GiB by default**
 (`E5_IMG_MIB=N` overrides it): the loop file is the only writable filesystem on the

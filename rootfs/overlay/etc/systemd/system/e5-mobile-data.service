@@ -1,0 +1,22 @@
+[Unit]
+# the vendor modem loader exists only while the Android subset is installed
+# (mu300-linux also gates on |/dev/pmsys; this board only has /dev/modem)
+ConditionPathExists=|/dev/modem
+Description=E5 mobile data (AT + sipa_eth0) with NAT for USB/Wi-Fi clients
+After=e5-vendor.service e5-atd.service network-online.target
+Wants=e5-vendor.service e5-atd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# the modem needs a little time after "Modem Alive" before the SIM answers
+ExecStartPre=/bin/sleep 15
+ExecStart=/opt/e5/mobile-data up
+ExecStop=/opt/e5/mobile-data down
+# tearing the data call down talks to the modem; a reboot must not wait for that
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

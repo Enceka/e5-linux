@@ -1,0 +1,15 @@
+[Unit]
+ConditionPathExists=|/dev/modem
+Description=E5 Android vendor daemon cp_diskserver
+# the modem asks for its NV data while it boots, so bind the channel before modem_control starts it
+# (android-run waits for the chroot itself, so this does not need the vendor service to have finished)
+Before=e5-vendor.service
+Requires=e5-vendor.service
+
+[Service]
+ExecStart=/opt/e5/android-run cp_diskserver
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

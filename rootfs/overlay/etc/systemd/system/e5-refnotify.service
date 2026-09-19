@@ -1,0 +1,15 @@
+[Unit]
+ConditionPathExists=|/dev/modem
+Description=E5 Android vendor daemon refnotify (modem reference clock)
+After=e5-vendor.service
+Requires=e5-vendor.service
+
+[Service]
+# modem_control needs a few seconds to bring the modem up before its helpers can attach
+ExecStartPre=/bin/sleep 12
+ExecStart=/opt/e5/android-run refnotify
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -2216,3 +2216,157 @@ channel is a reboot, done by `rootfs/overlay/opt/e5/cp-watchdog`
   stop is issued late in the sequence, so the time is spent before it is reached.
   Re-measure on a booted image before believing anything else here.
 
+
+## 24. Audio: the AP path streams, ALSA never sees a period, and the AGDSP is the missing piece
+
+The vendor sound stack does come up on this port -- card `sprdphone-sc2730`, codec
+`ump9620`, the AW87xxx smart PA on i2c 6-0058 parsing its profile out of
+`aw87xxx_acf.bin` -- but two things must also be true before a PCM can even be
+opened, and a third before an ALSA client can finish a buffer.
+
+### 24.1 What the stack needs to load
+
+* The audio modules (`sound/soc/sprd/unisoc/*` + `drivers/unisoc_platform/sprd_audio/*`,
+  24 modules) are loaded from the initramfs by a name list, so their *order* is ours.
+  `sprd_dmaengine_pcm` failed with `Unknown symbol get_sp_audio_debug_flag /
+  sprd_tdm_dai_to_config / sprd_mmap_fd_set (err -2)` because two of those three are
+  exported by `snd_soc_sprd_card.ko`, which was listed *after* it; deriving the order
+  from real symbol dependencies (`nm -g --defined-only` / `-u`) fixed that, and
+  `stage=modules-done loaded=91 failed=0` is the check that it stayed fixed.
+* The ASoC card also wants the AGDSP power domain.  With `agdsp_pd.ko` absent or
+  neutralised, `asoc_sprd_card_parse_of: Parsing dai link 0 failed(-517)` loops
+  forever, because the codec and the VBC DAI name that domain as their
+  `power-domains` provider.  The three variants that were tried are in the STATUS
+  narrative; the tree carries the hybrid one now (no legacy `smsg` kthread, PMU state
+  read before the mailbox wake, no vendor power-off sequence).
+
+### 24.2 The AP path itself works
+
+Two controls turn "the DMA runs one burst and stops" into "the VBC FIFO drains":
+
+* `agdsp_access_en` = 1, which is `REG_AON_APB_AUDCP_CTRL` (0x6490014c) bit 5,
+  `MASK_AON_APB_AP_2_AUD_ACCESS_EN`.  It opens AP access to the AGCP domain, and with
+  it the `audcp-{vbc,aud,dma-ap,mcdt,icu,tmr-26m,dvfs-aspb,intc}-eb` clocks match
+  Android's.  Measured: 0x6490014c reads 0x20 with it, and the DMA pointer then
+  advances and wraps instead of stalling after a single 640-byte burst.
+* `VBC DAC0 DG Set` must be non-zero (Android runs it at 39,39).  Linux leaves it at
+  0, which is digital silence however well the route is wired.
+
+The full list is `/root/e5-spk-recipe.sh` on the device, derived by diffing Android's
+mixer state (`/system/bin/tinymix`) while it was playing a ringtone against Linux's
+idle state.  With it applied a playback to `hw:0,0` really does stream: with the two
+AGCP DMA channels enabled (`GLB_CHN_EN_STS` 0x5665001c = 0x3), the VBC playback FIFO
+status (0x56510034) walks 0x29c21 -> 0xd4a1 -> 0x1a0c1 -> 0x17ce1 as the DMA consumes
+it.
+
+### 24.3 The blocker: no period boundary ever reaches ALSA
+
+Measured during that playback (`busybox devmem`):
+
+| where | register | value |
+| --- | --- | --- |
+| AGCP DMA @0x56650000 | `GLB_INT_RAW_STS` 0x10 | 0x3 |
+| | `GLB_INT_MSK_STS` 0x14 | 0x3 |
+| | `GLB_REQ_STS` 0x18 | 0x0 |
+| | `GLB_CHN_EN_STS` 0x1c | 0x3 |
+| VBC AP regs @0x56510000 | `AUDPLY_FIFO_CTRL` 0x20 | 0x00f00650 |
+| | `AUD_EN` 0x2c | 0x300 |
+| | `AUDPLY_FIFO0_STS` 0x34 | moving |
+| | `AUD_INT_EN` 0x44 | 0x4 |
+| | `AUD_INT_STS` 0x48 | 0x10 (sticky) |
+| | `AUD_CHNL_INT_SEL` 0x4c | 0x0000 |
+| | `AUD_DMA_EN` 0x50 | 0x3 |
+
+Both interrupt-status registers sit pending and are never cleared, and the
+`/proc/interrupts` lines `28: GICv3 251 sprd_dma` (AP DMA) and `40: GICv3 87
+sprd_dma` -- the DT's `agcp_dma@56650000`, `interrupts = <GIC_SPI 55>` -- both stay
+at 0 for the whole run.  The data path completes, the completion *event* does not:
+nothing in the vendor audio tree calls `snd_pcm_period_elapsed()` except the DMA
+callback `sprd_pcm_dma_buf_done()`, and that callback never runs.
+
+Two definitions the routing would need are dead code here: `REG_VBC_AUD_CHNL_INT_SEL`
+(0x004c, the AP/DSP channel-interrupt selector) and its DSP-window twin
+`REG_VBC_CHNL_INT_SEL` (`VBC_DSP_ADDR_BASE + 0x0f74`) are *defined but never
+written*, and `REG_VBC_AUD_INT_EN` (0x0044) has no writer either.  On Android that is
+the AGDSP firmware's job -- the one piece this port does not run.
+
+What that does to a plain ALSA client:
+
+* `sprd_pcm_pointer()` is not the problem.  It returns
+  `dmaengine_tx_status().residue`, and `sprd_dma_tx_status()` reads the *live*
+  channel address (`sprd_dma_get_src_addr()` / `sprd_dma_get_dst_addr()`) whenever the
+  descriptor is the current one, so the position is accurate without a single
+  interrupt.
+* ALSA's *cached* `hw_ptr`, however, only moves when the driver calls
+  `snd_pcm_period_elapsed()`.  Probe on `hw:0,0`: the first two 4096-frame blocking
+  writes return immediately (avail 5504 -> 1408), the third blocks and never returns,
+  and `snd_pcm_drain()` then waits forever because its loop only breaks on the state
+  change a period tick would have produced.  `aplay` prints `Playing WAVE ...` and
+  hangs in exactly the same place.
+* Android never sees this because its HAL opens the PCM with `PCM_NOIRQ`
+  (`SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP`): `sprd-dmaengine-pcm.c` then builds the
+  link-list node with `SPRD_DMA_FLAGS(0, 0, SPRD_DMA_FRAG_REQ, SPRD_DMA_NO_INT)` and
+  registers no callback at all -- it feeds the DMA from a timer and never waits on a
+  period.  `p_wakeup = !(params->flags & SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP)` is the
+  whole difference.
+
+### 24.4 The tried fix, reverted, and the two traps in it
+
+A software period ticker calling `snd_pcm_period_elapsed()` (module parameter
+`period_timer`, delay `period_size / rate`) was added to `sprd-dmaengine-pcm.c` and
+tried as a `timer_list` and then as a `delayed_work`.  Both images panicked within
+about a minute of the desktop session opening the PCM, so the change was dropped in
+full and the trigger was never isolated.  What the attempt did establish:
+
+* **A softirq cannot be the context.**  `normal_dma_protect_spin_lock()` is
+  `spin_lock(&pm_dma->pm_splk_dma_prot)` -- plain `spin_lock()`, no irqsave -- and
+  `sprd_pcm_pointer()` takes it for the normal playback streams, as do
+  open/hw_params/trigger/hw_free/close.  A timer that lands on a CPU already inside one
+  of those sections spins on a lock that CPU can only release after the softirq
+  returns: a soft lockup, and this configuration panics on one
+  (`CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC=y`, `CONFIG_BOOTPARAM_HUNG_TASK_PANIC=y`).  A
+  workqueue removes that self-deadlock, but the second image still died.
+* **Do not cancel synchronously where a tick can re-enter.**  A period tick can drive
+  `snd_pcm_stop()` into the driver's `trigger(STOP)`, so anything armed there must use
+  `cancel_delayed_work()`; only `sprd_pcm_close()` may use the `_sync` form, and ALSA
+  does reach it without the stream lock (`snd_pcm_release_substream()` calls
+  `do_hw_free()` and `ops->close()` outside the lock).  `sprd_pcm_hw_free()` releases
+  the DMA channels and `sprd_pcm_close()` frees `rtd`, so the tick has to be stopped
+  before either.
+
+No panic text survived: `sysdump.ko` is not in the image, so `sysdumpdb` still holds
+only Android's old reports, and `/sys/fs/pstore` stays empty even though ramoops
+registers as a backend.  The one thing that did work is the 4 MiB block at 56 MiB
+inside `boot_b` that `boot/init` rewrites every 15 s
+(`dd if=/dev/block/by-name/boot_b bs=1M skip=56 count=8` from Android reads it back):
+it stops at `switch-root`, so a copy of that loop inside the real rootfs is what
+captured the last `dmesg` before a post-switch-root death.
+
+### 24.5 Two boot traps found while chasing the panics
+
+* **`sysctl.kernel.panic_on_oops=0` must stay in the cmdline.**  This config sets
+  `CONFIG_PANIC_ON_OOPS=y`, and the image has a pre-existing oops at ~25 s:
+  `Unable to handle kernel paging request at virtual address ffffffc00ac1b7d8` with
+  `string -> vsnprintf -> add_uevent_var -> kobject_uevent_env -> kobject_synth_uevent
+  -> uevent_store`.  An image whose cmdline dropped the parameter panics on that same
+  oops; with it, the task dies and the boot continues.  The `_regulator_disable`
+  WARNING (`drivers/regulator/core.c:3002`, twice a boot) and the `dev_watchdog`
+  TX-timeout WARNING (`net/sched/sch_generic.c:481`) are noise.
+* **From Android, arm the slot and reset with sysrq, not `adb reboot`.**  Android's
+  init rewrites the A/B metadata on a clean reboot, so a slot-b BCB written just before
+  `adb reboot` is lost and the device comes back on slot a.
+  `echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger` resets without that
+  rewrite and boots the armed slot (verified both ways).
+
+### 24.6 What is still open
+
+* Route the completion interrupt to the AP: find who is supposed to write
+  `REG_VBC_AUD_CHNL_INT_SEL` / `REG_VBC_AUD_INT_EN`, or whether the AGCP DMA line is
+  simply not wired to the GIC on this part.  The AGDSP firmware is the suspect for
+  both, and it is not running here.
+* Or tick the period from a context that cannot deadlock on `pm_splk_dma_prot` -- a
+  kthread with a try-lock, or making that lock irqsave where the process-context paths
+  take it -- and stop it before `sprd_pcm_hw_free()` / `sprd_pcm_close()`.
+* Or sidestep the question for a first audibility test: open the PCM
+  `PCM_NOIRQ`-style (`SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP`), feed it at a fixed rate
+  and listen.  That path needs no interrupt at all, and it is the one Android uses.

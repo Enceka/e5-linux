@@ -1,0 +1,20 @@
+[Unit]
+# The WCN chip refuses to power on often enough that e5-hotspot can come out of a
+# boot with no AP at all, and the unit is a oneshot: nothing retries it.  A manual
+# "systemctl restart e5-hotspot" is not the answer either -- that runs the whole
+# WCN power cycle, which has taken the USB gadget (and with it the management LAN
+# and the serial console) down with it twice.
+#
+# The timer re-runs the hotspot service every ten minutes.  The service is a
+# no-op when hostapd is already up, so the only cost once it works is a pgrep.
+Description=E5 Wi-Fi hotspot retry (WCN power-on is flaky at boot)
+After=e5-vendor.service
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+Unit=e5-hotspot.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target

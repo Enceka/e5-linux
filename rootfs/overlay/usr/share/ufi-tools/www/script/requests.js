@@ -1,13 +1,9 @@
 function SHA256(e) { function t(e, t) { var n = (65535 & e) + (65535 & t); return (e >> 16) + (t >> 16) + (n >> 16) << 16 | 65535 & n } function n(e, t) { return e >>> t | e << 32 - t } function r(e, t) { return e >>> t } function o(e, t, n) { return e & t ^ ~e & n } function i(e, t, n) { return e & t ^ e & n ^ t & n } function a(e) { return n(e, 2) ^ n(e, 13) ^ n(e, 22) } function s(e) { return n(e, 6) ^ n(e, 11) ^ n(e, 25) } function c(e) { return n(e, 7) ^ n(e, 18) ^ r(e, 3) } function u(e) { return n(e, 17) ^ n(e, 19) ^ r(e, 10) } var l = 8, d = 1; return e = function (e) { e = e.replace(/\\r\\n/g, "\\n"); for (var t = "", n = 0; n < e.length; n++) { var r = e.charCodeAt(n); r < 128 ? t += String.fromCharCode(r) : r > 127 && r < 2048 ? (t += String.fromCharCode(r >> 6 | 192), t += String.fromCharCode(63 & r | 128)) : (t += String.fromCharCode(r >> 12 | 224), t += String.fromCharCode(r >> 6 & 63 | 128), t += String.fromCharCode(63 & r | 128)) } return t }(e), function (e) { for (var t = d ? "0123456789ABCDEF" : "0123456789abcdef", n = "", r = 0; r < 4 * e.length; r++)n += t.charAt(e[r >> 2] >> 8 * (3 - r % 4) + 4 & 15) + t.charAt(e[r >> 2] >> 8 * (3 - r % 4) & 15); return n }(function (e, n) { var r, l, d, p, h, f, m, g, _, b, v, $, S = new Array(1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221, 3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580, 3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986, 2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895, 666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037, 2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344, 430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779, 1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298), y = new Array(1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225), C = new Array(64); e[n >> 5] |= 128 << 24 - n % 32, e[15 + (n + 64 >> 9 << 4)] = n; for (var _ = 0; _ < e.length; _ += 16) { r = y[0], l = y[1], d = y[2], p = y[3], h = y[4], f = y[5], m = y[6], g = y[7]; for (var b = 0; b < 64; b++)C[b] = b < 16 ? e[b + _] : t(t(t(u(C[b - 2]), C[b - 7]), c(C[b - 15])), C[b - 16]), v = t(t(t(t(g, s(h)), o(h, f, m)), S[b]), C[b]), $ = t(a(r), i(r, l, d)), g = m, m = f, f = h, h = t(p, v), p = d, d = l, l = r, r = t(v, $); y[0] = t(r, y[0]), y[1] = t(l, y[1]), y[2] = t(d, y[2]), y[3] = t(p, y[3]), y[4] = t(h, y[4]), y[5] = t(f, y[5]), y[6] = t(m, y[6]), y[7] = t(g, y[7]) } return y }(function (e) { for (var t = Array(), n = (1 << l) - 1, r = 0; r < e.length * l; r += l)t[r >> 5] |= (e.charCodeAt(r / l) & n) << 24 - r % 32; return t }(e), e.length * l)) }
 function gsmEncode(text) { function encodeText(text) { let encoded = []; for (let i = 0; i < text.length; i++) { const char = text[i]; const codePoint = char.codePointAt(0); if (codePoint <= 0xFFFF) { encoded.push((codePoint >> 8) & 0xFF); encoded.push(codePoint & 0xFF) } else { const highSurrogate = 0xD800 + ((codePoint - 0x10000) >> 10); const lowSurrogate = 0xDC00 + ((codePoint - 0x10000) & 0x3FF); encoded.push((highSurrogate >> 8) & 0xFF); encoded.push(highSurrogate & 0xFF); encoded.push((lowSurrogate >> 8) & 0xFF); encoded.push(lowSurrogate & 0xFF) } } return encoded } function toHexString(byteArray) { return byteArray.map(byte => byte.toString(16).padStart(2, '0')).join('') } const encodedBytes = encodeText(text); return toHexString(encodedBytes) }
-//注意，如果是在f50本机内发起请求，请将请求端口更改为8080
+// 本机 API 前缀：前端与后台同源，固定用相对路径。
 let KANO_baseURL = '/api'
-let KANO_PASSWORD = null
 let KANO_TOKEN = null
 let ACCEPT_TERMS = false
-let KANO_COOKIE = null
-
-let loginMethod = localStorage.getItem('login_method') == "1" ? "1" : "0"; //1新方法，0旧方法
 
 const originFetch = window.fetch;
 
@@ -69,7 +65,8 @@ const originFetch = window.fetch;
     };
 })();
 
-//登录
+// 请求头：唯一凭据是 UFI-TOOLS 口令（Authorization），
+// 不存在厂商后台，也不存在会话 Cookie。
 const common_headers = {
     "referer": KANO_baseURL + '/index.html',
     "host": KANO_baseURL,
@@ -77,291 +74,72 @@ const common_headers = {
     "authorization": KANO_TOKEN
 }
 
-const requestIsLogin = async () => {
-    const res = await fetch(KANO_baseURL + "/goform/goform_get_cmd_process?isTest=false&cmd=loginfo&_=" + Date.now(), {
-        method: "GET",
-        headers: {
-            "kano-cookie": KANO_COOKIE,
-            ...common_headers,
-        }
-    })
-    return await res.json()
-}
-
-const getCookieFromUFI = async () => {
+// 确保已授权。返回真值表示可以继续请求，null 表示没有口令或口令不被接受。
+// 调用方（main.js）把它当作“确保已登录”，名字沿用 login()。
+const login = async () => {
+    const TOKEN = KANO_TOKEN || localStorage.getItem('kano_sms_token') || ''
+    if (isNeedToken && !TOKEN) return null
+    KANO_TOKEN = TOKEN || ''
+    common_headers.authorization = KANO_TOKEN
     try {
-        const res = await fetch(KANO_baseURL + "/get_cookie", {
-            method: "GET",
-            headers: {
-                ...common_headers,
-            }
-        })
-        return await res.json()
+        // 任意一个需要鉴权的接口都能当探针；这里用最轻的一个。
+        const res = await fetchWithTimeout(KANO_baseURL + '/is_weak_token', {}, 5000)
+        return res.ok ? true : null
     } catch {
         return null
     }
 }
 
-const setCookieToUFI = async (ck) => {
-    try {
-        const res = await fetch(KANO_baseURL + "/set_cookie", {
-            method: "POST",
-            headers: {
-                ...common_headers,
-            },
-            body: JSON.stringify({ cookie: ck })
-        })
-        return await res.json()
-    } catch {
-        return null
-    }
-}
-
-const setKanoCookie = async (ck) => {
-    if (!ck) return
-    KANO_COOKIE = ck
-    try {
-        const res = await setCookieToUFI(ck)
-        return res.result
-    } catch {
-        return false
-    }
-}
-
-const login1 = async () => {
-    try {
-        const { LD } = await getLD()
-        if (!LD) throw new Error('无法获取LD')
-
-        const pwd = SHA256(SHA256(KANO_PASSWORD) + LD)
-        const body = new URLSearchParams({
-            "goformId": "LOGIN",
-            "isTest": "false",
-            "password": pwd,
-            "user": "admin"
-        })
-        const res = await fetch(KANO_baseURL + "/goform/goform_set_cmd_process", {
-            method: "POST",
-            headers: {
-                ...common_headers,
-                "content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            },
-            body
-        })
-        const res_data = await res.json()
-        if (res_data == undefined || res_data == null || res_data.result == '3' || res_data.result == 3) {
-            return null
-        }
-        const ck = res.headers.get('kano-cookie').split(';')[0]
-        // KANO_COOKIE = ck
-        await setKanoCookie(ck)
-        return ck
-    }
-    catch {
-        return null
-    }
-}
-
-let login2 = async () => {
-    try {
-        const { LD } = await getLD()
-        if (!LD) throw new Error('无法获取LD')
-
-        const pwd = SHA256(SHA256(KANO_PASSWORD) + LD)
-        const body = new URLSearchParams({
-            "goformId": "LOGIN_MULTI_USER",
-            "isTest": "false",
-            "password": pwd,
-            "IP": "localhost",
-            "user": "admin"
-        })
-        const res = await fetch(KANO_baseURL + "/goform/goform_set_cmd_process", {
-            method: "POST",
-            headers: {
-                ...common_headers,
-                "content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            },
-            body
-        })
-        const res_data = await res.json()
-        if (res_data == undefined || res_data == null || res_data.result == '3' || res_data.result == 3) {
-            return null
-        }
-        //设置全局cookie
-        const ck = res.headers.get('kano-cookie').split(';')[0]
-        // KANO_COOKIE = ck
-        await setKanoCookie(ck)
-        return ck
-    }
-    catch {
-        return undefined
-    }
-}
-
-let login = async () => {
-    try {
-        // 从服务端获取保存的 Cookie
-        const data = await getCookieFromUFI()
-        const cookie = data && data.cookie
-
-        if (cookie && cookie !== "") {
-            KANO_COOKIE = cookie
-        }
-    } catch (e) {
-        console.error("从设备获取保存的ck失败：", e)
-    }
-
-    if (KANO_COOKIE && KANO_COOKIE !== "") {
-        try {
-            const data = await requestIsLogin()
-            const loginfo = data && data.loginfo
-
-            if (loginfo === 'ok') {
-                console.log("Cookie有效，不需要再次登录")
-                return KANO_COOKIE
-            }
-
-            // Cookie 无效，需要清空服务端持久化 Cookie
-            KANO_COOKIE = ""
-            await setKanoCookie("")
-
-        } catch (e) {
-            console.error("requestIsLogin请求失败：", e)
-        }
-    }
-
-    if (loginMethod == '1') {
-        return await login2()
-    }
-
-    return await login1()
-}
-
-
-const logout = async (cookie) => {
-    const AD = await processAD(cookie)
-    const body = new URLSearchParams({
-        "goformId": "LOGOUT",
-        "isTest": "false",
-        AD: AD
-    })
-    const res = await fetch(KANO_baseURL + "/goform/goform_set_cmd_process", {
-        method: "POST",
-        headers: {
-            ...common_headers,
-            "content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            // "content-Length": body.toString().length
-        },
-        body
-    })
-    return await res.text()
-}
-
-const getLD = async () => {
-    const res = await fetch(KANO_baseURL + "/goform/goform_get_cmd_process?isTest=false&cmd=LD&_=" + Date.now(), {
-        method: "GET",
-        headers: {
-            ...common_headers,
-        }
-    })
-    return await res.json()
-}
-
-const getRD = async (cookie) => {
-    if (!cookie) throw new Error('请提供cookie')
-    const res = await fetch(KANO_baseURL + "/goform/goform_get_cmd_process?isTest=false&cmd=RD&_=" + Date.now(), {
-        method: "GET",
-        headers: {
-            ...common_headers,
-            "Cookie": cookie
-        }
-    })
-    return await res.json()
-}
-
-const getUFIInfo = async () => {
-    const res = await fetch(KANO_baseURL + "/goform/goform_get_cmd_process?isTest=false&cmd=Language,cr_version,wa_inner_version&multi_data=1&_=" + Date.now(), {
-        method: "GET",
-        headers: {
-            ...common_headers
-        }
-    })
-    return await res.json()
-}
-
-const processAD = async (cookie) => {
-    const { wa_inner_version, cr_version } = await getUFIInfo()
-    if (!wa_inner_version || !cr_version) throw new Error('无法获取版本信息')
-    const parsedInfo = SHA256(wa_inner_version + cr_version)
-    const { RD } = await getRD(cookie)
-    const AD = SHA256(parsedInfo + RD)
-    return AD
-}
-
-const postData = async (cookie, data = {}) => {
-    const AD = await processAD(cookie)
-    const body = new URLSearchParams({
-        ...data,
-        isTest: false,
-        "AD": AD
-    })
-    const res = await fetchWithTimeout(KANO_baseURL + "/goform/goform_set_cmd_process", {
-        method: "POST",
-        headers: {
-            ...common_headers,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Cookie": cookie,
-            // "content-Length": body.toString().length
-        },
-        body
-    })
-    return res
-}
-
+// 字段读取：后端按前端沿用的字段名返回本机真实状态。
 const getData = async (data = new URLSearchParams({})) => {
-    data.append('isTest', 'false')
     data.append('_', Date.now())
-    const res = await fetchWithTimeout(KANO_baseURL + "/goform/goform_get_cmd_process?" + data.toString(), {
-        method: "GET",
-        headers: {
-            ...common_headers,
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    }, 5000)
+    const res = await fetchWithTimeout(KANO_baseURL + "/ui/fields?" + data.toString(), {}, 5000)
     return await res.json()
 }
 
-const reboot = async (cookie) => {
-    const res = await postData(cookie, {
-        goformId: 'REBOOT_DEVICE',
+// 动作下发：action 名由后端路由到 systemd / hostapd / sysfs。
+// 第一个参数保留给调用方传“登录结果”，这里只用来判断是否已授权。
+const postData = async (session, data = {}) => {
+    if (!session) {
+        return new Response(JSON.stringify({ error: '未登录或口令无效' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    }
+    const body = new URLSearchParams(data)
+    return await fetchWithTimeout(KANO_baseURL + "/ui/action", {
+        method: "POST",
+        body
     })
-    return res
 }
 
-// 发送短信
+const reboot = async (session) => {
+    return await postData(session, {
+        action: 'REBOOT_DEVICE',
+    })
+}
+
+// 短信：本机没有短信栈，后端会明确返回“本机不支持短信”。
+// 保留调用入口是为了让面板给出真实原因，而不是静默失败。
 const sendSms_UFI = async ({ content, number }) => {
     if (!content) throw new Error('请提供短信内容')
     if (!number) throw new Error('请提供手机号')
-    const cookie = await login()
-    const res = await postData(cookie, {
-        goformId: 'SEND_SMS',
+    const res = await postData(await login(), {
+        action: 'SEND_SMS',
         Number: number,
         MessageBody: gsmEncode(content)
     })
-    await logout(cookie)
     return await res.json()
 }
 
 //删除短信
 const removeSmsById = async (id) => {
     if (!id) throw new Error('请提供短信id')
-    const cookie = await login()
-    const res = await postData(cookie, {
-        goformId: 'DELETE_SMS',
+    const res = await postData(await login(), {
+        action: 'DELETE_SMS',
         msg_id: id,
         notCallback: true,
     })
-    await logout(cookie)
     return await res.json()
 }
 
@@ -371,13 +149,13 @@ const readSmsByIds = async (ids) => {
         throw new Error('请提供短信id数组');
     }
 
-    const cookie = await login();
+    const session = await login();
     const results = [];
 
     for (const id of ids) {
         try {
-            const response = await postData(cookie, {
-                goformId: 'SET_MSG_READ',
+            const response = await postData(session, {
+                action: 'SET_MSG_READ',
                 msg_id: id,
                 notCallback: true,
             });
@@ -390,20 +168,15 @@ const readSmsByIds = async (ids) => {
         }
     }
 
-    await logout(cookie);
     return results;
 };
 
-//获取短信列表（base64编码）
-const getSmsInfo = async (page = 0, pageSize = 500) => {
-    const params = new URLSearchParams()
-    params.append('_', Date.now().toString())
-    const res = await fetch(KANO_baseURL + `/goform/goform_get_cmd_process?multi_data=1&isTest=false&cmd=sms_data_total&page=${page}&data_per_page=${pageSize}&mem_store=1&tags=100&order_by=order by id desc&` + params, {
-        headers: {
-            ...common_headers
-        }
-    })
-    return await res.json()
+// 短信列表：本机没有短信栈，后端返回空列表。
+const getSmsInfo = async () => {
+    return await getData(new URLSearchParams({
+        cmd: 'sms_data_total',
+        multi_data: 1
+    }))
 }
 
 const getUFIData = async () => {
@@ -416,25 +189,22 @@ const getUFIData = async () => {
 
         const cmd = 'usb_port_switch,battery_charging,sms_received_flag,sms_unread_num,sms_sim_unread_num,sim_msisdn,dual_sim_support,sim_slot,data_volume_limit_switch,battery_value,battery_vol_percent,network_signalbar,network_rssi,cr_version,iccid,imei,imsi,ipv6_wan_ipaddr,lan_ipaddr,mac_address,msisdn,network_information,Lte_ca_status,rssi,Z5g_rsrp,lte_rsrp,wifi_access_sta_num,loginfo,data_volume_alert_percent,data_volume_limit_size,realtime_rx_thrpt,realtime_tx_thrpt,realtime_time,monthly_tx_bytes,monthly_rx_bytes,monthly_time,network_type,network_provider,ppp_status';
 
-        const res = await fetch(`${KANO_baseURL}/goform/goform_get_cmd_process?multi_data=1&isTest=false&cmd=${cmd}&${params.toString()}`, {
+        const res = await fetch(`${KANO_baseURL}/ui/fields?multi_data=1&cmd=${cmd}&${params.toString()}`, {
             headers: {
-                ...common_headers,
-                "kano-cookie": KANO_COOKIE
+                ...common_headers
             },
             signal: controller.signal
         });
 
         const resData = await res.json()
 
-        //获取设备基本信息
+        //本机自身信息（CPU/内存/温度/存储/流量等）
         let deviceInfo = {}
         try {
-            const res = await (await fetch(`${KANO_baseURL}/baseDeviceInfo`, { headers: { ...common_headers } })).json()
-            deviceInfo = res
+            deviceInfo = await (await fetch(`${KANO_baseURL}/baseDeviceInfo`, { headers: { ...common_headers } })).json()
         } catch {/*没有，不处理*/ }
 
-
-        //处理U30Air兼容
+        //部分实现只上报 sim_msisdn
         if (!resData.msisdn) {
             resData.msisdn = resData.sim_msisdn
         }
@@ -442,7 +212,7 @@ const getUFIData = async () => {
         return {
             ...resData,
             ...deviceInfo,
-            //U30Air电池兼容写法
+            //电量字段二选一
             battery: resData?.battery_value ? resData.battery_value : resData?.battery_vol_percent ? resData.battery_vol_percent : deviceInfo.battery,
         }
     } catch (error) {
@@ -521,20 +291,6 @@ async function getDataUsage() {
     }
 }
 
-//adb保活
-async function adbKeepAlive() {
-    try {
-        const { result } = await (await fetch(`${KANO_baseURL}/adb_alive`, {
-            headers: common_headers
-        })).json()
-        if (result == undefined || result == null) return false
-        return result == "true" ? true : false
-    } catch {
-        return false
-    }
-
-}
-
 //自定义头部
 const getCustomHead = async () => {
     try {
@@ -598,22 +354,6 @@ const runShellWithUser = async (cmd = '', timeout = 10000) => {
     }
 }
 
-const updateAdminPsw = async (newPsw) => {
-    try {
-        const res = await fetchWithTimeout(`${KANO_baseURL}/update_admin_pwd`, {
-            method: "POST",
-            headers: common_headers,
-            body: JSON.stringify({
-                password: newPsw
-            })
-        }, 5000)
-        const { result, error } = await res.json()
-        return { result, error }
-    } catch (e) {
-        return { result: null, error: e.message }
-    }
-}
-
 // apn
 const getAPNData = async () => {
     try {
@@ -631,7 +371,7 @@ const getAPNData = async () => {
 const deleteAPNProfile = async (index) => {
     if (index == undefined || index == null) throw new Error('请提供index')
     const res = await postData(await login(), {
-        goformId: "APN_PROC_EX",
+        action: "APN_PROC_EX",
         index,
         apn_mode: "manual",
         apn_action: "delete"
@@ -642,7 +382,7 @@ const deleteAPNProfile = async (index) => {
 //saveAPNProfile
 const saveAPNProfile = async (data) => {
     const res = await postData(await login(), {
-        goformId: "APN_PROC_EX",
+        action: "APN_PROC_EX",
         apn_mode: "manual",
         apn_action: "save",
         ...data
@@ -653,7 +393,7 @@ const saveAPNProfile = async (data) => {
 //switchAPNAuto
 const switchAPNAuto = async ({ isAuto = true, index = 0 }) => {
     const formData = {
-        goformId: "APN_PROC_EX",
+        action: "APN_PROC_EX",
         apn_mode: isAuto ? "auto" : "manual",
 
     }
@@ -678,24 +418,6 @@ const getTermsAcceptance = async () => {
     return false
 }
 
-// check sim pin
-const getSimPinStatus = async () => {
-    try {
-        const res = await getData(new URLSearchParams({
-            cmd: "modem_main_state,mc_modem_main_state,puknumber,pinnumber,sim_pinnumber"
-        }))
-        return {
-            modem_main_state: res.modem_main_state || res.mc_modem_main_state,
-            puknumber: res.puknumber,
-            pinnumber: res.pinnumber || res.sim_pinnumber
-        }
-    }
-    catch (e) {
-        console.error("getSimPinStatus Error:", e)
-        return null
-    }
-}
-
 const getNetConnInfo = async () => {
     try {
         const res = await (await fetchWithTimeout(`${KANO_baseURL}/connInfo`)).json()
@@ -711,7 +433,7 @@ const getNetConnInfo = async () => {
 //seConntHostName
 const seConntHostName = async (mac, hostname) => {
     const formData = {
-        goformId: "EDIT_HOSTNAME",
+        action: "EDIT_HOSTNAME",
         mac,
         hostname
     }

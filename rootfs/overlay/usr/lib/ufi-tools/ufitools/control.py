@@ -1,9 +1,8 @@
 """Native control of the local Linux device.
 
-This is what replaces the vendor ``goform`` control plane: instead of asking a
-ZTE web backend to reboot the device or change the hotspot, UFI-TOOLS drives the
-Linux facilities that already own those resources -- systemd units, hostapd,
-dnsmasq, sysfs.
+This is the device's control plane: rather than asking a vendor web backend to
+reboot the device or change the hotspot, UFI-TOOLS drives the Linux facilities
+that already own those resources -- systemd units, hostapd, dnsmasq, sysfs.
 
 E5-LINUX caveat that shaped the hotspot code: the initramfs overlay is copied
 over ``/etc`` on every boot, so a file that exists in the baked overlay (such as

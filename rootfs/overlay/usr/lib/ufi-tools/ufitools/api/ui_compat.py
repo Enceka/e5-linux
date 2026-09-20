@@ -1,28 +1,27 @@
-"""Compatibility surface for the stock web UI.
+"""Compatibility surface for the web UI.
 
-Two facts shape this module:
+The frontend is written against a field vocabulary ("``ppp_status``",
+"``monthly_rx_bytes``") that predates this port, so the two calls it makes are
+answered locally:
 
-1. the shipped frontend logs in through ``/goform/goform_get_cmd_process`` and
-   polls its status block through the same path, so those two paths must answer
-   something or the UI is unusable;
-2. the E5 is not a ZTE device, so there is no vendor web backend to forward to.
+* ``GET /api/ui/fields?cmd=<names>`` -- answered from :mod:`ufitools.uifields`
+  (the real device) and :mod:`ufitools.modem` (AT-derived values);
+* ``POST /api/ui/action`` with ``action=<name>`` -- routed to
+  :mod:`ufitools.control`, which drives systemd, hostapd, dnsmasq and sysfs.
 
-So the ZTE *protocol* is gone (no client, no session cookie, no ``AD`` signature,
-no vendor service) and what remains is a translation layer:
+There is no vendor backend, no session, no ``AD`` signature and no second
+credential: the single credential is the UFI-TOOLS token, checked by
+:mod:`ufitools.auth` before the request ever reaches this module.  The commands
+and actions that only existed to serve a vendor session or a vendor radio are
+retired explicitly, so a stale caller gets "本机不支持" instead of a plausible
+fake, and a UI action that cannot work on this hardware says so rather than
+pretending to succeed.
 
-* ``cmd=<name>`` is answered from :mod:`ufitools.uifields`, which reads the real
-  device, and from :mod:`ufitools.modem` for AT-derived values;
-* ``goformId=<action>`` is routed to :mod:`ufitools.control`, which drives
-  systemd, hostapd, dnsmasq and sysfs.
-
-Every action that cannot be performed on this hardware answers with an explicit
-error rather than a fake success, so the UI never lies to the operator.  The
-whole module can be disabled with ``ui_compat = false`` in the configuration.
+Disable the whole surface with ``ui_compat = false`` in the configuration.
 """
 
 from __future__ import annotations
 
-import secrets
 from typing import Any, Dict, List
 
 from .. import control as system_control
@@ -30,12 +29,13 @@ from .. import traffic
 from ..httpd import ApiError, Response, json_response
 from ..uifields import UiFields, qr_placeholder_svg
 
-#: ``cmd`` names that expand to a structure instead of a scalar.
-_SPECIAL = ("queryAccessPointInfo", "queryWiFiModuleSwitch", "queryDeviceAccessControlList")
+#: Field names that only existed to drive a vendor session (the login nonce pair
+#: and the ``AD`` signature inputs).  Reading them is refused rather than faked.
+RETIRED_COMMANDS = ("LD", "RD", "wa_inner_version", "psw_fail_num_str", "login_lock_time")
 
 #: Actions the UI can ask for, mapped onto the native control layer.
 _SUPPORTED_ACTIONS = (
-    "LOGIN", "LOGIN_MULTI_USER", "LOGOUT", "REBOOT_DEVICE", "SHUTDOWN_DEVICE",
+    "REBOOT_DEVICE", "SHUTDOWN_DEVICE",
     "CONNECT_NETWORK", "DISCONNECT_NETWORK", "switchWiFiModule", "switchWiFiChip",
     "setAccessPointInfo", "setDeviceAccessControlList", "PERFORMANCE_MODE_SETTING",
     "PERFORMANCE_MODE", "INDICATOR_LIGHT_SETTING", "SAMBA_SETTING", "DATA_LIMIT_SETTING",
@@ -46,6 +46,9 @@ _SUPPORTED_ACTIONS = (
 
 #: Actions that have no meaning on a Linux handset; reported, never faked.
 _UNSUPPORTED_ACTIONS = {
+    "LOGIN": "本机不支持厂商后台登录：认证只使用 UFI-TOOLS 口令",
+    "LOGIN_MULTI_USER": "本机不支持厂商后台登录：认证只使用 UFI-TOOLS 口令",
+    "LOGOUT": "本机不支持厂商后台会话：认证只使用 UFI-TOOLS 口令",
     "LTE_BAND_LOCK": "Linux 端口不驱动基带锁频，请使用 AT 指令或厂商工具",
     "NR_BAND_LOCK": "Linux 端口不驱动基带锁频，请使用 AT 指令或厂商工具",
     "CELL_LOCK": "Linux 端口不驱动锁小区，请使用 AT 指令或厂商工具",
@@ -58,6 +61,7 @@ _UNSUPPORTED_ACTIONS = {
     "CHANGE_PASSWORD": "Linux 端没有厂商后台密码；请使用 ufi-tools set-token 或系统账号",
     "USB_PORT_SETTING": "USB 调试开关由 Android 专有接口提供，Linux 端不适用",
     "APN_PROC_EX": "APN 由 modem 承载，请使用 AT+CGDCONT 配置",
+    "DHCP_SETTING": "内网地址由 systemd-networkd 拥有、地址池由 dnsmasq 拥有，请改 /etc/systemd/network 与 /etc/dnsmasq.d",
 }
 
 
@@ -72,13 +76,16 @@ def register(router, app) -> None:
         names: List[str] = []
         for value in request.query.get("cmd", []):
             names.extend(part.strip() for part in value.split(","))
+        retired = [name for name in names if name in RETIRED_COMMANDS]
+        if retired:
+            raise ApiError(
+                "本机不支持这些字段（厂商登录已移除）：%s；认证请使用 UFI-TOOLS 口令"
+                % ", ".join(retired))
         payload: Dict[str, Any] = {}
         for name in names:
             if not name:
                 continue
-            if name in ("LD", "RD"):
-                payload[name] = secrets.token_hex(8)
-            elif name == "queryWiFiModuleSwitch":
+            if name == "queryWiFiModuleSwitch":
                 payload[name] = "1" if control.hotspot_status().get("active") else "0"
             elif name == "queryAccessPointInfo":
                 payload[name] = fields.access_point_list()
@@ -95,14 +102,14 @@ def register(router, app) -> None:
                 payload[name] = fields.get_many([name])[name]
         return json_response(payload)
 
-    router.add("GET", "/api/goform/goform_get_cmd_process", get_cmd)
+    router.add("GET", "/api/ui/fields", get_cmd)
 
     # -- writes ------------------------------------------------------------
     def set_cmd(request):
         form = _parse_form(request)
-        action = str(form.get("goformId") or "").strip()
+        action = str(form.get("action") or "").strip()
         if not action:
-            raise ApiError("缺少 goformId")
+            raise ApiError("缺少 action")
         try:
             result = _dispatch(app, control, action, form)
         except system_control.ControlError as exc:
@@ -114,7 +121,7 @@ def register(router, app) -> None:
             raise ApiError("本机不支持该操作: %s" % action)
         return json_response(result)
 
-    router.add("POST", "/api/goform/goform_set_cmd_process", set_cmd)
+    router.add("POST", "/api/ui/action", set_cmd)
 
     # The vendor rendered a QR image server-side; serve a transparent stand-in
     # so the WiFi panel does not show a broken image.
@@ -148,13 +155,6 @@ def _truthy(value: Any) -> bool:
 def _dispatch(app, control, action: str, form: Dict[str, str]):
     """Route one UI action onto the native control layer."""
     config = app.config
-
-    if action in ("LOGIN", "LOGIN_MULTI_USER"):
-        # The request already carried the UFI-TOOLS token; the vendor password
-        # has no equivalent here, so login cannot fail on it.
-        return {"result": "success"}
-    if action == "LOGOUT":
-        return {"result": "success"}
 
     if action == "REBOOT_DEVICE":
         control.reboot()

@@ -494,93 +494,41 @@ function main_func() {
         const createTimer = () => setTimeout(() => {
             createToast(t('toast_logining'), 'pink')
         }, 2000)
-        // psw_fail_num_str
         try {
-            // 检测登录方法
-            const login_method = document.querySelector('#login_method')
-            if (login_method) {
-                loginMethod = login_method.value == '1' ? "1" : "0"
-                //持久化
-                localStorage.setItem('login_method', loginMethod)
-            }
             toastTimer && clearTimeout(toastTimer)
             createToast(t('toast_login_checking'), '', 2000)
             toastTimer = createTimer()
             await needToken()
             toastTimer && clearTimeout(toastTimer)
+
             let tokenInput = document.querySelector('#TOKEN')
-            let pwdInput = document.querySelector('#PWDINPUT')
             let token = tokenInput && (tokenInput.value)
-            let password = pwdInput && (pwdInput.value)
-            if (!password || !password?.trim()) return createToast(t('toast_please_input_pwd'), 'red')
-            KANO_PASSWORD = password.trim()
             if (isNeedToken) {
                 if (!token || !token?.trim()) return createToast(t('toast_please_input_token'), 'red')
             }
-            KANO_TOKEN = SHA256(token.trim()).toLowerCase()
+            KANO_TOKEN = token ? SHA256(token.trim()).toLowerCase() : ''
             common_headers.authorization = KANO_TOKEN
 
-            const data = new URLSearchParams({
-                cmd: 'psw_fail_num_str,login_lock_time'
-            })
-            data.append('isTest', 'false')
-            data.append('_', Date.now())
+            // 本机只有口令这一层凭据：带上口令访问任意需要鉴权的接口即可验证。
             toastTimer = createTimer()
-            const res = await fetchWithTimeout(KANO_baseURL + "/goform/goform_get_cmd_process?" + data.toString(), {
-                method: "GET",
-                headers: {
-                    ...common_headers,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            }, 3000)
+            const session = await login()
             toastTimer && clearTimeout(toastTimer)
-
-            if (res.status != 200) {
-                if (res.status == 401) {
-                    return createToast(t('toast_token_failed'), 'red')
-                }
-                throw new Error(res.status + "：" + t('toast_login_failed_catch'), 'red')
-            }
-
-            toastTimer = createTimer()
-            let { psw_fail_num_str, login_lock_time } = await res.json()
-            toastTimer && clearTimeout(toastTimer)
-
-            if (psw_fail_num_str == '0' && login_lock_time != '0') {
-                createToast(`${t('toast_pwd_failed_limit')}${login_lock_time}S`, 'red')
+            if (!session) {
+                createToast(t('toast_token_failed'), 'red')
                 out()
-                toastTimer = createTimer()
-                await needToken()
-                toastTimer && clearTimeout(toastTimer)
                 return null
             }
-            const cookie = await login()
-            toastTimer && clearTimeout(toastTimer)
-            if (!cookie) {
-                createToast(t('toast_pwd_failed') + (psw_fail_num_str != undefined ? ` ${t('toast_pwd_failed_count')}：${psw_fail_num_str}` : ''), 'red')
-                out()
-                toastTimer = createTimer()
-                await needToken()
-                toastTimer && clearTimeout(toastTimer)
-                return null
-            }
-            //更新后端ADMIN_PWD字段
-            const update_res = await updateAdminPsw(password.trim())
-            if (!update_res || update_res.result != 'success') {
-                console.error('Update admin password failed:', update_res ? update_res.message : 'No response');
-            }
+
             createToast(t('toast_login_success'), 'green')
-            localStorage.setItem('kano_sms_pwd', password.trim())
-            localStorage.setItem('kano_sms_token', SHA256(token.trim()).toLowerCase())
+            localStorage.setItem('kano_sms_token', KANO_TOKEN)
             closeModal('#tokenModal')
             initRenderMethod()
             initMessage()
-            //记住密码
+            //记住我：只记口令（本机没有第二层凭据）
             const loginRememberMe = document.querySelector('#loginRememberMe')
             if (loginRememberMe && loginRememberMe.checked) {
-                //AES加密存储密码
                 if (CryptoJS) {
-                    const payload = CryptoJS.AES.encrypt(`${password.trim()}<kano_CryptoJS_split>${token.trim()}`, 'kano_secret_key_1145141919810721')
+                    const payload = CryptoJS.AES.encrypt(`${token.trim()}`, 'kano_secret_key_1145141919810721')
                     localStorage.setItem('kano_remembered_loginfo', payload)
                 }
             } else if (loginRememberMe && !loginRememberMe.checked) {
@@ -596,8 +544,9 @@ function main_func() {
     let timer_out = null
     function out() {
         smsSender && smsSender()
-        localStorage.removeItem('kano_sms_pwd')
         localStorage.removeItem('kano_sms_token')
+        KANO_TOKEN = null
+        common_headers.authorization = null
         closeModal('#smsList')
         clearTimeout(timer_out)
         timer_out = setTimeout(() => {
@@ -606,17 +555,12 @@ function main_func() {
     }
 
     let initRequestData = async () => {
-        const PWD = localStorage.getItem('kano_sms_pwd')
         const TOKEN = localStorage.getItem('kano_sms_token')
-        if (!PWD) {
-            return false
-        }
         if (isNeedToken && !TOKEN) {
             return false
         }
         KANO_TOKEN = TOKEN
         common_headers.authorization = KANO_TOKEN
-        KANO_PASSWORD = PWD
         return true
     }
 
@@ -1122,7 +1066,7 @@ function main_func() {
                     return null
                 }
                 let res1 = await (await postData(cookie, {
-                    goformId: 'USB_PORT_SETTING',
+                    action: 'USB_PORT_SETTING',
                     usb_port_switch: res.usb_port_switch == '1' ? '0' : '1'
                 })).json()
 
@@ -1173,24 +1117,8 @@ function main_func() {
                     out()
                     return null
                 }
-                let res1 = await (await fetchWithTimeout(`${KANO_baseURL}/adb_wifi_setting`, {
-                    method: 'POST',
-                    headers: {
-                        ...common_headers,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        enabled: res.enabled == "true" || res.enabled == true ? false : true,
-                        password: KANO_PASSWORD
-                    })
-                }, 3000)).json()
-                if (res1.result == 'success') {
-                    createToast(t('toast_oprate_success_reboot'), 'green')
-                    await handlerADBStatus()
-                    await handlerADBNetworkStatus()
-                } else {
-                    createToast(t('toast_oprate_failed'), 'red')
-                }
+                // ADB 自启来自 Android 专有接口，本机没有对应能力。
+                createToast(t('toast_oprate_failed') + ': 本机不支持 ADB 自启', 'red')
             } catch (e) {
                 console.error(e.message)
             }
@@ -1224,7 +1152,7 @@ function main_func() {
                     return null
                 }
                 let res1 = await (await postData(cookie, {
-                    goformId: 'PERFORMANCE_MODE_SETTING',
+                    action: 'PERFORMANCE_MODE_SETTING',
                     performance_mode: res.performance_mode == '1' ? '0' : '1'
                 })).json()
                 if (res1.result == 'success') {
@@ -1260,34 +1188,24 @@ function main_func() {
     clearBtn.onclick = async () => {
         isFirstRender = true
         lastRequestSmsIds = null
-        localStorage.removeItem('kano_sms_pwd')
         localStorage.removeItem('kano_sms_token')
         KANO_TOKEN = null
         common_headers.authorization = null
         initRenderMethod()
-        //退出登录请求
-        try {
-            login().finally(cookie => {
-                logout(cookie)
-            })
-        } catch { }
         await needToken()
-        const label = document.querySelector("#token_div_label2")
-        const tokenEl = document.querySelector("#PWD_BLK")
-        const pwdEl = document.querySelector("#PWDINPUT")
         const tokenInput = document.querySelector("#TOKEN")
-        label.style.display = ""
-        tokenEl.style.display = "flex"
-        //填充密码
+        //填充记住的口令
         if (CryptoJS) {
             const str = localStorage.getItem('kano_remembered_loginfo')
             if (str) {
                 try {
                     const bytes = CryptoJS.AES.decrypt(str, 'kano_secret_key_1145141919810721')
                     const originalText = bytes.toString(CryptoJS.enc.Utf8)
-                    const [remembered_password, remembered_token] = originalText.split('<kano_CryptoJS_split>')
-                    if (remembered_password && remembered_token) {
-                        pwdEl.value = remembered_password
+                    // 旧格式为“密码<分隔符>口令”，这里取口令部分
+                    const remembered_token = originalText.includes('<kano_CryptoJS_split>')
+                        ? originalText.split('<kano_CryptoJS_split>')[1]
+                        : originalText
+                    if (remembered_token) {
                         tokenInput.value = remembered_token
                         const loginRememberMe = document.querySelector('#loginRememberMe')
                         if (loginRememberMe) {
@@ -1297,13 +1215,6 @@ function main_func() {
                 } catch (e) {
                     console.error('Error decrypting remembered login info:', e)
                 }
-            }
-        }
-        if (pwdEl && pwdEl.value.trim() == "Wa@9w+YWRtaW4=") {
-            const loginMethodEl = document.querySelector("#login_method")
-            console.log("Admin login method detected, switch to password input")
-            if (loginMethodEl) {
-                loginMethodEl.value = "0"
             }
         }
         createToast(t('toast_logout'), 'green')
@@ -1358,7 +1269,7 @@ function main_func() {
                 return null
             }
             let res = await (await postData(cookie, {
-                goformId: 'SET_BEARER_PREFERENCE',
+                action: 'SET_BEARER_PREFERENCE',
                 BearerPreference: value.trim()
             })).json()
             if (res.result == 'success') {
@@ -1409,7 +1320,7 @@ function main_func() {
                 return null
             }
             let res = await (await postData(cookie, {
-                goformId: 'SET_USB_NETWORK_PROTOCAL',
+                action: 'SET_USB_NETWORK_PROTOCAL',
                 usb_network_protocal: value.trim()
             })).json()
             if (res.result == 'success') {
@@ -1481,12 +1392,12 @@ function main_func() {
             let res = null
             if (value == "0" || value == 0) {
                 res = await (await postData(cookie, {
-                    goformId: 'switchWiFiModule',
+                    action: 'switchWiFiModule',
                     SwitchOption: 0
                 })).json()
             } else if (value == 'chip1' || value == 'chip2') {
                 res = await (await postData(cookie, {
-                    goformId: 'switchWiFiChip',
+                    action: 'switchWiFiChip',
                     ChipEnum: value,
                     GuestEnable: 0
                 })).json()
@@ -1532,7 +1443,7 @@ function main_func() {
                     return null
                 }
                 let res1 = await (await postData(cookie, {
-                    goformId: 'SAMBA_SETTING',
+                    action: 'SAMBA_SETTING',
                     samba_switch: res.samba_switch == '1' ? '0' : '1'
                 })).json()
                 if (res1.result == 'success') {
@@ -1576,7 +1487,7 @@ function main_func() {
                     return null
                 }
                 let res1 = await (await postData(cookie, {
-                    goformId: 'SET_CONNECTION_MODE',
+                    action: 'SET_CONNECTION_MODE',
                     ConnectionMode: "auto_dial",
                     roam_setting_option: res.roam_setting_option == 'on' ? 'off' : 'on',
                     dial_roam_setting_option: res.roam_setting_option == 'on' ? 'off' : 'on'
@@ -1618,7 +1529,7 @@ function main_func() {
                     return null
                 }
                 let res1 = await (await postData(cookie, {
-                    goformId: 'INDICATOR_LIGHT_SETTING',
+                    action: 'INDICATOR_LIGHT_SETTING',
                     indicator_light_switch: res.indicator_light_switch == '1' ? '0' : '1'
                 })).json()
                 if (res1.result == 'success') {
@@ -1771,11 +1682,11 @@ function main_func() {
         try {
             const res = await (await Promise.all([
                 (await postData(cookie, {
-                    goformId: 'LTE_BAND_LOCK',
+                    action: 'LTE_BAND_LOCK',
                     lte_band_lock: lte_bands.join(',')
                 })).json(),
                 (await postData(cookie, {
-                    goformId: 'NR_BAND_LOCK',
+                    action: 'NR_BAND_LOCK',
                     nr_band_lock: nr_bands.join(',')
                 })).json(),
             ]))
@@ -1955,7 +1866,7 @@ function main_func() {
             }
 
             const res = await (await postData(cookie, {
-                goformId: 'CELL_LOCK',
+                action: 'CELL_LOCK',
                 ...form
             })).json()
 
@@ -1987,7 +1898,7 @@ function main_func() {
             }
 
             const res = await (await postData(cookie, {
-                goformId: 'UNLOCK_ALL_CELL',
+                action: 'UNLOCK_ALL_CELL',
             })).json()
 
             if (res.result == 'success') {
@@ -2026,7 +1937,7 @@ function main_func() {
                 }
 
                 const res = await (await postData(cookie, {
-                    goformId: 'REBOOT_DEVICE',
+                    action: 'REBOOT_DEVICE',
                 })).json()
 
                 if (res.result == 'success') {
@@ -2336,12 +2247,12 @@ function main_func() {
             try {
                 const tempData = form_data['data_volume_limit_switch'] == '0' ? clear_form_data : form_data
                 const res = await (await postData(cookie, {
-                    goformId: 'DATA_LIMIT_SETTING',
+                    action: 'DATA_LIMIT_SETTING',
                     ...tempData
                 })).json()
 
                 const res1 = await (await postData(cookie, {
-                    goformId: 'FLOW_CALIBRATION_MANUAL',
+                    action: 'FLOW_CALIBRATION_MANUAL',
                     calibration_way: form_data.data_volume_limit_unit,
                     time: 0,
                     data: used_data.toFixed(0)
@@ -2506,7 +2417,7 @@ function main_func() {
             }
 
             const res = await (await postData(cookie, {
-                goformId: 'setAccessPointInfo',
+                action: 'setAccessPointInfo',
                 ...data
             })).json()
 
@@ -2546,12 +2457,6 @@ function main_func() {
         }
     }
 
-    document.querySelector('#PWDINPUT').addEventListener('keydown', (event) => {
-        console.log(1, event);
-        if (event.key === 'Enter') {
-            onTokenConfirm()
-        }
-    });
     document.querySelector('#TOKEN').addEventListener('keydown', (event) => {
         console.log(2, event);
         if (event.key === 'Enter') {
@@ -2727,7 +2632,7 @@ function main_func() {
                 return null
             }
             const res = await postData(cookie, {
-                goformId: "setDeviceAccessControlList",
+                action: "setDeviceAccessControlList",
                 AclMode: AclMode.trim(),
                 WhiteMacList: "",
                 BlackMacList: BlackMacList.trim(),
@@ -2776,7 +2681,7 @@ function main_func() {
                 }
                 btn.innerHTML = t("changing")
                 let res1 = await (await postData(cookie, {
-                    goformId: res.ppp_status == 'ppp_disconnected' ? 'CONNECT_NETWORK' : 'DISCONNECT_NETWORK',
+                    action: res.ppp_status == 'ppp_disconnected' ? 'CONNECT_NETWORK' : 'DISCONNECT_NETWORK',
                 })).json()
                 if (res1.result == 'success') {
                     setTimeout(async () => {
@@ -3021,7 +2926,7 @@ function main_func() {
             const cookie = await login()
             try {
                 const res = await (await postData(cookie, {
-                    goformId: 'RESTART_SCHEDULE_SETTING',
+                    action: 'RESTART_SCHEDULE_SETTING',
                     restart_time: data.restart_time,
                     restart_schedule_switch: data.restart_schedule_switch
                 })).json()
@@ -3087,7 +2992,7 @@ function main_func() {
                 const cookie = await login()
                 try {
                     const res = await (await postData(cookie, {
-                        goformId: 'SHUTDOWN_DEVICE'
+                        action: 'SHUTDOWN_DEVICE'
                     })).json()
                     if (res?.result == 'success') {
                         createToast(t('toast_shutdown_success'), 'green')
@@ -3552,7 +3457,7 @@ function main_func() {
     //执行高级功能更改 1为启用0为禁用
     const handleSambaPath = async (flag = '1') => {
         const AT_RESULT = document.querySelector('#AD_RESULT')
-        // let adb_status = await adbKeepAlive()
+        // let adb_status = false
         // if (!adb_status) {
         //     AT_RESULT.innerHTML = ""
         //     return createToast(t('toast_ADB_not_init'), 'red')
@@ -3565,7 +3470,7 @@ function main_func() {
                 const cookie = await login()
                 if (cookie) {
                     await (await postData(cookie, {
-                        goformId: 'SAMBA_SETTING',
+                        action: 'SAMBA_SETTING',
                         samba_switch: '1'
                     })).json()
                 }
@@ -3620,47 +3525,11 @@ function main_func() {
     }
     initChangePassData()
 
+    // 本机没有厂商后台密码；改口令请用“更改口令”（走 /api/set_token）或
+    // 命令行 ufi-tools set-token。这里如实说明，而不是假装改成功。
     const handleChangePassword = async (e) => {
         e.preventDefault()
-        const form = e.target
-        const formData = new FormData(form);
-        const oldPassword = formData.get('oldPassword')
-        const newPassword = formData.get('newPassword')
-        const confirmPassword = formData.get('confirmPassword')
-        if (!oldPassword || oldPassword.trim() == '') return createToast(t('toast_please_input_old_pwd'), 'red')
-        if (!newPassword || newPassword.trim() == '') return createToast(t('toast_please_input_new_pwd'), 'red')
-        if (!confirmPassword || confirmPassword.trim() == '') return createToast(t('toast_please_input_new_conform_pwd'), 'red')
-        if (newPassword != confirmPassword) return createToast(t('toast_pwd_not_eqal'), 'red')
-
-        try {
-            const cookie = await login()
-            try {
-                const res = await (await postData(cookie, {
-                    goformId: 'CHANGE_PASSWORD',
-                    oldPassword: SHA256(oldPassword),
-                    newPassword: SHA256(newPassword)
-                })).json()
-                if (res?.result == 'success') {
-                    createToast(t('toast_change_success'), 'green')
-                    form.reset()
-                    //更新后端ADMIN_PWD字段
-                    const update_res = await updateAdminPsw(newPassword.trim())
-                    if (!update_res || update_res.result != 'success') {
-                        console.error('Update admin password failed:', update_res ? update_res.message : 'No response');
-                    }
-                    KANO_PASSWORD = newPassword.trim()
-                    localStorage.setItem('kano_sms_pwd', newPassword.trim())
-                    closeModal('#changePassModal')
-                } else {
-                    throw t('toast_change_failed')
-                }
-            } catch {
-                createToast(t('toast_change_failed'), 'red')
-            }
-        } catch {
-            createToast(t('toast_login_failed_check_network_and_pwd'), 'red')
-            closeModal('#changePassModal')
-        }
+        createToast('本机没有厂商后台密码，请使用“更改口令”', 'red')
     }
 
     const onCloseChangePassForm = () => {
@@ -3825,7 +3694,7 @@ function main_func() {
                         return null
                     }
                     let res = await (await postData(cookie, {
-                        goformId: 'WIFI_NFC_SET',
+                        action: 'WIFI_NFC_SET',
                         web_wifi_nfc_switch: web_wifi_nfc_switch.toString() == '1' ? '0' : '1'
                     })).json()
                     if (res.result == 'success') {
@@ -3858,7 +3727,7 @@ function main_func() {
                 return null
             }
             let res = await (await postData(cookie, {
-                goformId: 'SET_SIM_SLOT',
+                action: 'SET_SIM_SLOT',
                 sim_slot: value.trim()
             })).json()
             if (res.result == 'success') {
@@ -4271,7 +4140,7 @@ function main_func() {
         const isEnabledAdvanceFunc = await checkAdvancedFunc()
 
         if (!isEnabledAdvanceFunc) {
-            let adb_status = await adbKeepAlive()
+            let adb_status = false
             if (!adb_status) {
                 return createToast(t('adb_not_init'), 'red')
             }
@@ -4472,7 +4341,7 @@ function main_func() {
     //adb轮询
     const adbQuery = async () => {
         try {
-            const adb_status = await adbKeepAlive()
+            const adb_status = false
             const adb_text = adb_status ? `${t('network_adb_status')}：🟢 ${t('adb_status_active')}` : `${t('network_adb_status')}：🟡 ${t('adb_status_waiting')}`
             const version = window.UFI_DATA && window.UFI_DATA.cr_version ? window.UFI_DATA.cr_version : ''
             const adbSwitch = window.UFI_DATA && window.UFI_DATA.usb_port_switch == '1' ? true : false
@@ -4491,7 +4360,7 @@ function main_func() {
     //执行shell脚本
     const handleShell = async () => {
         const AT_RESULT = document.querySelector('#AD_RESULT')
-        let adb_status = await adbKeepAlive()
+        let adb_status = false
         if (!adb_status) {
             AT_RESULT.innerHTML = ""
             return createToast(t('toast_ADB_not_init'), 'red')
@@ -5254,7 +5123,7 @@ function main_func() {
             }
 
             const res = await (await postData(cookie, {
-                goformId: 'DHCP_SETTING',
+                action: 'DHCP_SETTING',
                 ...data
             })).json()
 
@@ -5548,169 +5417,53 @@ echo ${flag ? '1' : '0'} > /sys/devices/system/cpu/cpu3/online
 
     const fillAction = async (e, actionName) => {
         e.preventDefault()
-        //动作列表
+        //动作列表：本机的定时任务只有两种动作——执行命令、转发消息。
+        //下面是常用命令模板，可直接改成自己的命令；服务名与 systemd 单元一致。
         const actionList = {
             "转发设备信息": {
-                "kano_do_sms_forward_action": "1"
-            },
-            "发送短信": {
-                "goformId": "SEND_SMS",
-                "Number": t("phone_number"),
-                "MessageBody": `"${t("sms_content")}"`
-            },
-            "指示灯": {
-                "goformId": "INDICATOR_LIGHT_SETTING",
-                "indicator_light_switch": `${t('one_or_zero_prompt')}`
-            },
-            "NFC": {
-                goformId: 'WIFI_NFC_SET',
-                web_wifi_nfc_switch: `${t('one_or_zero_prompt')}`
-            },
-            "文件共享": {
-                goformId: 'SAMBA_SETTING',
-                samba_switch: `${t('one_or_zero_prompt')}`
-            },
-            "网络漫游": {
-                goformId: 'SET_CONNECTION_MODE',
-                ConnectionMode: "auto_dial",
-                roam_setting_option: `${t('on_or_off_prompt')}`,
-                dial_roam_setting_option: `${t('on_or_off_prompt')}`
-            },
-            "性能模式": {
-                goformId: 'PERFORMANCE_MODE',
-                performance_mode: `${t('one_or_zero_prompt')}`
-            },
-            "USB调试": {
-                goformId: 'USB_PORT_SETTING',
-                usb_port_switch: `${t('one_or_zero_prompt')}`
-            },
-            "打开数据": {
-                goformId: 'CONNECT_NETWORK',
-            },
-            "关闭数据": {
-                goformId: 'DISCONNECT_NETWORK',
-            },
-            "关闭WIFI": {
-                goformId: 'switchWiFiModule',
-                SwitchOption: 0
-            },
-            "开启WIFI(5G)": {
-                goformId: 'switchWiFiChip',
-                ChipEnum: 'chip2',
-                GuestEnable: 0
-            },
-            "开启WIFI(2.4G)": {
-                goformId: 'switchWiFiChip',
-                ChipEnum: 'chip1',
-                GuestEnable: 0
-            },
-            "5G/4G/3G": {
-                goformId: 'SET_BEARER_PREFERENCE',
-                BearerPreference: 'WL_AND_5G'
-            },
-            "5G NSA": {
-                goformId: 'SET_BEARER_PREFERENCE',
-                BearerPreference: 'LTE_AND_5G'
-            },
-            "5G SA": {
-                goformId: 'SET_BEARER_PREFERENCE',
-                BearerPreference: 'Only_5G'
-            },
-            "仅4G": {
-                goformId: 'SET_BEARER_PREFERENCE',
-                BearerPreference: 'Only_LTE'
-            },
-            "关机": {
-                goformId: 'SHUTDOWN_DEVICE'
+                "kind": "forward"
             },
             "重启": {
-                goformId: 'REBOOT_DEVICE'
+                "kind": "command",
+                "command": "systemctl reboot --no-block"
             },
-            "解锁基站": {
-                goformId: 'UNLOCK_ALL_CELL'
+            "关机": {
+                "kind": "command",
+                "command": "systemctl poweroff"
             },
-            "锁基站": {
-                goformId: 'CELL_LOCK',
-                pci: "912",
-                earfcn: "504990",
-                rat: `${t('cell_lock_prompt')}`
+            "打开数据": {
+                "kind": "command",
+                "command": "systemctl start e5-mobile-data"
             },
-            "切SIM卡1": {
-                goformId: 'SET_SIM_SLOT',
-                sim_slot: 0
+            "关闭数据": {
+                "kind": "command",
+                "command": "systemctl stop e5-mobile-data"
             },
-            "切SIM卡2": {
-                goformId: 'SET_SIM_SLOT',
-                sim_slot: 1
+            "开启热点": {
+                "kind": "command",
+                "command": "systemctl start e5-hotspot"
             },
-            "切移动": {
-                goformId: 'SET_SIM_SLOT',
-                sim_slot: 0
+            "关闭热点": {
+                "kind": "command",
+                "command": "systemctl stop e5-hotspot"
             },
-            "切联通": {
-                goformId: 'SET_SIM_SLOT',
-                sim_slot: 2
+            "开启性能模式": {
+                "kind": "command",
+                "command": "for p in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do echo performance > $p; done"
             },
-            "切电信": {
-                goformId: 'SET_SIM_SLOT',
-                sim_slot: 1
+            "关闭性能模式": {
+                "kind": "command",
+                "command": "for p in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do echo schedutil > $p; done"
             },
-            "切外置": {
-                goformId: 'SET_SIM_SLOT',
-                sim_slot: 11
+            "自定义命令": {
+                "kind": "command",
+                "command": "echo hello"
             }
         }
         const taskAction = document.querySelector('#taskAction')
         if (!taskAction) return
         const action = actionList[actionName]
         if (action) {
-            if (actionName == "发送短信") {
-                if (!action.MessageBody) return
-                const { el, close } = createFixedToast('kano_sms_body', `
-                <div style="pointer-events:all;width:80vw;max-width:300px;">
-                <div class="title" style="margin:0" data-i18n="please_input_sms_body_and_phone">${t('please_input_sms_body_and_phone')}</div>
-                <input type="text" id="KANO_SMS_PHONE_NUMBER_FORWARD" style="padding:6px;width:100%;margin:10px 0" data-i18n-placeholder="phone_number" placeholder="${t("phone_number")}" ></input>
-                <textarea data-i18n-placeholder="sms_content" placeholder="${t("sms_content")}" id="KANO_SMS_TEXT_FORWARD" style="padding:4px;width:100%;box-sizing:border-box;min-height: 10em;"></textarea>
-                <div style="display:flex;gap:10px">
-                    <button id="close_sms_body_toast_btn" style="width:100%;font-size:.64rem;margin-top:5px" data-i18n="confirm_btn">${t("confirm_btn")}</button>
-                    <button id="close_sms_body_toast_btn1" style="width:100%;font-size:.64rem;margin-top:5px" data-i18n="cancel_btn">${t("cancel_btn")}</button>
-                </div>
-                </div>
-                `, 'red')
-                const btn = el.querySelector('#close_sms_body_toast_btn')
-                const btn2 = el.querySelector('#close_sms_body_toast_btn1')
-                const phone = el.querySelector("#KANO_SMS_PHONE_NUMBER_FORWARD")
-                const text = el.querySelector("#KANO_SMS_TEXT_FORWARD")
-                const taskAction = document.querySelector("#taskAction")
-
-                if (!btn && !btn2 && !text && !phone) {
-                    close()
-                    return
-                }
-                btn2.onclick = () => {
-                    close()
-                }
-                if (taskAction) {
-                    try {
-                        const data = JSON.parse(taskAction.value.trim())
-                        phone.value = data.Number
-                        text.value = gsmDecode(data.MessageBody.trim())
-                    } catch (e) {
-                        console.log("taskAction内容解析失败", e)
-                    }
-                }
-                btn.onclick = () => {
-                    const parsedVal = gsmEncode(text.value.trim())
-                    const parsedPhone = phone.value.trim()
-                    if (isNaN(parseInt(parsedPhone))) return createToast(t("please_input_correct_phone_number"), 'pink')
-                    if (parsedVal == "" || !parsedVal) return createToast(t("sms_content_not_empty"), 'pink')
-                    action.MessageBody = parsedVal
-                    action.Number = parsedPhone
-                    taskAction.value = JSON.stringify(action, null, 2)
-                    createToast(t("toast_save_success", 'pink'))
-                    close()
-                }
-            }
             if (actionName == "转发设备信息") {
                 try {
                     const { enabled } = await (await fetch(`${KANO_baseURL}/sms_forward_enabled`, {
@@ -6114,7 +5867,7 @@ echo ${flag ? '1' : '0'} > /sys/devices/system/cpu/cpu3/online
                 </div>`
             } else {
                 createToast(t('toast_not_enabled_advanced_tools'), '')
-                let adb_status = await adbKeepAlive()
+                let adb_status = false
                 if (!adb_status) {
                     AT_RESULT.innerHTML = ""
                     return createToast(t('toast_ADB_not_init'), 'red')
@@ -7265,7 +7018,7 @@ echo ${flag ? '1' : '0'} > /sys/devices/system/cpu/cpu3/online
         try {
 
             const res = await postData(await login(), {
-                goformId: "SET_WIFI_SLEEP_INFO",
+                action: "SET_WIFI_SLEEP_INFO",
                 sleep_sysIdleTimeToSleep: target.value
             })
 
@@ -7910,22 +7663,6 @@ echo ${flag ? '1' : '0'} > /sys/devices/system/cpu/cpu3/online
         md.id && showModal(md.id)
     }
 
-    //免密码登录
-    const noPassLogin = () => {
-        const method = "0"
-        const password = "Wa@9w+YWRtaW4="
-
-        //下面不用改
-        const loginMethodEl = document.querySelector("#login_method")
-        const label = document.querySelector("#token_div_label2")
-        const tokenEl = document.querySelector("#PWD_BLK")
-        const pwdEl = document.querySelector("#PWDINPUT")
-        loginMethodEl.value = method
-        pwdEl.value = password
-        label.style.display = "none"
-        tokenEl.style.display = "none"
-        createToast(t('toast_no_pass_login_fill_success'), 'green')
-    }
 
     //切换密码显示
     const switchPassInputShow = (e, id) => {
@@ -8308,106 +8045,6 @@ echo ${flag ? '1' : '0'} > /sys/devices/system/cpu/cpu3/online
         }
     };
 
-    //官方后台貌似对PIN超出次数的判定有问题，PIN次数用完后提示输入PUK，此时换卡也不会变更状态，用户只能恢复出厂设置，所以此功能不会继续实现
-    // let simCardPinDisabled = false
-    // const initSimCardPin = async () => {
-    //     if (!initRequestData()) {
-    //         return null
-    //     }
-    //     //检测是否有SIM卡锁定
-    //     const res = await getSimPinStatus()
-
-    //     if (res.pinnumber <= 0 || res.modem_main_state == "modem_waitpuk") {
-    //         createToast("您的PIN次数已用尽，请前往官方后台输入PUK码解锁", 'red', 10000)
-    //         return null
-    //     }
-
-    //     if (!(res.modem_main_state == "modem_waitpin")) {
-    //         return null
-    //     }
-
-    //     //暂停数据刷新
-    //     stopRefresh()
-
-    //     const md = createModal({
-    //         name: "kano_pin_modal",
-    //         isMask: true,
-    //         title: "请输入SIM卡PIN码",
-    //         maxWidth: "400px",
-    //         contentStyle: "font-size:12px",
-    //         onClose: () => {
-    //             return true
-    //         },
-    //         onConfirm: async () => {
-    //             //再次获取数据
-    //             const res1 = await getSimPinStatus()
-    //             if (res1.pinnumber <= 0) {
-    //                 createToast("您的PIN次数已用尽，请前往官方后台输入PUK码解锁", 'red')
-    //                 return false
-    //             }
-    //             const el = document.querySelector('#simPinInput')
-    //             if (!el) {
-    //                 console.error("没有找到#simPinInput元素")
-    //                 return false
-    //             }
-    //             const pinNumber = el.value.trim()
-    //             if (pinNumber.length < 4) {
-    //                 createToast("PIN不得小于4位数", 'pink')
-    //                 return false
-    //             }
-    //             //解锁
-    //             if (simCardPinDisabled) {
-    //                 createToast("正在解锁中，请勿重复点击", 'pink')
-    //                 return false
-    //             }
-
-    //             simCardPinDisabled = true
-
-    //             const { close: closeLoadingEl } = createFixedToast("unlocking_toast", '解锁中...')
-    //             try {
-    //                 if (!(await initRequestData())) {
-    //                     return false
-    //                 }
-    //                 const cookie = await login()
-    //                 if (!cookie) {
-    //                     createToast(t('toast_request_error'), 'red')
-    //                     return false
-    //                 }
-    //                 let res1 = await (await postData(cookie, {
-    //                     goformId: 'ENTER_PIN',
-    //                     PinNumber: pinNumber,
-    //                 })).json()
-
-    //                 if (res1.result == 'success') {
-    //                     createToast("PIN解锁成功", 'green')
-    //                     startRefresh()
-    //                     return true
-    //                 } else {
-    //                     createToast("PIN解锁失败，请重试", 'red')
-    //                 }
-    //                 //更新Pin次数
-    //                 const pinNumEl = document.querySelector('#pinNumber')
-    //                 const res_refresh = await getSimPinStatus()
-    //                 if (pinNumEl) {
-    //                     pinNumEl.textContent = res_refresh.pinnumber
-    //                 }
-    //                 return false
-    //             } catch (e) {
-    //                 console.error(e.message)
-    //                 return false
-    //             } finally {
-    //                 simCardPinDisabled = false
-    //                 closeLoadingEl()
-    //             }
-    //         },
-    //         content: `<div class="content" style="font-size:12px;margin:10px 0;padding:0 4px;">
-    //    <p style="color:red;margin-top:0" >PIN 剩余次数：<strong id="pinNumber">${res.pinnumber}</strong></p>
-    //    <input type="password" id="simPinInput" placeholder="SIM卡PIN码" style="width:100%;padding:8px">
-    // </div>`
-    //     })
-    //     showModal(md.id)
-    // }
-    // initSimCardPin()
     //挂载方法到window
     const methods = {
         exportPlugin,
@@ -8424,7 +8061,6 @@ echo ${flag ? '1' : '0'} > /sys/devices/system/cpu/cpu3/online
         doDataUsageHistorySearch,
         editHostName,
         switchPassInputShow,
-        noPassLogin,
         showNetConnInfoModal,
         handleOpenUploadFilesList,
         clearAPPUploadData,

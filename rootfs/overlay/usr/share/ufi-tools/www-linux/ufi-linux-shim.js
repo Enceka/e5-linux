@@ -1,27 +1,21 @@
 /*
  * UFI-TOOLS for Linux -- frontend shim.
  *
- * The web UI that ships with UFI-TOOLS was written for a ZTE hotspot: it logs in
- * with a vendor password and offers panels for features a Linux device does not
- * have (APK updates, wireless adb, NFC, SMS, band/cell lock, vendor APN).
+ * The page bundled with UFI-TOOLS still carries panels for features a Linux
+ * device does not have (APK updates, wireless adb, NFC, SMS, band/cell lock,
+ * vendor APN), and its page text predates this port.
  *
- * This file adapts that UI in place, without forking it:
+ * This file adapts that page in place, without forking it:
  *
- *   1. the vendor password field is filled and hidden, so the UFI-TOOLS token is
- *      the only credential;
- *   2. panels that cannot work here are hidden, so nothing is a dead button;
- *   3. a self-contained "E5 控制台" panel is added, wired to the native
+ *   1. panels that cannot work here are hidden, so nothing is a dead button;
+ *   2. a self-contained "E5 控制台" panel is added, wired to the native
  *      /api/linux/* endpoints that actually drive this device.
  *
  * It is injected by ufitools.app into index.html and served as a static overlay,
- * so the upstream frontend stays untouched and can be updated independently.
+ * so the frontend stays untouched and can be updated independently.
  */
 (function () {
     'use strict';
-
-    // Vendor password the login form insists on; the backend accepts anything
-    // here because the request is already authenticated by the UFI-TOOLS token.
-    var PLACEHOLDER_PASSWORD = 'e5-linux';
 
     // Panels that have no counterpart on this device.  Hiding them beats
     // leaving buttons that can only fail.
@@ -29,7 +23,7 @@
         'ADB',            // 有线 ADB（Android 专有）
         'ADB_NET',        // 无线 ADB 自启（Android 专有）
         'APNManagement',  // APN 由 modem 承载，走 AT+CGDCONT
-        'CHANGEPWD',      // 厂商后台密码不存在
+        'CHANGEPWD',      // 本机没有厂商后台密码，改口令用“更改口令”
         'LANManagement',  // 内网地址由 systemd-networkd 拥有（状态仍在首页显示）
         'NFC',            // 本机无 NFC
         'OTA',            // 无 APK 更新通道
@@ -123,20 +117,7 @@
         });
     }
 
-    // -- 1. make the login form work with the UFI-TOOLS token only -----------
-    function adaptLoginForm() {
-        var input = document.querySelector('#PWDINPUT');
-        if (input) {
-            if (!input.value) { input.value = PLACEHOLDER_PASSWORD; }
-            input.setAttribute('placeholder', '无需填写（Linux 端无厂商密码）');
-        }
-        var label = document.querySelector('#token_div_label2');
-        if (label) { label.style.display = 'none'; }
-        var block = document.querySelector('#PWD_BLK');
-        if (block) { block.style.display = 'none'; }
-    }
-
-    // -- 2. hide what cannot work ------------------------------------------
+    // -- 1. hide what cannot work ------------------------------------------
     function hideUnsupported(capabilities) {
         HIDDEN_BUTTONS.forEach(function (id) {
             var el = document.getElementById(id);
@@ -385,12 +366,8 @@
 
     function boot() {
         injectCss();
-        adaptLoginForm();
         loadCapabilities().then(hideUnsupported);
         buildConsole();
-        // The login dialog is re-rendered when the language changes, so keep the
-        // form adapted afterwards too.
-        setInterval(adaptLoginForm, 2000);
     }
 
     if (document.readyState === 'loading') {

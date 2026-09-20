@@ -10,9 +10,9 @@ unchanged so existing forwarder configurations keep working:
 ``{{model}}`` ``{{monthly-flow-count}}`` ``{{app-ver}}`` ``{{monthly-flow-sum}}``
 ``{{boot-time}}`` for the device snapshot.
 
-On a Linux *controller* there is no local SMS store, so the message source is
-whatever the caller supplies -- the ZTE hotspot's own SMS list, a plugin, or a
-task.  That keeps the module useful without pretending a handset has an inbox.
+There is no local SMS store here, so the message source is whatever the caller
+supplies -- a plugin, a scheduled task, or a read of a hotspot's SMS list over
+the API.  That keeps the module useful without pretending a handset has an inbox.
 """
 
 from __future__ import annotations

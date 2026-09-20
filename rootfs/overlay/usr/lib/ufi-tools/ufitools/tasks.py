@@ -1,15 +1,15 @@
 """Scheduled task execution (``/api/add_task`` and the scheduler loop).
 
-The Android app's task actions were goform writes -- ``{"goformId":
-"REBOOT_DEVICE"}`` and the like.  With the vendor layer gone, a task is either
+A task action has exactly two shapes, both of them native:
 
-* ``{"kind": "command", "command": "..."}`` -- run a shell command, which is the
-  Linux-native equivalent of "定时执行维护动作", or
+* ``{"kind": "command", "command": "..."}`` -- run a shell command, which is what
+  "定时执行维护动作" means on a Linux device;
 * ``{"kind": "forward", "command": "..."}`` -- send the rendered text through the
-  configured SMS/status forwarding channel, or
-* ``{"goformId": ...}`` -- still accepted for compatibility, and routed to the
-  same native control layer the web UI uses, so an existing task export keeps
-  working.
+  configured forwarding channel (``command`` is the optional template).
+
+``kind`` may be omitted when a ``command`` is present: a bare command is the
+common case for hand-written tasks and means the same as ``kind=command``.
+Anything else is rejected with an explicit reason rather than being guessed at.
 
 Failures are recorded in ``runtime.json`` so an operator can see why a nightly
 action stopped happening instead of the failure vanishing into a log.
@@ -76,19 +76,18 @@ def _execute(app, action: Dict[str, str]) -> Dict[str, Any]:
     kind = str(action.get("kind") or "").strip().lower()
     command = str(action.get("command") or "").strip()
 
-    if kind == "forward" or str(action.get("kano_do_sms_forward_action")) == "1":
+    if kind == "forward":
         return _forward(app, command)
 
-    if kind == "command" or (command and not kind and "goformId" not in action):
+    if kind in ("", "command"):
+        if not command:
+            return {"ok": False, "detail": "任务缺少 command"}
         from .shell import run_shell
 
         outcome = run_shell(command, timeout=60.0)
         return {"ok": outcome.done, "detail": outcome.content[-400:]}
 
-    if "goformId" in action:
-        return _ui_action(app, action)
-
-    return {"ok": False, "detail": "任务缺少可识别的动作（kind/command/goformId）"}
+    return {"ok": False, "detail": "未知的 kind=%s（只支持 command 与 forward）" % kind}
 
 
 def _forward(app, command: str) -> Dict[str, Any]:
@@ -101,16 +100,6 @@ def _forward(app, command: str) -> Dict[str, Any]:
     method = str(app.config.get("sms_forward_method") or "")
     forward.dispatch(method, app.config.data, forward.expand_template(template, values))
     return {"ok": True, "detail": "forwarded via %s" % (method or "?")}
-
-
-def _ui_action(app, action: Dict[str, str]) -> Dict[str, Any]:
-    """Reuse the UI compatibility router so one action table exists."""
-    from .api.ui_compat import _dispatch
-
-    outcome = _dispatch(app, app.control, str(action.get("goformId")), action)
-    if outcome is None:
-        return {"ok": False, "detail": "本机不支持该操作: %s" % action.get("goformId")}
-    return {"ok": True, "detail": str(outcome)[:200]}
 
 
 def run_due_restart(app, now: Optional[time.struct_time] = None) -> bool:

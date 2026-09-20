@@ -1,14 +1,14 @@
-"""Maps the stock web UI's field vocabulary onto this device's real state.
+"""Maps the web UI's field vocabulary onto this device's real state.
 
-The web frontend was written against a ZTE hotspot, so it asks for names like
-``ppp_status`` or ``monthly_rx_bytes``.  Those names are a *UI contract*, not a
-protocol, and the values behind them exist on a Linux device too -- they just
-come from ``/proc``, ``/sys``, systemd, hostapd and the modem instead of from a
-vendor web backend.  This module is that translation, and it is read-only.
+The frontend asks for names like ``ppp_status`` or ``monthly_rx_bytes``, which
+it inherited from the hotspot firmware it was originally written for.  Those
+names are a *UI contract*, not a protocol, and the values behind them exist on a
+Linux device too -- they just come from ``/proc``, ``/sys``, systemd, hostapd
+and the modem.  This module is that translation, and it is read-only.
 
-Nothing here emulates ZTE behaviour: there is no session, no ``AD`` signature and
-no vendor service.  Control actions live in :mod:`ufitools.control` and reach the
-device through systemd and sysfs.
+Nothing here emulates a vendor backend: there is no session, no request signing
+and no vendor service.  Control actions live in :mod:`ufitools.control` and reach
+the device through systemd and sysfs.
 """
 
 from __future__ import annotations
@@ -69,13 +69,12 @@ class UiFields:
         uname = os.uname()
 
         fields: Dict[str, Any] = {
-            # -- session / protocol handshake ------------------------------
+            # -- session ---------------------------------------------------
+            # The UI treats this as "the request is authenticated", which it is:
+            # the token check happened before the handler ran.
             "loginfo": "ok",
             "Language": "zh",
-            "wa_inner_version": "E5LINUX",
             "cr_version": "%s / %s" % (config.get("nickname") or "E5-LINUX", uname.release),
-            "psw_fail_num_str": "5",
-            "login_lock_time": "0",
             # -- power / battery -------------------------------------------
             "battery_value": percent,
             "battery_vol_percent": percent,
@@ -219,7 +218,7 @@ class UiFields:
             "ApMaxStationNumber": hotspot.get("max_clients", "8"),
             "ApBroadcastDisabled": "0" if not hotspot.get("hidden") else "1",
             "ApIsolate": "0",
-            # The QR image was a vendor-rendered PNG; this build serves a
+            # Upstream rendered a QR image server-side; this build serves a
             # transparent placeholder so the panel does not show a broken image.
             "QrImageUrl": "/linux/placeholder.svg",
         }]

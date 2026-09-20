@@ -1,11 +1,10 @@
-"""Small JSON-file stores for the things Android kept in SharedPreferences.
+"""Small JSON-file stores for the auxiliary documents.
 
-The Android app splits its state over several preference files
-(``kano_ZTE_store`` for config, ``kano_plugin_store`` for the plugin text) and
-several JSON blobs for theme and scheduled tasks.  Every one of those is a
-key/value document, so they are all instances of :class:`JsonFile` here; keeping
-them as separate files (rather than one big config) means a plugin payload of a
-few megabytes does not get rewritten every time the token changes.
+Configuration, the injected page text, the theme and the scheduled tasks are
+four independent documents.  Keeping them in separate files (rather than inside
+``config.json``) means a page payload of a few megabytes is not rewritten every
+time the access token changes, and a corrupt theme cannot take the service down
+with it.
 """
 
 from __future__ import annotations

@@ -1199,6 +1199,10 @@ image exposes (`AT+SPRAT=<n>` is always `+CME ERROR: 4`), and
 `NSACFG`/`SNRCFG`/`SBAND`/`MODE`/`SYSMODE`/`E5GOPT`/`WS46` do not exist at all, so
 nothing user-space can flip the RAT over AT.
 
+> **The conclusion in the sentence above is wrong**, and so is the "no AT-side
+> switch" half of the paragraph that closes this section: the switch is
+> `AT+SPLBAND`, a command that search never tried.  Corrected in 14.1 below.
+
 The same SIM in the same spot on Android (fully booted, China Unicom 46001, LTE band 1,
 RSRP -90):
 
@@ -1258,6 +1262,42 @@ So the RAT preference lives in the modem NV, written there by Android's RIL, and
 Linux port inherits it as long as it boots slot a's modem firmware and NV.  There is no
 AT-side switch to set it (and none is missing): `mobile-data status` now decodes the AcT
 so the camped RAT is visible at a glance -- `LTE`, `NR (5G SA)` or `LTE+NR (EN-DC)`.
+
+### 14.1 The old "no AT-side RAT switch" note, corrected
+
+The last two sentences above are half wrong, and one search is to blame.  The search was
+for `AT+SPRAT=<n>`, `NSACFG`, `SNRCFG`, `SBAND`, `MODE`, `SYSMODE`, `E5GOPT` and `WS46`;
+all of those really do fail (`AT+SPRAT=<n>` is `+CME ERROR: 4`, the rest do not exist),
+and from that the conclusion "nothing user-space can flip the RAT over AT" was drawn.
+The commands that do exist were simply never tried:
+
+    AT+SPLBAND=0                        -> +SPLBAND: <49-64>,<33-48>,<17-32>,<1-16>,<65-80>
+    AT+SPLBAND=1,0,256,0,5,0            -> OK          (LTE: bands 1, 3 and 41)
+    AT+SPLBAND=3                        -> +SPLBAND: <v1>,<0>,<v3>,<super>
+    AT+SPLBAND=2,1,0,256,4              -> OK          (NR: n1, n78, n80)
+    AT+SPLBAND=1,0,0,0,0,0              -> OK          (LTE: no band lock)
+    AT+SPLBAND=2,0,0,0,0                -> OK          (NR: no band lock)
+    AT+SPFORCEFRQ=16,6,627264,5         -> OK          (lock to one NR cell)
+    AT+SPFORCEFRQ=12,3                  -> +SPFORCEFRQ: 12,3,<freq>,<pci>
+
+`AT+SPLBAND` is the band lock: one bit per band inside its 16-band group on LTE, and
+three tables (`value1`, `value3`, and the "super" bands n75/76/80-84/86) on NR.
+`AT+SPFORCEFRQ` is the cell lock, with 12 = LTE and 16 = NR as its RAT selector -- the
+627264 in the example is the n78 ARFCN from the NR SA measurement above.  The same source
+settled the neighbours that were also missing here: 5G SA/NSA is
+`AT+SP5GRAN?`/`AT+SP5GRAN=<0|1>`, 5G registration is `AT+C5GREG?`, VoLTE is `AT+CAVIMS?`,
+and the UE usage setting is `AT+CEUS`/`AT+CEMODE`.
+
+What was right above, and still is: the RAT the modem *camps* on at boot comes from modem
+NV written by Android's RIL, so booting slot a's images is what decides it, and
+`persist.vendor.modem.nr.enable` remains a property, not a switch.  A band lock is an
+additional constraint on top of that, not a replacement for it.
+
+Provenance, stated plainly: these shapes came out of researching the modem's own AT
+surface, not from vendor documentation and not from this handset.  **They have not been
+sent to the handset yet**, so treat them as the shape to try first rather than as measured
+behaviour.  Whoever tries them should read the lock back after writing it, because "the
+modem accepted the command" and "the lock took" are two different claims.
 
 ## 15. Sharing the baseband with the USB LAN (NAT), and why apt uses http
 

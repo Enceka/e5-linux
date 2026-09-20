@@ -40,7 +40,7 @@ fi
 iw reg set CN 2>/dev/null || true
 sleep 1
 systemctl stop wpa_supplicant 2>/dev/null || true
-pkill -f hostapd 2>/dev/null || true
+pkill -x hostapd 2>/dev/null || true
 sleep 1
 ip link set wlan0 down 2>/dev/null || true
 iw dev wlan0 set type __ap 2>/dev/null || true
@@ -54,7 +54,7 @@ ip link set wlan0 up
 attempt=0
 while [ "$(pgrep -c hostapd)" = 0 ] && [ "$attempt" -lt 4 ]; do
     attempt=$((attempt + 1))
-    pkill -f hostapd 2>/dev/null || true
+    pkill -x hostapd 2>/dev/null || true
     sleep 3
     ip link set wlan0 down 2>/dev/null || true
     iw dev wlan0 set type __ap 2>/dev/null || true

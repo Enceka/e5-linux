@@ -1,0 +1,21 @@
+[Unit]
+Description=e5-linux: data bearer through unisoc-cpd (G3)
+# The daemon owns the AT channels; the bearer goes out through its socket.
+# The CP needs a minute or two to register on NR SA before CGACT can succeed,
+# so this retries until it sticks.
+After=unisoc-cpd.service
+Requires=unisoc-cpd.service
+ConditionPathExists=/dev/stty_nr1
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/unisoc-cpd --mode native --socket /run/unisoc-cpd/cmd.sock data up
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=0
+TimeoutStartSec=180
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

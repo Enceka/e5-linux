@@ -2573,3 +2573,88 @@ re-establishes the bearer.  What the session established, all measured:
   upstream DNS netd knows, which is nothing.  All of these are runtime
   fixes; the permanent home is the daemon's `data up` plus the rootfs's own
   NAT (`e5_nat`) on the Linux side, which is the G3 acceptance itself.
+## 26. Losing the management LAN: what actually started `systemd-networkd`, and who hands out the leases
+
+Removing NetworkManager (commit `304385e`) looked like pure cleanup: every
+device on the board is unmanaged, `apt-get -s remove network-manager` takes
+only `network-manager`, `plasma-nm` and `plasma-welcome` with it, and the
+desktop's network panel was its only remaining user.  The next boot came up
+with no management LAN at all -- `usb0` with no address, the host left on a
+self-assigned `169.254.x`, and nobody answering `192.168.77.1`.
+
+`NetworkManager.service` is *disabled* in this image, and so is
+`systemd-networkd`, and the overlay cannot ship enable symlinks (it travels
+into the initramfs as plain files -- `boot/init` links `e5-bt-attach` and
+`ufi-tools` by hand for exactly this reason).  What actually started networkd
+was a drop-in that only looked like it was about NetworkManager:
+
+    /etc/systemd/system/NetworkManager.service.d/50-e5-networkd.conf
+    [Unit]
+    Wants=systemd-networkd.service
+    Wants=e5-telnetd.service
+
+Deleting it with the package removed the last thing that started networkd, and
+with it `usb0`'s `192.168.77.1` and its DHCP server.  Fixed in `b53aebe`:
+`configure-rootfs.sh` enables `systemd-networkd{,.socket}` in the rootfs,
+`device-finalize.sh` does the same on an installed device, and `boot/init`
+links the unit into `multi-user.target.wants` at every boot for a device whose
+rootfs predates that.
+
+### The DHCP server that never starts
+
+With networkd running, `usb0` got its address -- and the host still got no
+lease, because networkd's own log says, every two minutes, forever:
+
+    usb0: Failed to wait for the interface to be initialized: Connection timed out
+    usb0: Failed
+    usb0: Trying to reconfigure the interface.
+    usb0: Configuring with /etc/systemd/network/10-e5-usb0.network.
+
+The same rtnl timeouts hit `sipa_eth3`, `sipa_usb0` and `ip6_vti0`, so it is
+the sprd SIPA pseudo-interfaces wedging networkd's netlink queue: the address
+lands, the `DHCPServer=` that would have followed never starts.  The fix stops
+asking networkd for DHCP at all (`168b405`).  `dnsmasq` serves *both* LANs --
+which is what its own header already argued for the hotspot, that networkd's
+DHCPServer can hand out addresses but cannot answer queries -- with
+`bind-dynamic` (at boot only `usb0` exists; `wlan0` appears later with
+hostapd) and tagged ranges, so `usb0` clients get `192.168.77.1` as their
+resolver and *no* router option, while hotspot clients keep `192.168.9.1` for
+both.
+
+Verified on a cold boot of `work/boot-linux-slotb-cpd11.img`, from the
+device's own journal, and on the host with the port back on "using DHCP":
+
+    dnsmasq-dhcp[5361]: DHCPDISCOVER(usb0) 02:50:00:00:e5:02
+    dnsmasq-dhcp[5361]: DHCPOFFER(usb0) 192.168.77.21 02:50:00:00:e5:02
+    dnsmasq-dhcp[5361]: DHCPACK(usb0) 192.168.77.21 02:50:00:00:e5:02
+
+`en8` had `192.168.77.21` about twelve seconds after the device appeared.
+
+### The escape hatch: the gadget's other half
+
+With no address anywhere there is still the serial console.  The same USB
+gadget that carries the NCM netdev also exposes a CDC-ACM port, macOS names it
+`/dev/cu.usbmodemE5LINUX3`, and `serial-getty@ttyGS0` is listening on it:
+`root`/`root` gets a shell, and `systemctl enable --now systemd-networkd`
+brings the LAN back from there.  `tools/e5-serial.sh` drives that port from
+the host:
+
+    tools/e5-serial.sh 'ip -br addr show usb0; systemctl is-active systemd-networkd'
+
+Two things about it are worth remembering.  The agent's own shell cannot open
+`/dev` nodes ("Operation not permitted"), so this is a step the human has to
+run.  And `/dev/cu.usbmodem*` only exists while the gadget is bound: after the
+UDC was lost the host saw neither half of the device, and a power cycle -- not
+a replug -- was what brought it back.
+
+### Two red herrings from the same boot
+
+Both looked like password problems and were not.  `passwd -S e5` said `P` the
+whole time.  And the greeter appeared because the *autologin session died*,
+not because the password was wrong:
+
+    sddm-helper[5304]: pam_systemd(sddm-autologin:session): Failed to create session: Connection timed out
+
+-- the same family of timeouts, this time inside logind while udev was still
+absorbing the boot's device flood.  The next boot logged `Authentication for
+user "e5" successful` and the session stayed on seat0.

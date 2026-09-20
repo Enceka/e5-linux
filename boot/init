@@ -347,6 +347,13 @@ if [ -n "$rootdir" ]; then
         # rootfs was built before that was true, because the overlay cannot carry
         # enable symlinks either.  Without it usb0 comes up bare, the host gets
         # no lease, and the only way in is the screen.
+        # Timers go to timers.target, not multi-user.target.
+        if [ -f /newroot/etc/systemd/system/e5-hotspot-retry.timer ]; then
+            mkdir -p /newroot/etc/systemd/system/timers.target.wants
+            ln -sf /etc/systemd/system/e5-hotspot-retry.timer \
+                /newroot/etc/systemd/system/timers.target.wants/e5-hotspot-retry.timer
+        fi
+
         # The serial console has to survive too -- it is the only way in when the
         # management LAN is down (docs/FINDINGS.md section 26).  A rootfs build
         # cannot enable a template instance from a chroot ("warn: getty enable

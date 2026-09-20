@@ -28,6 +28,11 @@ for _ in $(seq 60); do
     sleep 2
 done
 [ -e /sys/class/net/wlan0 ] || { echo "hotspot: wlan0 never appeared" >&2; exit 1; }
+# Already up (this script also runs from e5-hotspot-retry.timer): leave it alone.
+if pgrep -x hostapd >/dev/null; then
+    echo "hotspot: hostapd is already running"
+    exit 0
+fi
 iw reg set CN 2>/dev/null || true
 sleep 1
 systemctl stop wpa_supplicant 2>/dev/null || true
@@ -36,22 +41,24 @@ sleep 1
 ip link set wlan0 down 2>/dev/null || true
 iw dev wlan0 set type __ap 2>/dev/null || true
 ip link set wlan0 up
-hostapd -B "$CONF"
-sleep 8
-if [ "$(pgrep -c hostapd)" = 0 ]; then
-    # The WCN firmware can refuse the first beacon right after a boot ("Failed to
-    # set beacon parameters"); re-doing the type/up dance and trying again has
-    # always worked.  Do not report success when the AP did not come up: that is
-    # how a boot with no hotspot and a green unit happened.
-    echo "hotspot: hostapd did not start, retrying" >&2
+# The WCN firmware can refuse the first beacon right after a boot ("Failed to
+# set beacon parameters", or "sprd-wlan: failed to power on WCN!" when the chip
+# is still settling); re-doing the type/up dance has always worked, and on some
+# boots it takes more than one round.  Do not report success when the AP did not
+# come up -- e5-hotspot-retry.timer tries again later, and a green unit with no
+# hotspot is how this stayed invisible for days.
+attempt=0
+while [ "$(pgrep -c hostapd)" = 0 ] && [ "$attempt" -lt 4 ]; do
+    attempt=$((attempt + 1))
     pkill -f hostapd 2>/dev/null || true
     sleep 3
     ip link set wlan0 down 2>/dev/null || true
     iw dev wlan0 set type __ap 2>/dev/null || true
-    ip link set wlan0 up
+    ip link set wlan0 up 2>/dev/null || true
     hostapd -B "$CONF"
     sleep 8
-fi
+    echo "hotspot: attempt $attempt, hostapd=$(pgrep -c hostapd)" >&2
+done
 echo "hostapd: $(pgrep -c hostapd) process(es)"
 [ "$(pgrep -c hostapd)" != 0 ] || { echo "hotspot: hostapd is not running" >&2; exit 1; }
 iw reg get | head -2

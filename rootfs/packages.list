@@ -87,6 +87,10 @@ phoc
 # "gnome-session --session=phosh", exited without a word and the device came up
 # with a display manager that could not start a session.  It is a Depends here.
 gnome-session
+# No RTC on this board.  Without something setting the clock the device boots
+# years behind and apt refuses the mirror ("Not live until ..."), which cost two
+# hand-set clocks today.  It is its own binary package, not part of systemd.
+systemd-timesyncd
 phosh-osk-stub
 squeekboard
 foot

@@ -313,6 +313,15 @@ if [ -n "$rootdir" ]; then
         done
         log "stage=overlay-applied files=$applied"
 
+        # The overlay carries files for the user's home too (the profile that
+        # starts the session), and cpio records them as root:root with whatever
+        # modes the checkout had -- the packed .bash_profile arrived 0600, so the
+        # login shell could not read it and the session silently never started.
+        if [ -d /newroot/home/e5 ]; then
+            chown -R 1000:1000 /newroot/home/e5 2>/dev/null
+            chmod 0644 /newroot/home/e5/.bash_profile 2>/dev/null
+        fi
+
         # systemd considers a unit enabled only when a *.wants/ link points at it,
         # and neither the image builder (boot/build-boot-image.py packs files and
         # directories, and skips symlinks) nor the loop above can carry a link, so

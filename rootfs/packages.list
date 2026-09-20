@@ -56,17 +56,25 @@ mesa-utils
 libdrm-tests
 
 # --- networking ---
-network-manager
+# No NetworkManager.  Everything is either systemd-networkd (usb0's management
+# LAN and its DHCPServer, wlan0's 192.168.9.1) or one of our scripts
+# (e5-bearer-up owns the baseband route, hotspot-start.sh owns wlan0 and
+# dnsmasq), so NM managed nothing but the desktop's network panel.  It cost real
+# time: NetworkManager-wait-online held network-online.target for minutes
+# because NM autoconnects on sipa_dummy0 -- the sprd-wlan placeholder netdev,
+# which needs no address at all -- and that in turn timed the hotspot's start
+# script out and left the WCN chip powered down; its stop path also sat 32 s on
+# WCN teardown during every reboot.
 rfkill
 # nftables: e5-mobile-data creates the NAT table for the USB/Wi-Fi clients and
 # the hotspot's forwarding depends on it.  ethtool: the sipa driver reports wrong
 # hardware checksums and mobile-data turns rx offload off.
 nftables
 ethtool
-# dnsmasq-base (the binary) arrives as a dependency of NetworkManager, but the
-# systemd unit the hotspot's start script restarts is in the full dnsmasq
-# package: without it a client associates and then never gets a lease -- which
-# is exactly how a fresh --no-install-recommends build looked.
+# dnsmasq-base is only the binary; the systemd unit the hotspot's start script
+# restarts lives in the full dnsmasq package.  Without it a client associates
+# and then never gets a lease -- which is exactly how a fresh
+# --no-install-recommends build looked before this line existed.
 dnsmasq
 
 # --- phosh: the session itself ---

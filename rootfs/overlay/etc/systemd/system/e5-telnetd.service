@@ -1,9 +1,9 @@
 [Unit]
 Description=BusyBox telnetd on the USB management LAN
 After=systemd-networkd.service
-# Pulled in by the NetworkManager drop-in (50-e5-networkd.conf) together with
-# systemd-networkd, because the overlay travels into the initramfs as plain files and
-# cannot carry enable symlinks.
+# Enabled by rootfs/device-finalize.sh at image build time: the overlay travels
+# into the initramfs as plain files and cannot carry enable symlinks.  It arrives
+# with systemd-networkd, which brings up usb0 and its DHCP server.
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/busybox telnetd -F -p 23 -l /bin/login

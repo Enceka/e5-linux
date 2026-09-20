@@ -159,11 +159,13 @@ bottom.
   phosh session does not start one; `logind`'s `IdleAction=lock` would need an idle
   hint that phoc never sets (`docs/FINDINGS.md` section 18).
 
-- **Calls and SMS** need a RIL → the daemon is now that RIL (G2): MT SMS and
-  the whole control plane work through `unisoc-cpd serve`; what remains for
-  the desktop is the MO submit (`+CMS 302`, likely SMS-over-IMS, W5), a
-  ModemManager/D-Bus face, and voice (`voice.supported = false` until there is
-  a UCM port).
+- **Calls and SMS** need a RIL → the daemon is now that RIL (G2): MT **and**
+  MO SMS both work through `unisoc-cpd serve` (the MO blockade was a
+  malformed PDU of our own — first octet `0x11` promising an absent TP-VP;
+  FINDINGS §25.7), the control plane matches the Android oracle; what remains
+  for the desktop is a ModemManager/D-Bus face, and voice
+  (`voice.supported = false` until there is a UCM port — voice, unlike SMS,
+  really does ride IMS/VoLTE).
 - **IPv6** is live but unrouted: the carrier hands out `2408:893a:...` with an RA default
   route and nothing uses it.
 - **Audio** is unverified (the MU300 port found its amplifier silent on I2C).

@@ -2518,14 +2518,24 @@ _2026-09-20, same setup (Android slot a, daemon as the only reader), with
   arriving as UCS2 hex (`"6D4B8BD5"` = 测试) under `CSCS="GSM"`, which the
   daemon now decodes.  Reading moved the message to `REC READ` and nothing
   was deleted.
-* **MO does not work, and the encoding is not why.**  Text-mode submit:
-  `+CMS ERROR: 313`.  PDU mode with the carrier SMSC read out of `AT+CSCA?`
-  (stored as hex-of-ASCII by the RIL), then re-armed by hand: still
-  `+CMS ERROR: 302`, national and international destination alike.  Since the
-  same SIM *receives* (NAS SMS inbound), the remaining suspect is the
-  SMS-over-IMS/NAS provisioning the vendor RIL performs — on SIPC channels
-  other than `nr0`/`nr1`, which this takeover does not hold.  That is W5
-  territory and is recorded as such.
+* **MO works over the plain AT channel; the long blockade was a bug in our
+  own PDU, and the earlier "MO rides IMS" reading is withdrawn.**  The
+  blockade looked like this: text-mode submit `+CMS ERROR: 313`; PDU mode
+  `+CMS ERROR: 302` on two different subscriptions, national and
+  international destinations alike — always with the CP registered on NR SA.
+  The vendor's own submit, captured in the radio log as
+  `RIL-AT: AT> 0001000B…<pdu>^Z` during a successful `IMS_SEND_SMS`, showed
+  the difference: its first octet is **`0x01`** (no validity period), while
+  our encoder wrote **`0x11`** (TP-VPF = relative), which promises a TP-VP
+  octet the encoder did not carry — so the CP read every later field one slot
+  off (DCS, UDL, body) and refused the result.  Everything else was already
+  identical: SMSC length 0, the 11-digit national destination with TOA
+  `0x81`, DCS `0x08` UCS2, and the user data.  With the first octet fixed the
+  daemon's submit is accepted (`+CMGS: <mr>`, `OK`) and the message arrives
+  at the recipient, verified end to end on a second subscription.  The
+  `IMS_SEND_SMS` layer above is control glue: urild converts it into exactly
+  this PDU-mode `CMGS` on the AT channel, so **no IMS client is needed for
+  SMS on this generation** — and A5's MO half is done.
 * **Registration needed the band recipe, again.**  With the RIL stopped the
   stack came up (`+CFUN: 1`) but would not register until the bands were
   locked to **LTE b1/b41 + NR n41/n78** *and* the `CFUN=0 → SFUN=2/4` cold

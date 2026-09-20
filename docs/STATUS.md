@@ -1,6 +1,6 @@
 # Status
 
-_Last updated 2026-09-19._
+_Last updated 2026-09-20._
 
 Reasoning, evidence and dead ends live in `docs/FINDINGS.md`.  This file is only the
 work list.  Done work is removed from it once its result is in the table at the
@@ -8,6 +8,18 @@ bottom.
 
 ## Now (目前要做)
 
+- **G2: the daemon has taken the RIL's seat on the handset, and the hotspot
+  runs on our bearer (2026-09-20, Android side).**  What `unisoc-cpd` now does
+  on the device with `urild` stopped: holds both SIPC channels for the session
+  (`serve`), answers capability requests on a unix socket, decodes the URC
+  stream (50/50 lines decoded in one window), re-arms the SMS surface the RIL
+  leaves hostile (`CSCS=HEX`, `CNMI mt=0` — `docs/FINDINGS.md` §25.7), reads
+  incoming SMS by itself, and re-established the data bearer over the `cbnet`
+  APN.  Hotspot clients reached the internet through it after the policy
+  routing / tetherctrl / NAT recipe of FINDINGS §25.8.  Still open, in order:
+  **MO SMS** (`+CMS ERROR: 302` — IMS/NAS provisioning on the RIL's other
+  SIPC channels, W5), the 72 h soak, and the same takeover at boot on the
+  Linux side (slot b), where `unisoc-cpd.service` replaces `e5-atd`.
 - **Baseband: rewritten as a straight port of mu300-linux, aligned with upstream
   `ccc9bb9` (2026-09-19).**
   The Python `atd.py` + `cp-watchdog` pair is gone; what is in the tree now is the
@@ -147,9 +159,11 @@ bottom.
   phosh session does not start one; `logind`'s `IdleAction=lock` would need an idle
   hint that phoc never sets (`docs/FINDINGS.md` section 18).
 
-- **Calls and SMS** need a RIL: this port drives the modem over raw AT
-  (`e5-vendor.service` + `mobile-data`), so `gnome-calls`/`chatty` would have nothing to
-  talk to.
+- **Calls and SMS** need a RIL → the daemon is now that RIL (G2): MT SMS and
+  the whole control plane work through `unisoc-cpd serve`; what remains for
+  the desktop is the MO submit (`+CMS 302`, likely SMS-over-IMS, W5), a
+  ModemManager/D-Bus face, and voice (`voice.supported = false` until there is
+  a UCM port).
 - **IPv6** is live but unrouted: the carrier hands out `2408:893a:...` with an RA default
   route and nothing uses it.
 - **Audio** is unverified (the MU300 port found its amplifier silent on I2C).
@@ -171,7 +185,7 @@ bottom.
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57** -- and clients on the same renderer through the Wayland platform |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
-| baseband | mu300-linux's design, ported: `e5-atd` owns `/dev/stty_nr1` and brokers AT over `/run/e5-at/cmd`, `e5-mobile-data.service` + `e5-mobile-data-watch.service` drive the bearer, `cp_diskserver`/`refnotify` persist the NV; not booted or soaked yet |
+| baseband | `unisoc-cpd` (Rust) owns the CP: on the device it has taken both SIPC channels from `urild` for measured sessions (FINDINGS §25), serves capabilities over a socket, reads MT SMS, and re-establishes the bearer (`cbnet`); the Linux-side boot takeover and the 72 h soak are the remaining gates |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
 | hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at **80 MHz VHT80 (centre 155)**; the old `HT_SCAN` stall was the missing `country CN`, not the width; no AP+STA concurrency |
 | bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |

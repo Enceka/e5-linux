@@ -2410,3 +2410,156 @@ captured the last `dmesg` before a post-switch-root death.
 * Or sidestep the question for a first audibility test: open the PCM
   `PCM_NOIRQ`-style (`SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP`), feed it at a fixed rate
   and listen.  That path needs no interrupt at all, and it is the one Android uses.
+
+## 25. The first on-device takeover: `unisoc-cpd` as the only reader of the AT channel (G2)
+
+_2026-09-20, on the handset booted into Android (slot a), rooted, `urild` the
+incumbent owner.  Everything below was done over `adb` with `su`; the binary is
+the static `aarch64-unknown-linux-musl` build pushed to
+`/data/local/tmp/ucpd/` with the e5 profile beside it.  The whole session ran
+with `vendor.modem_control` left alone — the CP stays booted when only the RIL
+is stopped._
+
+### 25.1 Who holds the channel, before and after
+
+A `/proc/*/fd` scan for `stty_nr0/nr1` is the honest statement of ownership:
+
+* with Android up: exactly one holder, `/vendor/bin/hw/urild`
+  (`init.svc.vendor.ril-daemon`); `slogmodem` runs but holds only `slog_*`;
+* after `stop vendor.ril-daemon`: **no holder at all** — the channel is free,
+  and the takeover is a plain open, not a race.
+
+### 25.2 What worked, first try
+
+As the only reader, every probe and every capability answered:
+
+* `link --seconds 30 --interval 10`: 3/3 probes OK at ~200 ms, **0 timeouts,
+  0 errors**, 16 URC lines with `max_gap 0.0 s`, mailbox IRQ delta 41;
+* `sim`: `+CPIN: READY` — matches Android's `gsm.sim.state = LOADED,LOADED`;
+* `serve` (100 s) + a client over the socket: `sim` and `register status`
+  answered through the daemon, and `state` reported `channels.cmd.opens: 1`,
+  `reopens: 0` — one open for the whole window, which is the entire point of
+  the resident owner;
+* the socket `urc` query returned decoded events: the CP pairs a `+CSQ` and a
+  `+CESQ` URC roughly twice a second once registered, and the decoder read
+  **50 of 50 lines** (`urc_lines 50, decoded 50` — 100 %, no `urc-other`);
+* `band lock lte 1 41` / `band lock nr 41 78` both took and read back exactly
+  (`+SPLBAND=0` → `0,256,0,1,0`, `+SPLBAND=3` → `0,0,272`);
+* 0 CP asserts from beginning to end of the session.
+
+### 25.3 The one thing that did not work, and what actually brings the stack up
+
+Stopping the RIL does not leave the modem runnable: its shutdown path parks the
+radio at **`+CFUN: 0`** (`+CEREG: 2,0`, `+CSQ: 0,99`, every `+CESQ` field 255).
+The recovery the contract already carried — `AT+SFUN=2`, `AT+SFUN=4` — sets
+`+CFUN: 1` but **does not register**: five minutes of waiting stayed at
+`+CEREG: 2,0` with no RF, and band locking (LTE b1/b41, NR n41/n78) changed
+nothing.  What did work is the full cold cycle the Linux side's `radio_on`
+uses:
+
+    AT+CFUN=0 ; then AT+SFUN=2, AT+SFUN=4   →   75 s later:
+
+    +CEREG: 2,1,"10002B","00592002",11      PS registered, home, AcT 11 = NR SA
+    +CGATT: 1                               attached
+
+— which matches the Android oracle for that SIM (46015 广电, NR_SA).  The
+measurable conclusion: **after a RIL shutdown, `SFUN=2/4` alone is not stack
+bring-up; the `CFUN=0 → SFUN=2/4` cold cycle is.**  (Conversely, a CP that
+boots without a RIL at all — the Linux case, FINDINGS §22 — registers after
+the plain `SFUN` pair, so it is the *RIL-shutdown state* that needs the cold
+cycle, not the generation.)
+
+### 25.4 `255` is "not reported", not "-115 dBm"
+
+The unregistered CP answers `+CESQ: 99,99,255,255,255,255,…`, and the literal
+`idx-140` mapping turned 255 into "RSRP 115 dBm" — a nonsense number a reader
+will believe.  `decode_cesq` now returns `None` for a 255 field and the
+display says `not reported`; a *reported* field still decodes (the same line's
+SS-SINR 73 → 26.5 dB).
+
+### 25.5 The procedure error the session made, and the rule it fixes
+
+Restoring the vendor side, `start vendor.ril-daemon` was issued while the
+100 s `serve` was still alive: the fd scan then showed **`unisoc-cpd` and
+`urild` holding the channels at the same time** — the plan's only red line,
+violated by sequencing, not by the code (the flock is advisory and `urild`
+never takes it; it only coordinates our own instances).  Nothing broke — and
+the session had one clean piece of evidence that the daemon *noticed*: its
+idle probe failed exactly once, in that window.  The rule for every future
+transfer, in both directions:
+
+> **never `start` the other owner until our daemon has exited and the fd scan
+> shows the channel free; never `serve` past the point the other side is told
+> to start.**  Verify with the `/proc/*/fd` scan, not with an assumption.
+
+### 25.6 Left changed on the device: nothing
+
+The band experiment was reverted before the RIL came back: LTE re-locked to
+the RIL's own set (read back `+SPLBAND: 0,482,2056,213,0` = bands
+1,3,5,7,8,20,28,34,38,39,40,41) and NR unlocked (`+SPLBAND=2,0,0,0,0`,
+read back `(none)`).  After `start vendor.ril-daemon`: `LOADED,LOADED`,
+`46015,46001`, `NR_SA,LTE` — identical to the pre-session baseline — and the
+closing `diag asserts` read 0.
+
+### 25.7 Second session: SMS surface, the MT path works, the MO path does not
+
+_2026-09-20, same setup (Android slot a, daemon as the only reader), with
+`serve` held open for the whole session and clients on its socket._
+
+* **The SMS surface the RIL leaves behind is hostile, and the daemon now
+  re-arms it at start-up.**  Measured: `+CSCS: "HEX"` (under which
+  `CMGS="<number>"` is not a phone number) and `+CNMI: 0,0,0,1,0` (mt=0 — new
+  messages are stored *without* announcing them, so the `+CMTI:` path never
+  starts).  `serve` now sets `CMGF=1`, `CSCS="GSM"` and `CNMI=2,1,0,0,0` once
+  and reports all three in its `state`.
+* **MT works end to end.**  A message sent to SIM1 announced itself with
+  `+CMTI: "SM",1`; the daemon read it between requests with `AT+CMGR=1` and a
+  client saw sender, status, service-centre timestamp and body — the body
+  arriving as UCS2 hex (`"6D4B8BD5"` = 测试) under `CSCS="GSM"`, which the
+  daemon now decodes.  Reading moved the message to `REC READ` and nothing
+  was deleted.
+* **MO does not work, and the encoding is not why.**  Text-mode submit:
+  `+CMS ERROR: 313`.  PDU mode with the carrier SMSC read out of `AT+CSCA?`
+  (stored as hex-of-ASCII by the RIL), then re-armed by hand: still
+  `+CMS ERROR: 302`, national and international destination alike.  Since the
+  same SIM *receives* (NAS SMS inbound), the remaining suspect is the
+  SMS-over-IMS/NAS provisioning the vendor RIL performs — on SIPC channels
+  other than `nr0`/`nr1`, which this takeover does not hold.  That is W5
+  territory and is recorded as such.
+* **Registration needed the band recipe, again.**  With the RIL stopped the
+  stack came up (`+CFUN: 1`) but would not register until the bands were
+  locked to **LTE b1/b41 + NR n41/n78** *and* the `CFUN=0 → SFUN=2/4` cold
+  cycle was run — on this unit, an unbounded NR scan (移动/广电 bands) hangs.
+  The locks stayed in place for the rest of the session.
+
+### 25.8 The internet, restored under our bearer (G3's AT half)
+
+With the RIL stopped the handset had no data — expected, because nothing
+re-establishes the bearer.  What the session established, all measured:
+
+* **The RIL's teardown destroys the internet context.**  `AT+CGACT?` after the
+  stop shows only cid 11 active, and `AT+CGCONTRDP=11` names it `ims` — the
+  VoLTE context survives, the internet one does not.  (Its interface
+  addresses linger on `sipa_eth0`, which reads as "up" and is a lie: a ping
+  has no route.)
+* **A fresh context works.**  `CGDCONT=1,"IPV4V6","cbnet"` → `CGACT=1,1` →
+  `CGCONTRDP` (address 10.x/8, DNS 43.239.172.x) → `CGDATA="M-ETHER",1` →
+  `CONNECT` — the same sequence the contracts §4.1 carries, on the 广电 card.
+* **Android's policy routing kills unknown bearers, twice.**  Rule
+  `32000: from all unreachable` swallows any packet whose lookup does not
+  match an earlier table, so a main-table default is not enough; and the
+  *return* path of a tethered client looks up the same tables after
+  de-NAT.  The working recipe: default route in table **`legacy_system`**
+  (matched at priority 18000 by unmarked traffic) *plus* the on-link subnets
+  in that table (`10/8` via `sipa_eth0`, the hotspot's `192.168.43.0/24` via
+  `wlan0`), so replies reach the client.
+* **Tethering needs two more rules.**  `tetherctrl_FORWARD` carries a
+  catch-all `DROP` and netd only inserts ACCEPT pairs for uplinks it knows —
+  with the RIL stopped `sipa_eth0` is unknown, so 2670 client packets were
+  dropped there.  `iptables -I tetherctrl_FORWARD` with the
+  `wlan0 ↔ sipa_eth0` ACCEPT pair, plus `-t nat -A POSTROUTING -o sipa_eth0
+  -j MASQUERADE`, and hotspot clients reached the internet.
+* Client DNS still has to be set statically for now: DHCP advertises the
+  upstream DNS netd knows, which is nothing.  All of these are runtime
+  fixes; the permanent home is the daemon's `data up` plus the rootfs's own
+  NAT (`e5_nat`) on the Linux side, which is the G3 acceptance itself.

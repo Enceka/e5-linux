@@ -2645,7 +2645,7 @@ Two things about it are worth remembering.  The agent's own shell cannot open
 `/dev` nodes ("Operation not permitted"), so this is a step the human has to
 run.  And `/dev/cu.usbmodem*` only exists while the gadget is bound: after the
 UDC was lost the host saw neither half of the device, and a power cycle -- not
-a replug -- was what brought it back.
+a replug -- was what brought it back.  In the case that cost the most time it was the host port being switched from a hand-set address to DHCP that lost the path; the gadget itself was fine.
 
 ### Two red herrings from the same boot
 

@@ -60,6 +60,16 @@ bash "$HERE/e5-chroot.sh" '
 echo "=== services ==="
 bash "$HERE/e5-chroot.sh" '
     set -e
+    # SDDM, after all.  Its Wayland *greeter* cannot draw on this image
+    # (kwin_wayland went with KDE, x11-user was never installed), but the session
+    # does not go through the greeter: /etc/sddm/wayland-session execs the session
+    # directly and the image's own sddm config carries the WLR_RENDERER=gles2 that
+    # phoc needs on this panel.  Autologin takes it from there, both on the
+    # display and on the keypad.
+    #
+    # A getty-based session was tried instead for a day and is a trap: without
+    # that env phoc spins at 90% CPU, the session never appears to input, and the
+    # physical keys look dead -- they are not, they just never reach the UI.
     systemctl --root=/ enable sddm.service >/dev/null 2>&1 || echo "warn: sddm enable failed"
     # This board has no RTC: without something setting the clock the device comes
     # up years behind and apt refuses the mirror ("Not live until ...").  The

@@ -1,20 +1,26 @@
 [Unit]
-Description=e5-linux: data bearer through unisoc-cpd (G3)
-# The daemon owns the AT channels; the bearer goes out through its socket.
-# The CP needs a minute or two to register on NR SA before CGACT can succeed,
-# so this retries until it sticks.
+Description=e5-linux: radio + data bearer through unisoc-cpd (G2/G3)
+# The daemon owns the AT channels; the radio and the bearer both go out through
+# its socket.  The script does one pass per start and exits non-zero if the
+# radio or the registration is not there yet; the retrying is all here.
 After=unisoc-cpd.service
 Requires=unisoc-cpd.service
 ConditionPathExists=/dev/stty_nr1
 
 [Service]
-Type=oneshot
+# Type=simple, not oneshot: systemd ignores Restart= for oneshot units, so the
+# one attempt this service used to make was also its last -- the CP needs a
+# minute or two to register before the bearer can go up, and after that first
+# failure sipa_eth0 stayed down with nothing left to try again.
+Type=simple
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/unisoc-cpd --mode native --socket /run/unisoc-cpd/cmd.sock data up
+ExecStart=/opt/e5/e5-bearer-up
+# One attempt a minute: the CP is sensitive to AT volume, and one round is a
+# handful of commands.  This used to be 30 s with a six-second loop inside the
+# script, which flooded the channel and stopped the boot from completing.
 Restart=on-failure
-RestartSec=30
+RestartSec=60
 StartLimitIntervalSec=0
-TimeoutStartSec=180
 Nice=5
 
 [Install]

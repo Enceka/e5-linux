@@ -1,0 +1,52 @@
+# ZTE MU300 -- Unisoc UMS9620: the second platform, same CP family.
+#
+# This profile exists from day one so the core is written against two platforms
+# instead of one, which is what the A12 gate (same binary, profile only) is
+# about.  It is a **stub**: nothing here has been verified on hardware yet, and
+# `verified = false` says so.  `unisoc-cpd --profile mu300 profiles` shows it.
+#
+# The values below come from the mu300-linux port this project derives from;
+# they are the ones to check first when a MU300 shows up.
+
+name = "mu300"
+generation = "unisoc-ums9620"
+description = "ZTE MU300 / F50 (UMS9620) -- stub, unverified"
+verified = false
+
+[channels]
+cmd = "/dev/stty_nr1"
+urc = "/dev/stty_nr0"
+
+[at]
+pace_seconds = 0.3
+default_timeout = 6.0
+urc_gap_seconds = 5.0
+
+[boot]
+method = "chroot-modem_control"
+runner = "/opt/mu300/bin/android-run"
+# UMS9620 spells its modem partitions without the "nr_" prefix.
+partitions = ["modem", "fixnv1", "fixnv2", "runtimenv1", "runtimenv2", "prodnv"]
+
+[nv]
+persist = "cp_diskserver"
+readonly = true
+
+[mailbox]
+driver = "sprd-mailbox"
+irq_match = "mailbox"
+
+[data]
+ifname = "sipa_eth0"
+cid = 1
+
+[voice]
+supported = false
+
+[telemetry]
+assert_pattern = "CP assert"
+
+[vendor]
+register = "mobile-data status"
+signal = "mobile-data signal"
+data = "mobile-data status"

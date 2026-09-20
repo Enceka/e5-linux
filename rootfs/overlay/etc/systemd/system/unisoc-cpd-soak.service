@@ -1,0 +1,27 @@
+[Unit]
+Description=unisoc-cpd CP link soak (W1 gate: 0 asserts, 0 AT silence)
+Documentation=file:/etc/unisoc-cpd/README.md
+# The SIPC tty only exists once the vendor modem stack is up.
+ConditionPathExists=/dev/stty_nr1
+After=e5-vendor.service
+Wants=e5-vendor.service
+# The incumbent broker is the one owner of /dev/stty_nr1 while it runs; the
+# daemon refuses to become a second reader, on purpose.
+Conflicts=e5-atd.service e5-mobile-data-watch.service
+
+[Service]
+Type=oneshot
+# One hour of owning the channels, probing every 30 s; the timer restarts it.
+# Widen --seconds to 259200 for the 72 h run, or drop the timer and let the
+# service run for the whole window.
+ExecStart=/usr/local/bin/unisoc-cpd --profile e5 --mode native \
+    --profiles-dir /etc/unisoc-cpd --runs-dir /var/lib/unisoc-cpd/runs \
+    --state-dir /run/unisoc-cpd \
+    link --seconds 3600 --interval 30
+# A CP that died must not turn into a boot loop of restarts.
+StartLimitIntervalSec=0
+TimeoutStartSec=infinity
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -63,6 +63,11 @@ rfkill
 # hardware checksums and mobile-data turns rx offload off.
 nftables
 ethtool
+# dnsmasq-base (the binary) arrives as a dependency of NetworkManager, but the
+# systemd unit the hotspot's start script restarts is in the full dnsmasq
+# package: without it a client associates and then never gets a lease -- which
+# is exactly how a fresh --no-install-recommends build looked.
+dnsmasq
 
 # --- phosh: the session itself ---
 # sddm autologins phosh.desktop (etc/sddm.conf in the overlay), so a fresh install
@@ -72,6 +77,10 @@ phoc
 phosh-osk-stub
 squeekboard
 foot
+# Portal backends used to arrive as Recommends of xdg-desktop-portal; a session
+# whose apps ask for a portal has none without them.
+xdg-desktop-portal-gtk
+xdg-desktop-portal-phosh
 
 # --- Wi-Fi hotspot ---
 # hostapd runs the AP and iw sets the regulatory domain (regdb-load): with a
@@ -79,11 +88,31 @@ foot
 # and hostapd reaches AP-ENABLED (docs/FINDINGS.md 20).
 iw
 hostapd
+# The signed regulatory.db e5-regdb-load installs: with it the driver advertises
+# 5725-5850 @ 80 MHz and hostapd reaches AP-ENABLED.
+wireless-regdb
 
-# --- UFI-TOOLS' terminal panel ---
-ttyd
+# --- UFI-TOOLS ---
+# Its backend is pure Python 3 standard library, so python3 is the whole
+# requirement.  The terminal panel used to be ttyd; that package is gone from
+# trixie (apt fails the install with "Unable to locate package ttyd"), so the
+# overlay ships gotty instead -- one static aarch64 binary, same job, and
+# UFI-TOOLS' ttyd_unit/ttyd_port point at its unit (gotty.service, port 1146).
+python3
+
+# --- field diagnostics ---
+# Both were missed while chasing the modem, the daemon and the Wi-Fi by hand.
+strace
+lsof
 
 # --- audio (UCM for the UMS9621 codec is not ported; PipeWire is here so the
 #     stack exists once it is) ---
 pipewire
 wireplumber
+# PulseAudio/ALSA compatibility for desktop apps (the Android HAL's paths do not
+# exist here; PipeWire is what the session's clients will use).
+pipewire-pulse
+pipewire-alsa
+# e5-bt-attach runs btattach/bluetoothd; bluez only arrived as someone else's
+# dependency before.
+bluez

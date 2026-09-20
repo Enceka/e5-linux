@@ -1,0 +1,26 @@
+#!/bin/sh
+# UFI-TOOLS for Linux.
+#
+# Two layouts are supported, because the same file serves both: a source
+# checkout (the module sits in this script's parent directory) and the installed
+# tree from install.sh, which puts the module in /usr/lib/ufi-tools and this
+# script in /usr/bin -- where "the parent directory" is /usr and the module is
+# nowhere the interpreter looks, which is how "No module named ufitools" showed
+# up on the device.
+set -eu
+
+if [ -d /usr/lib/ufi-tools/ufitools ]; then
+    LIB=/usr/lib/ufi-tools
+else
+    SELF=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    LIB=$(dirname "$SELF")
+fi
+
+if [ -n "$PYTHONPATH" ]; then
+    PYTHONPATH="$LIB:$PYTHONPATH"
+else
+    PYTHONPATH="$LIB"
+fi
+export PYTHONPATH
+
+exec python3 -m ufitools "$@"

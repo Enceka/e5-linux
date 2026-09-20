@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the unisoc-cpd CP link soak every hour
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

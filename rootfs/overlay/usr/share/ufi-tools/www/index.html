@@ -1,0 +1,2302 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <link rel="icon" type="image/svg+xml" href="/favicon.webp">
+    <title id="TITLE">UFI-TOOLS-WEB</title>
+    <script>
+        (() => {
+            try {
+                new Function('var obj = {}; return obj?.a;');
+            } catch (e) {
+                alert("您的浏览器版本过低，无法使用本页面，请升级浏览器版本后再试\nYour browser version is too old to use this page. Please update your browser and try again.")
+            }
+        })()
+    </script>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/style/style.css">
+    <script src="/script/polyfill.min.js"></script>
+    <script src="/script/requests.js"></script>
+    <script src="/script/lib/crypto.js"></script>
+    <script src="/script/lib/sortable.js"></script>
+    <script src="/script/lib/filesaver.js"></script>
+    <script src="/script/lib/chart.js"></script>
+
+    <script>
+        const baseSize = 14;
+        const minScale = 0.9;
+        const maxScale = 1.2;
+
+        function setRem() {
+            const width = document.documentElement.clientWidth;
+            let scale = width / 375;
+            // 限制缩放范围
+            if (scale < minScale) scale = minScale;
+            if (scale > maxScale) scale = maxScale;
+            document.documentElement.style.fontSize = (baseSize * scale) + 'px';
+        }
+        setRem();
+        window.addEventListener('resize', setRem);
+    </script>
+</head>
+
+<body id="BG">
+    <div class="bg" id="BG_OVERLAY">
+        <div class="container">
+            <div class="title main-title" style="align-items: end;">
+                <strong id="MAIN_TITLE" style="flex-shrink: 0;" onclick="enableTTYD()">UFI-TOOLS</strong>
+                <strong id="MODEL"
+                    style="font-size: .8rem;overflow: hidden;text-overflow: ellipsis;white-space: nowrap;box-shadow: none;text-shadow: none;max-width: 400px;"
+                    onclick="nicknameSettingClick()"></strong>
+            </div>
+            <!-- 操作按钮 -->
+            <div class="kano_function_main func_list_container">
+                <div class="title" id="collapseBtn_menu"
+                    style="align-self: start;justify-self: start;margin: 6px;margin-left: 0;margin-top: 0;">
+                    <strong style="white-space: nowrap;" data-i18n="func_list">功能列表</strong>
+                    <!-- <button id="CLPS">功能列表</button> -->
+                </div>
+                <div class="functions-container actions collapse collapse_menu" data-name="close">
+                    <div style="margin: auto;">
+                        <div class="collapse_box actions-buttons">
+                            <button id="CLEAR" class="btn" data-i18n="login_btn">登录/登出</button>
+                            <button class="btn REFRESH_BTN" data-i18n="stop_refresh">停止刷新</button>
+                            <button id="CHANGETOKEN" class="btn" data-i18n="change_token"
+                                onclick="createToast(t('please_login'),'red')">更改口令</button>
+                            <button id="CHANGEPWD" class="btn" data-i18n="change_password"
+                                onclick="createToast(t('please_login'),'red')">更改密码</button>
+                            <button id="REBOOT" class="btn" data-i18n="reboot"
+                                onclick="createToast(t('please_login'),'red')">重启设备</button>
+                            <button id="SCHEDULE_REBOOT" class="btn" data-i18n="schedule_reboot"
+                                onclick="createToast(t('please_login'),'red')">定时重启</button>
+                            <button id="SHUTDOWN" style="display: none;" class="btn" data-i18n="shutdown"
+                                onclick="createToast(t('please_login'),'red')">关机</button>
+                            <button id="BG_SETTING" class="btn" data-i18n="bg_setting"
+                                onclick="createToast(t('please_login'),'red')">主题背景</button>
+                            <button id="PLUGIN_SETTING" class="btn" data-i18n="plugin_setting"
+                                onclick="createToast(t('please_login'),'red')">插件功能</button>
+                            <div style="display: inline-block;position: relative;">
+                                <div class="tip" style="display: none;" id="UNREAD_SMS">0</div>
+                                <button id="SMS" class="btn" data-i18n="sms">短信收发</button>
+                            </div>
+                            <button id="DataManagement" class="btn" data-i18n="data_mgmt">流量管理</button>
+                            <button id="DataUsageHistory" onclick="openDataUsageHistory()" class="btn"
+                                data-i18n="data_usage_history_btn">流量历史</button>
+                            <button id="SpeedTestBtn" class="btn" data-i18n="speed_test"
+                                onclick="showModal('#speedTestModal')">内网测速</button>
+                            <button id="CellularSpeedTestBtn" class="btn" data-i18n="cellular_speed_test"
+                                onclick="createToast(t('please_login'),'red')">流量测速</button>
+                            <button id="ClientManagement" class="btn" data-i18n="client_mgmt">接入设备</button>
+                            <button id="WIFIManagement" class="btn" data-i18n="wifi_mgmt">WIFI设置</button>
+                            <button id="LANManagement" class="btn" data-i18n="lan_mgmt">内网设置</button>
+                            <button id="AT" class="btn" data-i18n="at_cmd"
+                                onclick="createToast(t('please_login'),'red')">AT指令</button>
+                            <button id="ADVANCE" class="btn" data-i18n="advanced"
+                                onclick="createToast(t('please_login'),'red')">高级功能</button>
+                            <button id="CECULLAR" class="btn" data-i18n="cellular"
+                                onclick="createToast(t('please_login'),'red')">数据流量</button>
+                            <button id="LIGHT" class="btn" data-i18n="indicator"
+                                onclick="createToast(t('please_login'),'red')">指示灯</button>
+                            <button id="NFC" style="display: none;" class="btn" data-i18n="nfc"
+                                onclick="createToast(t('please_login'),'red')">NFC</button>
+                            <button id="SMB" class="btn" data-i18n="file_sharing"
+                                onclick="createToast(t('please_login'),'red')">文件共享</button>
+                            <button id="ROAM" class="btn" data-i18n="network_roam"
+                                onclick="createToast(t('please_login'),'red')">网络漫游</button>
+                            <button id="smsForward" class="btn" data-i18n="sms_forward"
+                                onclick="createToast(t('please_login'),'red')">短信转发</button>
+                            <button id="ScheduledTaskManagement" class="btn" data-i18n="scheduled_task"
+                                onclick="createToast(t('please_login'),'red')">定时任务</button>
+                            <button id="APNManagement" data-i18n="apn_setting" class="btn"
+                                onclick="createToast(t('please_login'),'red')">APN设置</button>
+                            <button id="USBStatusManagement" data-i18n="usb_status" class="btn"
+                                onclick="createToast(t('please_login'),'red')">USB状态</button>
+                            <button id="OTA" class="btn" data-i18n="ota"
+                                onclick="createToast(t('please_login'),'red')">软件更新</button>
+
+                            <select class="select" style="display: none;" id="SLEEP_TIME"
+                                onchange="changeSleepTime(event)">
+                                <option value="-1" data-i18n="sleep_never">从不休眠</option>
+                                <option value="5" data-i18n="sleep_5_min">5分钟</option>
+                                <option value="10" data-i18n="sleep_10_min">10分钟</option>
+                                <option value="20" data-i18n="sleep_20_min">20分钟</option>
+                                <option value="30" data-i18n="sleep_30_min">30分钟</option>
+                                <option value="60" data-i18n="sleep_1_hr">1小时</option>
+                                <option value="120" data-i18n="sleep_2_hr">2小时</option>
+                            </select>
+
+                            <select class="select" id="NET_TYPE" onchange="changeNetwork(event)">
+                                <option value="WL_AND_5G" data-i18n="net_auto">5G/4G/3G</option>
+                                <option value="LTE_AND_5G" data-i18n="net_nsa">5G NSA</option>
+                                <option value="Only_5G" data-i18n="net_sa">5G SA</option>
+                                <option value="WCDMA_AND_LTE" data-i18n="net_4g_3g">4G/3G</option>
+                                <option value="Only_LTE" data-i18n="net_4g">仅4G</option>
+                                <option value="Only_WCDMA" data-i18n="net_3g">仅3G</option>
+                            </select>
+
+                            <select class="select" id="USB_TYPE" onchange="changeUSBNetwork(event)">
+                                <option value="0" data-i18n="usb_auto">USB上网:自动</option>
+                                <option value="1" data-i18n="usb_rndis">RNDIS</option>
+                                <option value="2" data-i18n="usb_cdc">CDC-ECM</option>
+                            </select>
+
+                            <select class="select" id="SIM_CARD_TYPE" style="display: none;"
+                                onchange="changeSimCard(event)">
+                                <option value="0" data-i18n="sim1">SIM1</option>
+                                <option value="1" data-i18n="sim2">SIM2</option>
+                            </select>
+
+                            <select class="select" id="SIM_CARD_TYPE_V50" style="display: none;"
+                                onchange="changeSimCard(event)">
+                                <option value="0" data-i18n="sim1_v50">移动</option>
+                                <option value="1" data-i18n="sim2_v50">电信</option>
+                                <option value="2" data-i18n="sim3_v50">联通</option>
+                                <option value="11" data-i18n="sim4_v50">外置</option>
+                            </select>
+
+                            <select class="select" id="LANG"></select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- 设备监控 -->
+            <div class="kano_function_main devices-mon">
+                <div class="title" style="margin: 6px 0;">
+                    <strong data-i18n="device_mon">设备监控</strong>
+                    <div style="display: inline-block;" id="collapse_device_mon_btn"></div>
+                </div>
+                <div class="collapse" id="collapse_device_mon">
+                    <div class="collapse_box">
+                        <div style="overflow: auto;position: relative">
+                            <div class="charts">
+                                <div class="chart statusCard" style="max-width: 200px;height: 60px;">
+                                    <canvas style="margin-left: -4px;" id="kanoCpuChart"></canvas>
+                                </div>
+                                <div class="chart statusCard"
+                                    style="position: relative;;max-width: 200px;height: 60px;">
+                                    <span
+                                        style="position: absolute;z-index: 0;;top: 4px;left: 50%;transform: translateX(-50%);font-size: 12px;"
+                                        data-i18n="core_usage">核心使用率</span>
+                                    <canvas style="margin-left: -4px;" id="kanoCpuCoreChart"></canvas>
+                                </div>
+                                <div class="cpu-card chart statusCard">
+                                    <span
+                                        style="position: absolute;top: 2px;left: 50%;transform: translateX(-50%);font-size: 12px;"
+                                        data-i18n="cpu_freq">CPU频率(MHz)</span>
+                                    <div class="card-inner" id="cpuFreqList">
+                                    </div>
+                                </div>
+                                <div class="chart statusCard" style="max-width: 200px;height: 60px;"
+                                    onclick="showModal('#memInfoModal')">
+                                    <canvas style="margin-left: -4px;" id="kanoMemChart"></canvas>
+                                </div>
+                                <div class="chart statusCard" onclick="showModal('#cpuTempInfoModal')"
+                                    style="max-width: 200px;height: 60px;">
+                                    <canvas style="margin-left: -4px;" id="kanoTempChart"></canvas>
+                                </div>
+                                <div onclick="showNetConnInfoModal()" class="chart statusCard net-card"
+                                    style="width: 200px;height: 60px;">
+                                    <canvas style="margin-left: -14px;" id="kanoNetChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- 状态 -->
+            <div class="kano_function_main status-container">
+                <div class="title" style="margin: 6px 0;">
+                    <strong data-i18n="base_info">基本状态</strong>
+                    <div style="display: inline-block;" id="collapse_status_btn"></div>
+                </div>
+                <div class="collapse" id="collapse_status">
+                    <div class="collapse_box">
+                        <div style="overflow: auto;position: relative">
+                            <div class="title" style="margin-bottom: 6px;">
+                                <button id="DICTIONARY" class="btn" style="padding: 4px;margin-left: 0;"
+                                    data-i18n="manage_fields">管理字段</button>
+                                <button class="btn REFRESH_BTN" style="padding: 4px;margin-left: 10px;"
+                                    data-i18n="stop_refresh">停止刷新</button>
+                                <select class="select" id="refreshRateSelect" onchange="changeRefreshRate(event)"
+                                    style="padding: 3px;margin-left: 10px;">
+                                    <option value="5000" data-i18n="refresh_5s">5秒</option>
+                                    <option value="3000" data-i18n="refresh_3s">3秒</option>
+                                    <option value="2500" data-i18n="refresh_2_5s">2.5秒</option>
+                                    <option value="2000" data-i18n="refresh_2s">2秒</option>
+                                    <option value="1900" data-i18n="refresh_1_9s">1.9秒</option>
+                                    <option value="1700" data-i18n="refresh_1_7s">1.7秒</option>
+                                    <option value="1500" data-i18n="refresh_1_5s">1.5秒</option>
+                                    <option value="1300" data-i18n="refresh_1_3s">1.3秒</option>
+                                    <option value="1000" data-i18n="refresh_1s">1秒</option>
+                                    <option value="900" data-i18n="refresh_0_9s">0.9秒</option>
+                                    <option value="800" data-i18n="refresh_0_8s">0.8秒</option>
+                                    <option value="700" data-i18n="refresh_0_7s">0.7秒</option>
+                                    <option value="600" data-i18n="refresh_0_6s">0.6秒</option>
+                                    <option value="500" data-i18n="refresh_0_5s">0.5秒</option>
+                                    <option value="400" data-i18n="refresh_0_4s">0.4秒</option>
+                                    <option value="300" data-i18n="refresh_0_3s">0.3秒</option>
+                                    <option value="200" data-i18n="refresh_0_2s">0.2秒</option>
+                                    <option value="100" data-i18n="refresh_0_1s">0.1秒</option>
+                                </select>
+                            </div>
+                            <ul class="deviceList" id="STATUS">
+                                <li style="padding-top: 15px;">
+                                    <strong class="green"
+                                        style="margin: 10px auto;margin-top: 0; display: flex;flex-direction: column;padding: 40px;">
+                                        <span style="font-size: 50px;" class="spin">🌀</span>
+                                        <span style="font-size: 16px;padding-top: 10px;">loading...</span>
+                                    </strong>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- TTYD -->
+            <div id="TTYD" class="kano_function_main" style="display: none;width: 100%;margin-top: 10px;">
+                <div class="title" style="margin: 6px 0 ;">
+                    <strong>TTYD</strong>
+                    <div style="display: inline-block;" id="collapse_ttyd_btn"></div>
+                </div>
+                <div class="collapse" id="collapse_ttyd">
+                    <div class="collapse_box">
+                        <ul class="deviceList">
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <!-- 锁频锁基站 -->
+            <div class="kano_function_main band-lock-container">
+                <div class="title" style="margin: 6px 0 ;">
+                    <strong data-i18n="lock_band_title">🔒 锁定频段</strong>
+                    <div style="display: inline-block" id="collapse_lkband_btn"></div>
+                </div>
+                <div class="collapse" id="collapse_lkband" style="overflow: visible;margin: 0">
+                    <div class="collapse_box">
+                        <form class="bands" id="bandsForm" onsubmit="submitBandForm(event)">
+                            <table class="nice-table">
+                                <thead>
+                                    <tr>
+                                        <th><input type="checkbox" id="selectAllBand"></th>
+                                        <th>Band</th>
+                                        <th data-i18n="col_freq_range">频率范围 (MHz)</th>
+                                        <th data-i18n="col_mode">制式</th>
+                                        <th data-i18n="col_operator">运营商</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="bandTable">
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="1"></td>
+                                        <td>B1</td>
+                                        <td>2100</td>
+                                        <td>FDD-LTE</td>
+                                        <td data-i18n="carrier_unicom_telecom">联通/电信</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="3"></td>
+                                        <td>B3</td>
+                                        <td>1800</td>
+                                        <td>FDD-LTE</td>
+                                        <td data-i18n="carrier_all">三大运营商</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="5"></td>
+                                        <td>B5</td>
+                                        <td>850</td>
+                                        <td>FDD-LTE</td>
+                                        <td data-i18n="carrier_telecom">电信</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="8"></td>
+                                        <td>B8</td>
+                                        <td>900</td>
+                                        <td>FDD-LTE</td>
+                                        <td data-i18n="carrier_mobile">移动</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="34"></td>
+                                        <td>B34</td>
+                                        <td>2000</td>
+                                        <td>TD-LTE</td>
+                                        <td data-i18n="carrier_mobile">移动</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="38"></td>
+                                        <td>B38</td>
+                                        <td>2600</td>
+                                        <td>TD-LTE</td>
+                                        <td data-i18n="carrier_mobile">移动</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="39"></td>
+                                        <td>B39</td>
+                                        <td>1900</td>
+                                        <td>TD-LTE</td>
+                                        <td data-i18n="carrier_mobile">移动</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="40"></td>
+                                        <td>B40</td>
+                                        <td>2300</td>
+                                        <td>TD-LTE</td>
+                                        <td data-i18n="carrier_mobile">移动</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="checkbox" data-type="4G" data-band="41"></td>
+                                        <td>B41</td>
+                                        <td>2500–2690</td>
+                                        <td>TD-LTE</td>
+                                        <td data-i18n="carrier_mobile">移动</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <button id="lockBandBtn" type="submit" class="btn"
+                                style="width: 100%;margin-top: 6px;padding: 8px;font-size: 14px;"
+                                data-i18n="btn_lock_band">锁频段!</button>
+                        </form>
+                        <button id="unlockBandBtn" onclick="unlockAllBand()" class="btn"
+                            style="width: 100%;margin-top: 6px;padding: 8px;font-size: 14px;"
+                            data-i18n="btn_unlock_band">解除锁频段!</button>
+                    </div>
+                </div>
+            </div>
+            <div class="kano_function_main freq-lock-container">
+                <div class="title" style="margin: 6px 0;">
+                    <strong data-i18n="lock_cell_title">🔒 锁定基站</strong>
+                    <div style="display: inline-block;" id="collapse_lkcell_btn"></div>
+                </div>
+                <div class="collapse" id="collapse_lkcell" style="overflow: visible;margin: 0;">
+                    <div class="collapse_box">
+                        <div class="title">
+                            <div>
+                                <i style="font-size: 12px;" data-i18n="cell_tip">🚀 注意，选错基站可能会导致信号不稳定/无信号等问题
+                                    🚀</i>
+                                <br>
+                                <i style="font-size: 12px;" data-i18n="cell_tip1">提示：暂停刷新后可以依次锁定多个基站</i>
+                            </div>
+                        </div>
+                        <div class="title" style="margin: 10px 0 ;margin-top: 20px;"><strong
+                                data-i18n="locked_cell">已锁基站</strong></div>
+                        <table class="nice-table" id="LOCKED_CELL_FORM">
+                            <thead>
+                                <tr>
+                                    <th data-i18n="network_type">类型</th>
+                                    <th>PCI</th>
+                                    <th data-i18n="network_freq">频率</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            </tbody>
+                        </table>
+                        <div class="title" style="display: block;margin: 10px 0;">
+                            <strong data-i18n="current_cell" style="margin-right: 10px;">当前基站信息：</strong>
+                            <button id="SELECT_CURRENT_CELL_BTN" style="margin:0"
+                                data-i18n="select_current_cell">选择当前基站</button>
+                        </div>
+                        <table class="nice-table">
+                            <thead>
+                                <tr>
+                                    <th data-i18n="network_band">频段</th>
+                                    <th data-i18n="network_freq">频率</th>
+                                    <th>PCI</th>
+                                    <th>RSRP</th>
+                                    <th>SINR</th>
+                                    <th>RSRQ</th>
+                                </tr>
+                            </thead>
+                            <tbody class="blur-px" id="CURRENT_CELL">
+                            </tbody>
+                        </table>
+                        <div class="title" style="margin: 10px 0 ;">
+                            <strong data-i18n="cell_list">基站列表</strong>
+                            <button class="btn" data-toggle="1" id="lkCellRefreshBtn"
+                                onclick="toggleCellInfoRefresh(event)" style="padding: 4px;margin-left: 10px;"
+                                data-i18n="stop_refresh">停止刷新</button>
+                        </div>
+                        <form id="cellForm" onsubmit="submitCellForm(event)" style="overflow-x: auto;">
+                            <table class="nice-table">
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="network_band">频段</th>
+                                        <th data-i18n="network_freq">频率</th>
+                                        <th>PCI</th>
+                                        <th>RSRP</th>
+                                        <th>SINR</th>
+                                        <th>RSRQ</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+
+                                </tbody>
+                            </table>
+                            <div style="display: flex;align-items: center; padding: 8px;margin-top: 10px;">
+                                <strong data-i18n="network_select">网络选择：</strong>
+                                <label style="display: flex;align-items: center;margin-right: 20px;"><span>4G
+                                    </span>
+                                    <input style="margin: 0 0 0 8px;" type="radio" name="RAT" value="12" />
+                                </label>
+                                <label style="display: flex;align-items: center;"><span>5G </span>
+                                    <input style="margin: 0 0 0 8px;" checked type="radio" name="RAT" value="16" />
+                                </label>
+                            </div>
+                            <div style="margin: 10px;display: flex;gap: 10px;">
+                                <input style="padding: 8px; width: 100%;flex: 1;" id="PCI" name="PCI" type="text"
+                                    placeholder="PCI">
+                                <button type="none" onclick="event.preventDefault();resetInput('PCI')"
+                                    data-i18n="plugin_search_reset_btn">重置</button>
+                            </div>
+                            <div style="margin: 10px;display: flex;gap: 10px;">
+                                <input style="padding: 8px; width: 100%;flex: 1;" id="EARFCN" name="EARFCN" type="text"
+                                    placeholder="EARFCN">
+                                <button type="none" onclick="event.preventDefault();resetInput('EARFCN')"
+                                    data-i18n="plugin_search_reset_btn">重置</button>
+                            </div>
+                            <button type="submit" class="btn"
+                                style="margin-top: 6px;;width: 100%;padding: 8px;font-size: 14px;"
+                                data-i18n="btn_lock_cell">锁基站!</button>
+                        </form>
+                        <button onclick="unlockAllCell()" class="btn"
+                            style="margin-top: 6px;;width: 100%;padding: 8px;font-size: 14px;"
+                            data-i18n="btn_unlock_cell">解除锁定基站</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 登录模态框 -->
+            <div class="mask" id="tokenModal" style="display: none">
+                <div class="modal" style="width: 90vw;max-width: 450px;">
+                    <div class="title" style="display: flex;justify-content: space-between;">
+                        <span data-i18n="token_title">请输入口令与密码</span>
+                        <button style="border-radius: 50%;" onclick="showLoginHelp()">?</button>
+                    </div>
+                    <div class="title" style="margin: 10px 0;">
+                        <p style="font-size: 12px;margin: 0;">
+                            <i>
+                                <span data-i18n="token_note_1">注：请填入口令和密码</span><br>
+                                <span data-i18n="token_note_2">第一个为UFI-TOOLS登录口令(默认为admin)</span><br>
+                                <span data-i18n="token_note_3">第二个为某兴后台的管理密码(在机器背面可以找到)</span><br>
+                                <span data-i18n="token_note_4">如果出现密码错误，请换一个登录方式</span>
+                            </i>
+                        </p>
+                    </div>
+                    <form class="content"
+                        style="padding: 0px 4px 0 4px;display: flex;flex-direction: column;align-items: center;">
+                        <input type="text" name="username" autocomplete="username" style="display: none;">
+                        <div style="display: flex;width: 100%;">
+                            <select style="width: 100%;margin-bottom: 10px;" class="select" name="" value="1"
+                                id="login_method">
+                                <option value="1" data-i18n="login_method_1">登录方式1</option>
+                                <option value="0" data-i18n="login_method_2">登录方式2</option>
+                            </select>
+                            <button type="button" data-i18n="no_pass_login_btn"
+                                onclick="event.preventDefault();noPassLogin()"
+                                style="flex-shrink: 0;margin: 4px 2px;">免密码登录</button>
+                        </div>
+                        <div id="TOKEN_LABEL" style="align-self: start;margin-bottom: 10px;font-size: .85rem;"
+                            data-i18n="token_div_1">UFI 口令：</div>
+                        <div style="display: flex;width: 100%;margin-bottom: 10px;gap: 4px;">
+                            <input name="backend_password" autocomplete="current-password" id="TOKEN" type="password"
+                                data-i18n-placeholder="token_placeholder_token" placeholder="口令(UFI-TOOLS后台应用中查看)"
+                                style="width: 100%;text-indent: .5em;height: 30px;">
+                            <button type="button" onclick="switchPassInputShow(event,'#TOKEN')"
+                                style="background: none;;flex-shrink: 0;display: flex;align-items: center;justify-content: center;"><svg
+                                    style="pointer-events: none;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                                    width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                </svg></button>
+                        </div>
+                        <div style="align-self: start;margin-bottom: 10px;font-size: .85rem;" id="token_div_label2"
+                            data-i18n="token_div_2">
+                            某兴后台密码：</div>
+                        <div style="display: flex;width: 100%;margin-bottom: 10px;gap: 4px;" id="PWD_BLK">
+                            <input name="web_password" autocomplete="new-password" id="PWDINPUT" type="password"
+                                data-i18n-placeholder="token_placeholder_pwd" placeholder="官方后台的管理密码"
+                                style="width: 100%;text-indent: .5em; height: 30px;">
+                            <button type="button" onclick="switchPassInputShow(event,'#PWDINPUT')"
+                                style="background: none;flex-shrink: 0;display: flex;align-items: center;justify-content: center;"><svg
+                                    style="pointer-events: none;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                                    width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                </svg></button>
+                        </div>
+                        <label class="user_select_none"
+                            style="align-self: start;margin-bottom: 10px;margin-top: 2px;font-size: .8rem;display: flex;align-items: center;justify-content: center;">
+                            <span data-i18n="remember-me">记住我</span>
+                            <input type="checkbox" style="margin: 0 6px;" id="loginRememberMe">
+                        </label>
+                    </form>
+                    <div class="btn" style="text-align: right;">
+                        <button data-i18n="confirm_btn" onclick="onTokenConfirm()">确认</button>
+                        <button data-i18n="cancel_btn" onclick="closeModal('#tokenModal')">取消</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 短信模态框 -->
+            <div class="modal" id="smsList" style="display: none;">
+                <div class="title" data-i18n="sms_modal_title" style="margin-bottom: 6px;">短信列表</div>
+                <div class="action" style="margin-top: 10px;background-color: var(--dark-tag-color);">
+                    <span data-i18n="sms_modal_recipient">收件人：</span>
+                    <input id="PhoneInput" type="number" style="flex: 1" placeholder="手机号"
+                        data-i18n-placeholder="sms_modal_input_recipient">
+                </div>
+
+                <div class="content" id="content" style="flex: 1;">
+                    <ul id="sms-list"></ul>
+                </div>
+
+                <div class="action" style="background-color: var(--dark-tag-color);">
+                    <input id="SMSInput" type="text" style="flex: 1;margin-right: 6px" placeholder="输入短信内容"
+                        data-i18n-placeholder="sms_modal_input_content">
+                    <div class="btn"
+                        style="height: 100%;min-width: 103px;display: flex;justify-content: space-between;gap: 6px;align-items: center;">
+                        <button onclick="sendSMS()" style="height: 100%;" data-i18n="sms_modal_send_btn">发送</button>
+                        <button onclick="closeModal('#smsList')" style="height: 100%;"
+                            data-i18n="sms_modal_close_btn">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <!-- cpu温度信息模态框 -->
+            <div class="modal" id="cpuTempInfoModal" style="width: 77%;max-width: 300px;display: none">
+                <div class="title" data-i18n="temperature_info">温度信息</div>
+                <div class="content" style="max-height: 350px;padding: 15px 0px 0 0px;">
+                    <div id="cpuTempInfo"
+                        style="font-size: 12px;display: grid;grid-template-columns: 1fr 1fr;gap: 8px;justify-content: space-between;white-space: nowrap;">
+                    </div>
+                </div>
+                <div class="btn" style="text-align: right;">
+                    <button onclick="closeModal('#cpuTempInfoModal')">关闭</button>
+                </div>
+            </div>
+            <!-- 内存信息模态框 -->
+            <div class="modal" id="memInfoModal" style="width: 77%;max-width: 300px;display: none">
+                <div class="title" data-i18n="ram_info">内存信息</div>
+                <div class="content" style="padding: 15px 4px 0 4px;">
+                    <div id="memInfo" style="font-size:14px;display: flex;flex-direction: column;gap: 6px;">
+                    </div>
+                </div>
+                <div class="btn" style="text-align: right;">
+                    <button onclick="closeModal('#memInfoModal')">关闭</button>
+                </div>
+            </div>
+            <!-- 状态管理模态框 -->
+            <div id="dictionaryModal" class="modal" style="display: none;width: 90%;max-width: 400px;">
+                <div class="title" data-i18n="status_modal_title">状态显示/隐藏</div>
+                <p style="font-size: 12px;">
+                    <i data-i18n="status_modal_tip">注：设备不支持/为空的状态无论是否勾选也不会显示;如果碰到有字段不显示等问题，可以点击重置字段或者清除浏览器数据</i>
+                </p>
+                <div class="content" id="DIC_LIST"
+                    style="overflow-y: scroll; max-height:400px; padding-top: 15px; margin-bottom: 10px; display: flex; flex-direction: column; align-items: start; font-size: 14px;">
+                    <div class="title" style="margin: 10px 0;" data-i18n="status_section_basic">基本状态</div>
+                    <ul class="drag" id="draggable_status">
+                        <li draggable="true"><label><input type="checkbox" data-name="QORS_MESSAGE"><span
+                                    data-i18n="QORS_MESSAGE">QCI等级</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="network_type"><span
+                                    data-i18n="cellular_type">蜂窝状态</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="wifi_access_sta_num"><span
+                                    data-i18n="wifi_access_sta_num">WIFI设备数</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="battery"><span
+                                    data-i18n="battery">剩余电量</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="rssi"><span
+                                    data-i18n="rssi">蜂窝信号强度</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="cpu_temp"><span
+                                    data-i18n="cpu_temp">CPU温度</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="cpu_usage"><span
+                                    data-i18n="cpu_usage">CPU使用率</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="mem_usage"><span
+                                    data-i18n="mem_usage">内存使用率</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="realtime_time"><span
+                                    data-i18n="realtime_time">连接时长</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="monthly_tx_bytes"><span
+                                    data-i18n="monthly_tx_bytes">流量使用情况</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="daily_data"><span
+                                    data-i18n="daily_data">当日流量/当月流量</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="current_now"><span
+                                    data-i18n="current_now">电池电流</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="voltage_now"><span
+                                    data-i18n="voltage_now">电池电压</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="realtime_rx_thrpt"><span
+                                    data-i18n="realtime_rx_thrpt">实时网速</span></label></li>
+                    </ul>
+
+                    <div class="title" style="margin: 10px 0;" data-i18n="status_section_signal">信号参数</div>
+                    <ul class="drag" id="draggable_signal">
+                        <li draggable="true"><label><input type="checkbox" data-name="Z5g_rsrp"><span
+                                    data-i18n="Z5g_rsrp">5G接收功率</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Nr_snr"><span
+                                    data-i18n="Nr_snr">5G SINR</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Nr_bands"><span
+                                    data-i18n="Nr_bands">5G 注册频段</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Nr_fcn"><span
+                                    data-i18n="Nr_fcn">5G 频点</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Nr_bands_widths"><span
+                                    data-i18n="Nr_bands_widths">5G 频宽</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Nr_pci"><span
+                                    data-i18n="Nr_pci">5G PCI</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="nr_rsrq"><span
+                                    data-i18n="nr_rsrq">5G RSRQ</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="nr_rssi"><span
+                                    data-i18n="nr_rssi">5G RSSI</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Nr_cell_id"><span
+                                    data-i18n="Nr_cell_id">5G 基站ID</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="lte_rsrp"><span
+                                    data-i18n="lte_rsrp">4G接收功率</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Lte_snr"><span
+                                    data-i18n="Lte_snr">4G SINR</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Lte_bands"><span
+                                    data-i18n="Lte_bands">4G 注册频段</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Lte_fcn"><span
+                                    data-i18n="Lte_fcn">4G 频点</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Lte_bands_widths"><span
+                                    data-i18n="Lte_bands_widths">4G 频宽</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Lte_pci"><span
+                                    data-i18n="Lte_pci">4G PCI</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="lte_rsrq"><span
+                                    data-i18n="lte_rsrq">4G RSRQ</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="lte_rssi"><span
+                                    data-i18n="lte_rssi">4G RSSI</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="Lte_cell_id"><span
+                                    data-i18n="Lte_cell_id">4G 基站ID</span></label></li>
+                    </ul>
+
+                    <div class="title" style="margin: 10px 0;" data-i18n="status_section_device">设备属性</div>
+                    <ul class="drag" id="draggable_props">
+                        <li draggable="true"><label><input type="checkbox" data-name="client_ip"><span
+                                    data-i18n="client_ip">客户端IP</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="model"><span
+                                    data-i18n="model">设备型号</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="cr_version"><span
+                                    data-i18n="cr_version">版本号</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="iccid"><span
+                                    data-i18n="iccid">ICCID</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="imei"><span
+                                    data-i18n="imei">IMEI</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="imsi"><span
+                                    data-i18n="imsi">IMSI</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="ipv6_wan_ipaddr"><span
+                                    data-i18n="ipv6_wan_ipaddr">IPV6地址</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="lan_ipaddr"><span
+                                    data-i18n="lan_ipaddr">本地网关</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="mac_address"><span
+                                    data-i18n="mac_address">MAC地址</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="msisdn"><span
+                                    data-i18n="msisdn">手机号</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="internal_available_storage"><span
+                                    data-i18n="internal_available_storage">内置存储</span></label></li>
+                        <li draggable="true"><label><input type="checkbox" data-name="external_available_storage"><span
+                                    data-i18n="external_available_storage">SD卡</span></label></li>
+                    </ul>
+                </div>
+                <div class="btn" style="text-align: right;">
+                    <button onclick="resetShowList(event)" data-i18n="reset_all">重置(全选)</button>
+                    <button onclick="closeModal('#dictionaryModal')" data-i18n="close_btn">关闭</button>
+                </div>
+            </div>
+            <!-- 流量管理模态框 -->
+            <div class="mask" id="DataManagementModal" style="display: none">
+                <div class="modal">
+                    <div class="title" data-i18n="data_manage_modal_title">流量管理</div>
+                    <!-- tab -->
+                    <div class="tabs" onclick="switchDataMgrMethodTab(event)"
+                        style="width: 100%;display: flex;margin-top: 10px;gap: 10px;">
+                        <button data-method="official" id="officialDataManagementTabBtn" style="flex: 1;"
+                            class="tab-btn active" data-i18n="official_data_management">官方流量管理</button>
+                        <button data-method="ufi" id="ufiDataManagementTabBtn" style="flex: 1;" class="tab-btn"
+                            data-i18n="ufi_data_management">UFI流量管理</button>
+                    </div>
+                    <form onsubmit="handleDataManagementFormSubmit(event)" id="DataManagementForm">
+                        <div class="title"
+                            style="margin-top:10px;font-size:.7rem;flex-direction: column;align-items: start;gap: 0;">
+                            <span data-i18n="data_manage_tips">提示：请正确设置提醒阈值</span>
+                            <span data-i18n="data_manage_tips1">当流量到达设置的阈值百分比时机器会红灯闪烁提示您流量不足</span>
+                        </div>
+                        <div class="content" id="DATA_MANAGE_LIST"
+                            style="overflow-y: scroll;padding: 15px;padding-top:0;width: 66vw;max-width: 400px;">
+                            <div class="item">
+                                <label style="display: flex;align-items: center;">
+                                    <span data-i18n="data_manage_enable">启用流量管理？</span>
+                                    <input checked type="checkbox" name="data_volume_limit_switch">
+                                </label>
+                            </div>
+                            <div class="item">
+                                <label style="display: flex;align-items: center;">
+                                    <span data-i18n="data_manage_clear_enable">流量清零？</span>
+                                    <input checked type="checkbox" name="wan_auto_clear_flow_data_switch">
+                                </label>
+                            </div>
+                            <div class="item" style="display: flex;">
+                                <span style="font-size: 14px;" data-i18n="data_manage_plan_type">套餐形式：</span>
+                                <label for="for_data" style="display: flex;align-items: center;">
+                                    <span style="margin-right: 6px;" data-i18n="data_manage_plan_flow">流量</span>
+                                    <input id="for_data" style="margin: 0;" type="radio" checked
+                                        name="data_volume_limit_unit">
+                                </label>
+                            </div>
+                            <div class="item">
+                                <label style="display: flex;align-items: center;">
+                                    <span data-i18n="data_manage_reset_day">清零日期：</span>
+                                    <input style="flex: 1;width: 100%;" name="traffic_clear_date" value="1"
+                                        type="number" max="31" min="1" maxlength="2" placeholder="清零日期(1-31)"
+                                        data-i18n-placeholder="data_manage_reset_day_placeholder">
+                                </label>
+                            </div>
+                            <div class="item">
+                                <label style="display: flex;align-items: center;">
+                                    <span data-i18n="data_manage_alert_threshold">提醒阈值：</span>
+                                    <input style="flex: 1;width: 100%;" name="data_volume_alert_percent" value="80"
+                                        type="number" maxlength="3" min="0" max="100" placeholder="提醒阈值(0-100%)"
+                                        data-i18n-placeholder="data_manage_alert_threshold_placeholder">
+                                    &nbsp;% (0-100%)
+                                </label>
+                            </div>
+                            <div class="item">
+                                <div style="display: flex;align-items: center">
+                                    <span data-i18n="data_manage_plan_total">流量套餐：</span>
+                                    <input style="flex:1;height: 100%;width: 100%;" type="text"
+                                        name="data_volume_limit_size" value="100" placeholder="流量套餐"
+                                        data-i18n-placeholder="data_manage_plan_total_placeholder">
+                                    <select class="select"
+                                        style="padding: 4px; margin-left: 6px;margin: 0 !important;margin-left: 4px !important;"
+                                        value="1024" name="data_volume_limit_type">
+                                        <option data-value="1" value="1">MB</option>
+                                        <option data-value="1024" value="1024">GB</option>
+                                        <option data-value="1048576" value="1048576">TB</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="item">
+                                <div style="display: flex;align-items: center;">
+                                    <span data-i18n="data_manage_plan_used">已用流量：</span>
+                                    <input style="flex:1;height: 100%;width: 100%;" type="text"
+                                        name="data_volume_used_size" value="114" placeholder="已用流量"
+                                        data-i18n-placeholder="data_manage_plan_used_placeholder">
+                                    <select class="select"
+                                        style="padding: 4px; margin-left: 6px;margin: 0 !important;margin-left: 4px !important;"
+                                        value="1024" name="data_volume_used_type">
+                                        <option data-value="1" value="1">MB</option>
+                                        <option data-value="1024" value="1024">GB</option>
+                                        <option data-value="1048576" value="1048576">TB</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="btn" style="text-align: right;">
+                            <button type="submit" data-i18n="submit_btn">提交</button>
+                            <button type="button" onclick="closeModal('#DataManagementModal')"
+                                data-i18n="close_btn">关闭</button>
+                        </div>
+                    </form>
+                    <form onsubmit="handleUFIDataManagementFormSubmit(event)" id="UFIDataManagementForm"
+                        style="display: none;">
+                        <div class="title"
+                            style="margin-top:10px;font-size:.7rem;flex-direction: column;align-items: start;gap: 0;">
+                            <!-- <span data-i18n="">提示：请正确设置提醒阈值</span> -->
+                            <!-- <span data-i18n="">当流量到达设置的阈值百分比时机器会红灯闪烁提示您流量不足</span> -->
+
+                        </div>
+                        <div class="content" id="UFI_DATA_MANAGE_LIST"
+                            style="overflow-y: scroll;padding: 15px;padding-top:0;width: 66vw;max-width: 400px;">
+                            <div class="item">
+                                <label style="display: flex;align-items: center;">
+                                    <span data-i18n="enable_ufi_data_management">启用UFI流量管理？</span>
+                                    <input type="checkbox" name="data_flow_limit_enabled">
+                                </label>
+                            </div>
+                            <div class="item" style="display: flex;gap: 10px;margin: 10px 0;">
+                                <span style="font-size: 14px;" data-i18n="count_method">统计方式：</span>
+                                <label style="display: flex;align-items: center;">
+                                    <span style="margin-right: 6px;" data-i18n="with_daily_flow">按日</span>
+                                    <input style="margin: 0;" type="radio" value="daily"
+                                        name="data_flow_check_daily_or_monthly">
+
+                                </label>
+                                <label style="display: flex;align-items: center;">
+                                    <span style="margin-right: 6px;" data-i18n="with_monthly_flow">按月</span>
+                                    <input style="margin: 0;" type="radio" value="monthly"
+                                        name="data_flow_check_daily_or_monthly">
+                                </label>
+                            </div>
+                            <div class="item" style="display: flex;gap: 10px;margin: 10px 0;">
+                                <span style="font-size: 14px;" data-i18n="data_ref">流量参考：</span>
+                                <label style="display: flex;align-items: center;">
+                                    <span style="margin-right: 6px;" data-i18n="official_back">官方后台</span>
+                                    <input style="margin: 0;" type="radio" value="official" name="data_check_reference">
+
+                                </label>
+                                <label style="display: flex;align-items: center;">
+                                    <span style="margin-right: 6px;" data-i18n="ufi_back">UFI后台</span>
+                                    <input style="margin: 0;" type="radio" value="ufi" name="data_check_reference">
+                                </label>
+                            </div>
+                            <div class="item">
+                                <div style="display: flex;align-items: center;">
+                                    <span data-i18n="disconnect_network_data_value">断网流量：</span>
+                                    <input style="flex:1;height: 100%;width: 100%;margin-left: 10px;" type="text"
+                                        name="data_flow_max_limit" value="0">
+                                    <select class="select"
+                                        style="padding: 4px; margin-left: 6px;margin: 0 !important;margin-left: 4px !important;"
+                                        value="1024" name="data_flow_max_limit_type">
+                                        <option data-value="1" value="1">MB</option>
+                                        <option data-value="1024" value="1024">GB</option>
+                                        <option data-value="1048576" value="1048576">TB</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="item">
+                                <label style="display: flex;align-items: center;">
+                                    <span data-i18n="data_limit_status_forward_notify">断网时通知(需开启短信转发)？</span>
+                                    <input type="checkbox" name="data_limit_status_forward_enabled">
+                                </label>
+                            </div>
+                        </div>
+                        <div class="btn" style="text-align: right;">
+                            <button type="submit" data-i18n="submit_btn">提交</button>
+                            <button type="button" onclick="closeModal('#DataManagementModal')"
+                                data-i18n="close_btn">关闭</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <!-- 流量历史模态框 -->
+            <div class="modal" id="DataUsageHistoryModal" style="display: none">
+                <div class="title" data-i18n="data_usage_status">流量使用情况</div>
+
+                <div class="content"
+                    style="max-height: unset;font-size: .7rem;overflow-y: scroll;padding: 15px 0px; width: 80vw; max-width: 600px;">
+                    <div style="display: flex;flex-direction: column;justify-content: center;gap: 10px;">
+                        <div style="display: flex;gap: 6px;align-items: center;">
+                            <span style="flex-shrink: 0;" data-i18n="start_date">起始日期</span>:
+                            <input id="start_time_data_usage_history" class="date-time-picker" type="date"
+                                style="width: 100%;box-sizing: border-box;" />
+                        </div>
+                        <div style="display: flex;gap: 6px;align-items: center">
+                            <span style="flex-shrink: 0;" data-i18n="end_date">结束日期</span>:
+                            <input id="end_time_data_usage_history" class="date-time-picker" type="date"
+                                style="width: 100%;box-sizing: border-box;" />
+                        </div>
+                        <div style="display: flex;gap: 10px;">
+                            <button style="width: 100%;" onclick="doDataUsageHistorySearch()"
+                                data-i18n="query">查询</button>
+                            <button style="width: 100%;" onclick="resetUsageModalData()"
+                                data-i18n="plugin_search_reset_btn">重置</button>
+                        </div>
+                    </div>
+                    <div style="display: flex;gap: 10px;margin-top: 10px;justify-content: center;font-size: .8rem;">
+                        <span style="font-weight: normal;"><span data-i18n="total_usage">总用量</span>：<span
+                                style="font-weight: bold;" id="data_usage_history_sum">N/A</span></span>
+                        <span style="font-weight: normal;"><span data-i18n="avg_usage">日均使用</span>：<span
+                                style="font-weight: bold;" id="data_usage_history_avg">N/A</span></span>
+                    </div>
+                    <div class="chart" style="padding: 0;margin: 0;box-sizing: border-box;width: 100%;height: 100px;">
+                        <canvas id="kanoDataHistoryChart"></canvas>
+                    </div>
+                    <div style="max-height: 250px;overflow: auto;margin-top: 0;">
+                        <table class="nice-table" style="background: none;">
+                            <thead class="no-blur">
+                                <tr>
+                                    <th data-i18n="date_data">日期</th>
+                                    <th data-i18n="usage_data">用量</th>
+                                </tr>
+                            </thead>
+                            <tbody class="no-blur" id="DataUsageHistoryBody">
+                                <tr style="cursor: pointer;">
+                                    <td colspan="2" data-i18n="no_data">暂无数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="btn" style="text-align: right;">
+                    <button type="button" onclick="closeModal('#DataUsageHistoryModal')"
+                        data-i18n="close_btn">关闭</button>
+                </div>
+            </div>
+            <!-- WIFI设置模态框 -->
+            <div class="mask" id="WIFIManagementModal" style="display: none">
+                <div class="modal">
+                    <div class="title" style="margin-bottom: 4px;" data-i18n="wifi_title">WIFI设置</div>
+                    <form onsubmit="handleWIFIManagementFormSubmit(event)" id="WIFIManagementForm">
+                        <div class="content" style="
+                        overflow-y: scroll;
+                        padding: 10px;
+                        padding-bottom: 0;
+                        margin-bottom: 20px;
+                        width: 66vw;
+                        max-width: 400px;">
+                            <input style="display: none;" type="text" name="AccessPointIndex" value="0">
+                            <input style="display: none;" type="text" name="ApIsolate" value="0">
+                            <input style="display: none;" type="text" name="ChipIndex" value="0">
+                            <div class="dash-border-round"
+                                style="padding-top: 6px;padding-bottom: 6px;display: flex;justify-content: space-between;align-items: center;">
+                                <select class="select" id="WIFI_SWITCH" onchange="changeWIFISwitch(event)">
+                                    <option value="0" data-i18n="wifi_option_off">WIFI:关闭</option>
+                                    <option value="chip1" data-i18n="wifi_option_24g">WIFI:2.4G</option>
+                                    <option value="chip2" data-i18n="wifi_option_5g">WIFI:5G</option>
+                                </select>
+                                <span style="display: inline; font-size: 10px; text-align: right;"
+                                    data-i18n="wifi_hint_no_submit">此选项即时更改无需确认。</span>
+                            </div>
+                            <div id="wifiInfo">
+                                <div class="dash-border-round">
+                                    <div class="item">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span class="label-name" data-i18n="wifi_ssid_label">SSID：</span><input
+                                                style="flex: 1;width: 100%;" name="SSID" value="" type="text"
+                                                placeholder="请输入SSID"
+                                                data-i18n-placeholder="wifi_ssid_placeholder"></label>
+                                    </div>
+                                    <div class="item">
+                                        <label style="display: flex;align-items: center;"><span class="label-name"
+                                                data-i18n="wifi_broadcast_label">广播SSID：</span><input checked
+                                                type="checkbox" name="ApBroadcastDisabled"></label>
+                                    </div>
+                                </div>
+                                <div class="dash-border-round">
+                                    <div class="item">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            ">
+                                            <span class="label-name" data-i18n="wifi_security_label">安全模式：</span>
+                                            <select class="select" id="WIFI_ENC_MODE"
+                                                onchange="handleWifiEncodeChange(event)"
+                                                style="width: 100%;flex: 1;padding: 4px; margin-left: 6px;text-align: left;"
+                                                value="OPEN" name="AuthMode">
+                                                <option data-value="OPEN" value="OPEN" data-i18n="wifi_mode_open">OPEN
+                                                </option>
+                                                <option data-value="WPA2PSK" value="WPA2PSK" data-i18n="wifi_mode_wpa2">
+                                                    WPA2(AES)-PSK</option>
+                                                <option data-value="WPA3PSK" value="WPA3PSK" data-i18n="wifi_mode_wpa3">
+                                                    WPA3-PSK</option>
+                                                <option data-value="WPA2PSKWPA3PSK" value="WPA2PSKWPA3PSK"
+                                                    data-i18n="wifi_mode_wpa2_wpa3">
+                                                    WPA2-PSK/WPA3-PSK
+                                                </option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div id="WIFI_FORM_SHOWABLE">
+                                    <div class="dash-border-round">
+                                        <div class="item">
+                                            <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span class="label-name" data-i18n="wifi_password_label">密码：</span><input
+                                                    data-i18n-placeholder="wifi_password_placeholder" id="WIFI_PASSWORD"
+                                                    style="flex: 1;width: 100%;" name="Password" value=""
+                                                    type="password" autocomplete="none" placeholder="密码最短为8位"></label>
+                                        </div>
+                                        <div class="item">
+                                            <label onclick="handleShowPassword(event)"
+                                                style="display: flex;align-items: center;"><span class="label-name"
+                                                    data-i18n="wifi_show_pwd_label">显示密码：</span><input
+                                                    type="checkbox"></label>
+                                        </div>
+                                    </div>
+                                    <div class="dash-border-round">
+                                        <div class="item">
+                                            <label style="display: flex;align-items: center;"><span class="label-name"
+                                                    data-i18n="wifi_max_client_label">最大接入：</span><input
+                                                    style="flex: 1;width: 100%;" name="ApMaxStationNumber" value="10"
+                                                    type="number" min="1" maxlength="8" placeholder="客户端最大接入"
+                                                    data-i18n-placeholder="wifi_max_client_placeholder"></label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="dash-border-round" style="text-align: center;">
+                                    <div data-i18n="wifi_qrcode_label">二维码</div>
+                                    <div style="text-align: center">
+                                        <img id="QRCodeImg" style="border-radius: 20px;" src="" alt="">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="btn" style="text-align: right;margin-top: 6px;">
+                            <button type="submit" data-i18n="submit_btn">提交</button>
+                            <button type="button" data-i18n="close_btn"
+                                onclick="closeModal('#WIFIManagementModal')">关闭</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <!-- 内网设置模态框 -->
+            <div class="mask" id="LANManagementModal" style="display: none">
+                <div class="modal">
+                    <div class="title" style="margin-bottom: 4px;" data-i18n="lan_title">内网设置</div>
+                    <form onsubmit="onLANModalSubmit(event)" id="LANManagementForm">
+                        <div class="content" style="
+                        overflow-y: scroll;
+                        padding: 10px;
+                        width: 66vw;
+                        max-height: 100%;
+                        max-width: 400px;
+                        font-size: 14px;">
+                            <div class="dash-border-round">
+                                <div class="item">
+                                    <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span class="label-name" data-i18n="lan_ip_label">网关地址：</span><input
+                                            data-i18n-placeholder="lan_ip_placeholder"
+                                            style="flex: 1;width: 100%;padding: 6px 4px; margin: 4px 2px" name="lanIp"
+                                            type="text" placeholder="请输入路由器网关地址"></label>
+                                </div>
+                            </div>
+                            <div class="dash-border-round">
+                                <div class="item">
+                                    <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span class="label-name" data-i18n="lan_netmask_label">子网掩码：</span><input
+                                            data-i18n-placeholder="lan_netmask_placeholder"
+                                            style="flex: 1;width: 100%;padding: 6px 4px; margin: 4px 2px"
+                                            name="lanNetmask" type="text" placeholder="请输入子网掩码"></label>
+                                </div>
+                            </div>
+                            <div class="dash-border-round">
+                                <div class="item">
+                                    <label style="display: flex;align-items: center;"><span class="label-name"
+                                            style="padding: 6px 4px; margin: 4px 2px"
+                                            data-i18n="lan_dhcp_label">DHCP开关：</span>
+                                        <div style="display: inline-block;" id="collapse_dhcp_switch"></div>
+                                        <input style="display: none;" id="enableDHCP" value="SERVER" type="text"
+                                            name="lanDhcpType">
+                                    </label>
+                                </div>
+                            </div>
+                            <div id="collapse_dhcp" class="collapse">
+                                <div class="collapse_box">
+                                    <div class="dash-border-round">
+                                        <div class="item"
+                                            style="display: flex;align-items: center;flex-direction: column;padding-top: 4px;">
+                                            <span class="label-name" data-i18n="lan_dhcp_range_label">DHCP IP池</span>
+                                            <input style="flex: 1;width: 100%;padding: 6px 4px; margin: 4px 2px"
+                                                name="dhcpStart" type="text" placeholder="起始地址"
+                                                data-i18n-placeholder="lan_dhcp_start_placeholder">
+                                            <span style="transform: rotate(90deg);">&nbsp;->&nbsp;</span>
+                                            <input style="flex: 1;width: 100%;padding: 6px 4px; margin: 4px 2px"
+                                                name="dhcpEnd" type="text" placeholder="结束地址"
+                                                data-i18n-placeholder="lan_dhcp_end_placeholder">
+                                        </div>
+                                    </div>
+                                    <div class="dash-border-round">
+                                        <div class="item">
+                                            <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span class="label-name" data-i18n="lan_dhcp_lease_label">DHCP租期：</span><input
+                                                    style="flex: 1;width: 100%;padding: 6px 4px; margin: 4px 2px;"
+                                                    name="dhcpLease" type="number" min="1" placeholder="租期(24)h"
+                                                    data-i18n-placeholder="lan_dhcp_lease_placeholder"></label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="btn" style="text-align: right;margin-top: 6px;">
+                            <button type="submit" data-i18n="submit_btn">提交</button>
+                            <button type="button" data-i18n="close_btn"
+                                onclick="closeModal('#LANManagementModal')">关闭</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <!-- 连接设备管理模态框 -->
+            <div class="mask" id="ClientManagementModal" style="display: none">
+                <div class="modal" style="width: 90%;max-width: 600px; display: flex;flex-direction: column;">
+                    <div class="title" style="margin-bottom: 4px;" data-i18n="client_mgmt_title">连接设备管理</div>
+                    <ul class="deviceList" style="flex: 1; overflow-y: auto;">
+                        <p style="display: flex;justify-content: space-between;">
+                            <span data-i18n="client_mgmt_connected">接入设备</span>
+                            <button style="margin-right: 10px;" class="btn" onclick="initClientManagementModal()"
+                                data-i18n="common_refresh_btn">刷新</button>
+                        </p>
+                        <li id="CONN_CLIENT_LIST"
+                            style="padding:0 10px;box-sizing: border-box;width: 100%;overflow: hidden;">
+                        </li>
+                        <p data-i18n="client_mgmt_blacklist">黑名单</p>
+                        <li id="BLACK_CLIENT_LIST"
+                            style="padding:0 10px;box-sizing: border-box;width: 100%;overflow: hidden;">
+                        </li>
+                    </ul>
+                    <div class="btn" style="text-align: right;margin-top: 20px;">
+                        <button type="button" onclick="closeClientManager()" data-i18n="close_btn">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 定时任务模态框 -->
+            <div class="mask" id="ScheduledTasksModal" style="display: none">
+                <div class="modal" style="width: 90%;max-width: 600px; display: flex;flex-direction: column;">
+                    <div class="title" style="margin-bottom: 4px;" data-i18n="scheduled_tasks_title">定时任务</div>
+                    <span class="title" style="font-size:.64rem;font-style:italic"
+                        data-i18n="scheduled_tasks_info"></span>
+                    <div
+                        style="display: flex;justify-content: space-between;align-items: center;font-size: 14px;margin: 10px 0;">
+                        <span data-i18n="task_list_title">任务列表</span>
+                        <div>
+                            <button class="btn" onclick="refreshTask()" data-i18n="refresh_btn">刷新</button>
+                            <button class="btn" onclick="addTask()" data-i18n="add_task_btn">添加任务</button>
+                        </div>
+                    </div>
+                    <ul id="SCHEDULED_TASK_LIST" class="deviceList" style="flex: 1; overflow-y: auto;">
+
+                    </ul>
+                    <div class="btn" style="text-align: right;margin-top: 10px;">
+                        <!-- <button type="submit">提交</button> -->
+                        <button type="button" onclick="closeModal('#ScheduledTasksModal')"
+                            data-i18n="close_btn">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 添加/修改任务模态框 -->
+            <div class="mask" id="AddTaskModal" style="display: none">
+                <div class="modal" style="width: 90%;max-width: 600px;">
+                    <div class="title" data-i18n="add_task_title">任务项</div>
+                    <form id="AddTaskForm" onsubmit="handleSubmitTask(event)"
+                        style="margin-top: 10px;;display: flex; flex-direction: column; gap: 10px;font-size: 14px;">
+                        <label><span data-i18n="task_name_label">任务名称：</span><input
+                                style="min-width: 100px;padding: 6px 8px;" name="id" required /></label>
+                        <label>
+                            <span data-i18n="trigger_time_label">触发时间：</span><input
+                                style="min-width: 100px;padding: 6px 8px;" name="date_time" type="time" required />
+                        </label>
+                        <label><span data-i18n="repeat_daily_label">重复执行: </span><input name="repeatDaily"
+                                type="checkbox" /></label>
+                        <label style="display: flex;flex-direction: column;"><span
+                                data-i18n="action_param_label">动作参数（JSON）: </span><textarea id="taskAction"
+                                style="margin-top: 10px;" name="action" rows="6"></textarea></label>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                            <button class="btn" onclick="fillAction(event,'转发设备信息')"
+                                data-i18n="action_forward_dev_info">转发设备信息</button>
+                            <button class="btn" onclick="fillAction(event,'发送短信')"
+                                data-i18n="action_send_sms">发送短信</button>
+                            <button class="btn" onclick="fillAction(event,'指示灯')" data-i18n="action_led">指示灯</button>
+                            <button class="btn" onclick="fillAction(event,'NFC')" data-i18n="action_nfc">NFC</button>
+                            <button class="btn" onclick="fillAction(event,'文件共享')"
+                                data-i18n="action_fileshare">文件共享</button>
+                            <button class="btn" onclick="fillAction(event,'网络漫游')"
+                                data-i18n="action_roaming">网络漫游</button>
+                            <button class="btn" onclick="fillAction(event,'性能模式')"
+                                data-i18n="action_perfmode">性能模式</button>
+                            <button class="btn" onclick="fillAction(event,'USB调试')"
+                                data-i18n="action_usbdebug">USB调试</button>
+                            <button class="btn" onclick="fillAction(event,'打开数据')"
+                                data-i18n="action_data_on">打开数据</button>
+                            <button class="btn" onclick="fillAction(event,'关闭数据')"
+                                data-i18n="action_data_off">关闭数据</button>
+                            <button class="btn" onclick="fillAction(event,'关闭WIFI')"
+                                data-i18n="action_wifi_off">关闭WIFI</button>
+                            <button class="btn" onclick="fillAction(event,'开启WIFI(5G)')"
+                                data-i18n="action_wifi_5g">开启WIFI(5G)</button>
+                            <button class="btn" onclick="fillAction(event,'开启WIFI(2.4G)')"
+                                data-i18n="action_wifi_24g">开启WIFI(2.4G)</button>
+                            <button class="btn" onclick="fillAction(event,'5G/4G/3G')"
+                                data-i18n="action_net_543">5G/4G/3G</button>
+                            <button class="btn" onclick="fillAction(event,'5G NSA')" data-i18n="action_net_5gnsa">5G
+                                NSA</button>
+                            <button class="btn" onclick="fillAction(event,'5G SA')" data-i18n="action_net_5gsa">5G
+                                SA</button>
+                            <button class="btn" onclick="fillAction(event,'仅4G')" data-i18n="action_net_4g">仅4G</button>
+                            <button class="btn" onclick="fillAction(event,'关机')"
+                                data-i18n="action_shutdown">关机(仅U30/M3)</button>
+                            <button class="btn" onclick="fillAction(event,'重启')" data-i18n="action_reboot">重启</button>
+                            <button class="btn" onclick="fillAction(event,'解锁基站')"
+                                data-i18n="action_unlock_cell">解锁基站</button>
+                            <button class="btn" onclick="fillAction(event,'锁基站')"
+                                data-i18n="action_lock_cell">锁基站</button>
+                            <button class="btn" onclick="fillAction(event,'切SIM卡1')"
+                                data-i18n="action_sim1">切SIM卡1</button>
+                            <button class="btn" onclick="fillAction(event,'切SIM卡2')"
+                                data-i18n="action_sim2">切SIM卡2</button>
+                            <button class="btn" onclick="fillAction(event,'切移动')" data-i18n="sim1_v50">切移动</button>
+                            <button class="btn" onclick="fillAction(event,'切联通')" data-i18n="sim3_v50">切联通</button>
+                            <button class="btn" onclick="fillAction(event,'切电信')" data-i18n="sim2_v50">切电信</button>
+                            <button class="btn" onclick="fillAction(event,'切外置')" data-i18n="sim4_v50">切外置</button>
+                        </div>
+                        <div style="text-align: right">
+                            <button type="submit" class="btn" data-i18n="submit_btn">提交</button>
+                            <button type="button" onclick="closeAddTask()" class="btn"
+                                data-i18n="cancel_btn">取消</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <!-- 主题背景模态框 -->
+            <div class="modal" id="bgSettingModal"
+                style="overflow: auto;width: 90%;max-width: 400px; display: flex;flex-direction: column;display: none;">
+                <div class="title" style="margin-bottom: 4px;" data-i18n="bg_setting_title">主题背景设置</div>
+                <div class="content" style="min-height: 450px;">
+                    <div style="text-align: left;">
+                        <div style="display: flex;align-items: center;gap:10px;font-size: 14px;margin-top: 6px;">
+                            <label style="display: flex;align-items: center;">
+                                <span style="width: 100px;" data-i18n="bg_setting_cloud_sync">多设备同步？</span>
+                                <input type="checkbox" id="isCloudSync">
+                            </label>
+                            <button class="btn" style="flex: 1;" onclick="syncTheme()"
+                                data-i18n="bg_setting_manual_sync">手动同步</button>
+                        </div>
+                        <p style="font-size: 14px">
+                            <label style="display: flex;align-items: center;">
+                                <span style="width: 100px;" data-i18n="bg_setting_enable_bg">启用背景图片？</span>
+                                <input type="checkbox" id="isCheckedBG">
+                            </label>
+                        </p>
+                        <p style="display: flex;align-items: center;font-size: 14px;">
+                            <span data-i18n="bg_setting_image_url">图片网址：</span>
+                            <input placeholder="输入网址" data-i18n-placeholder="bg_setting_input_url" type="text"
+                                id="BG_INPUT" style="flex:1;padding: 6px 10px;margin: 4px 0;">
+                        </p>
+                        <label>
+                            <input id="fileUploader" type="file" style="display: none;"
+                                onchange="handleFileUpload(event)">
+                            <button style="width: 100%;" onclick="document.querySelector('#fileUploader').click()"
+                                data-i18n="bg_setting_upload">上传图片(10MB内)</button>
+                            <button class="btn" style="width: 100%;margin-top: 10px;"
+                                onclick="event.preventDefault();handleOpenUploadFilesList()"
+                                data-i18n="upload_file_manager">上传文件管理</button>
+                        </label>
+                    </div>
+
+                    <div style="text-align: left;width: 100%;font-size: 14px;">
+                        <p>
+                            <label style="display: flex;align-items: center;">
+                                <span data-i18n="bg_setting_blur_toggle">主页毛玻璃开关</span>&nbsp;
+                                <input onchange="updateBlurSwitch(event)" id="blurSwitch" type="checkbox">
+                            </label>
+                        </p>
+                        <p>
+                            <label style="display: flex;align-items: center;">
+                                <span data-i18n="bg_setting_overlay_color">背景遮罩颜色</span>&nbsp;
+                                <input onchange="updateOverlaySwitch(event)" id="overlaySwitch" type="checkbox">
+                            </label>
+                        </p>
+                        <p><span data-i18n="bg_setting_text_color">字体颜色(黑-白)</span>&nbsp;：&nbsp;<span
+                                id="fontColorValue"></span></p>
+                        <input id="textColorEl" oninput="updateTextColor(event)"
+                            style="width: 100%;margin-left: 0;margin-right: 0;" min="0" max="100" type="range">
+                        <p data-i18n="bg_setting_theme_color">主题颜色(颜色、饱和度、亮度)</p>
+                        <p>H：<span id="HValue">255</span>&nbsp;&nbsp;S：<span id="SValue">255</span>&nbsp;&nbsp;L：<span
+                                id="LValue">255</span></p>
+                        <div class="color-panel"></div>
+                        <input id="colorEl" oninput="getColorByPercent(event)"
+                            style="width: 100%;margin-left: 0;margin-right: 0;" min="0" max="100" type="range">
+                        <input id="saturationEl" oninput="getSaturationByPercent(event)"
+                            style="width: 100%;margin-left: 0;margin-right: 0;" min="0" max="100" type="range">
+                        <input id="brightEl" oninput="getValueByPercent(event)"
+                            style="width: 100%;margin-left: 0;margin-right: 0;" min="0" max="100" type="range">
+                        <p><span data-i18n="bg_setting_opacity">主题透明度</span>&nbsp;：&nbsp;<span
+                                id="opacityValue">255</span></p>
+                        <input id="opacityEl" oninput="getOpacityByPercent(event)"
+                            style="width: 100%;margin-left: 0;margin-right: 0;" type="range" min="0" max="100">
+                    </div>
+                </div>
+                <div class="btn" style="text-align: right;margin-top: 6px;">
+                    <button type="button" onclick="resetTheme(event)" data-i18n="reset_theme_btn">重置主题</button>
+                    <button type="button" onclick="handleSubmitBg(event)" data-i18n="submit_btn">提交</button>
+                    <button type="button" onclick="closeModal('#bgSettingModal')" data-i18n="close_btn">关闭</button>
+                </div>
+            </div>
+            <!-- 插件模态框 -->
+            <div class="mask" id="PluginModal" style="display: none;">
+                <div class="modal" id="pluginDropZone"
+                    style="backdrop-filter: none;-webkit-backdrop-filter: none;padding: 18px;border: 2px solid transparent;overflow: auto;width: 90%;max-width: 400px; display: flex;flex-direction: column;">
+                    <div class="title" style="margin-bottom: 4px;"><span data-i18n="plugin_modal_title">插件功能</span> -
+                        <span data-i18n="plugin_modal_num">插件数量</span><span id="PLUGINS_NUM">?</span>
+                    </div>
+                    <div class="content" style="min-height: 400px;">
+                        <div style="text-align: left;width: 100%;font-size: 14px;">
+                            <div class="title" data-i18n="plugin_modal_tip" style="font-style: italic;font-size: 12px;">
+                                <i>填入的内容会放在网页head末尾(支持脚本样式和meta元素),大小最好不要超过4MB</i>
+                            </div>
+                            <div>
+                                <input type="file" id="pluginFileInput" style="display: none;"
+                                    onchange="handlePluginFileUpload(event)">
+                                <div style="display: flex;gap: 10px;">
+                                    <button class="btn" data-i18n="plugin_modal_add_plugin_btn"
+                                        style="width: 100%;margin-top: 6px;"
+                                        onclick="onPluginBtn()">添加插件(.txt文件)</button>
+                                    <button id="plugin_store_btn" class="btn" style="width: 100%;margin-top: 6px;"
+                                        data-i18n="plugin_store">插件商店</button>
+                                </div>
+                                <div style="display: flex;gap: 10px;">
+                                    <button class="btn" data-i18n="plugin_modal_export_btn"
+                                        style="flex:1;margin-top: 6px;" onclick="pluginExport()">一键导出插件文件</button>
+                                    <button class="btn" data-i18n="plugin_modal_clear_btn" style="margin-top: 6px;"
+                                        onclick="clearPluginText()">一键清空</button>
+                                </div>
+                            </div>
+                            <ul id="sortable-list" class="plugin-list"
+                                style="margin-top: 10px;display: flex;gap:6px;flex-wrap: wrap;font-size: 12px;">
+                            </ul>
+                            <textarea disabled id="custom_head" placeholder="插件内容..."
+                                data-i18n-placeholder="plugin_modal_textarea_placeholder"
+                                style="display:none;font-size: 12px;font-family: monospace;margin: 6px 0;resize: vertical;width: 100%;box-sizing: border-box;"
+                                rows="20"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="btn" style="text-align: right;margin-top: 6px;">
+                        <button type="button" data-i18n="plugin_modal_submit_btn"
+                            onclick="savePluginSetting(event)">提交</button>
+                        <button type="button" data-i18n="plugin_modal_close_btn"
+                            onclick="closeModal('#PluginModal')">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 插件商店模态框 -->
+            <div id="plugin_store" class="mask" style="display: none">
+                <div class="modal"
+                    style="backdrop-filter: none;-webkit-backdrop-filter: none;overflow: visible;width: 90%;max-width: 500px; display: flex;flex-direction: column;">
+                    <div class="title" style="margin-bottom: 10px;"><span data-i18n="plugin_store">插件商店</span> - <span
+                            class="total" style="flex: 1;"></span> <button id="pluginSubmitBtn"
+                            style="box-sizing: border-box" class="btn"
+                            data-i18n="plugin_post_request_toast_title">投稿插件</button></div>
+                    <div class="title" style="display: block;font-size: .7rem;font-style: italic;margin-bottom: 10px;">
+                        <span data-i18n="plugin_store_tip">插件商店提供了更多的插件功能，您可以在这里下载和安装。</span><br>
+                        <span data-i18n="plugin_store_tip1"
+                            style="color: rgb(255, 162, 0);">请注意，安装插件可能会影响设备性能和稳定性，请谨慎选择。</span><br>
+                        <span data-i18n="plugin_store_tip2">有些插件需要开启高级功能才可以使用。</span>
+                    </div>
+                    <div id="switchRepoBox" style="margin-bottom: 10px;display: flex;gap: 10px;">
+                        <input type="text" style="flex: 1;width: 100%;box-sizing: border-box;padding: 6px;"
+                            placeholder="自定义插件源地址" data-i18n-placeholder="custom_plugin_repo" id="customRepoInput"
+                            style="padding: 4px; margin-left: 10px;">
+                        <button style="width: fit-content;min-width: 50px;" data-i18n="plugin_search_reset_btn"
+                            onclick="resetCustomRepo()">重置</button>
+                        <button style="width: fit-content;min-width: 50px;" data-i18n="plugin_set_repo_save"
+                            onclick="saveCustomRepo()">加载</button>
+                        <button style="width: fit-content;min-width: 50px;" onclick="saveCustomRepo(true)"><span
+                                data-i18n="plugin_set_repo_save">加载</span> (proxy)</button>
+                    </div>
+                    <div class="searchBox">
+                        <div class="searchInput">
+                            <input onkeyup="handlePluginStoreSearchInput(event)" type="text" placeholder="搜索插件"
+                                id="pluginSearchInput" data-i18n-placeholder="plugin_search_placeholder">
+                            <div class="searchList"></div>
+                        </div>
+                        <button id="pluginSearchResetBtn" style="width: fit-content;min-width: 50px;" class="btn"
+                            data-i18n="plugin_search_reset_btn">重置</button>
+                        <button id="pluginSearchBtn" style="width: fit-content;min-width: 50px;" class="btn"
+                            data-i18n="plugin_search_btn">搜索</button>
+                    </div>
+                    <div class="content" style="max-height: 500px;overflow-y: auto;">
+                        <ul class="plugin-items">
+                        </ul>
+                    </div>
+                    <div style="font-size: .8rem;margin-top: 10px;display: flex;align-items: center;">
+                        <div class="left" style="flex:1">
+                            <span data-i18n="cur_page">当前</span>&nbsp;
+                            <span id="plugin_store_cur_page">1</span>
+                            /
+                            <span id="plugin_store_total_page">8</span>
+                            &nbsp;<span data-i18n="total">总共</span>
+                            <button style="margin-left: 10px;" data-i18n="prev_page"
+                                id="plugin_store_prev_page">上一页</button>
+                            <button id="plugin_store_next_page" data-i18n="next_page">下一页</button>
+                        </div>
+                        <button id="plugin_store_close_btn" data-i18n="close_btn">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 编辑插件模态框 -->
+            <div class="mask" id="editSinglePluginModal" style="display: none">
+                <div class="modal" style="width: 90%;max-width: 400px; display: flex;flex-direction: column;">
+                    <div class="title" style="display: flex;justify-content: space-between;margin-bottom: 4px;">
+                        <span data-i18n="edit_plugin">编辑插件</span>
+                        <div>
+                            <button data-i18n="export" onclick="exportPlugin()">导出</button>
+                            <button data-i18n="off" onclick="disablePlugin()">禁用</button>
+                            <button data-i18n="on" onclick="enablePlugin()">启用</button>
+                        </div>
+                    </div>
+                    <p style="font-size: 14px;"><span data-i18n="plugin_current">当前插件</span>：<span
+                            id="currentPluginName"></span></p>
+                    <div class="content" style="min-height: 400px;">
+                        <textarea id="editSinglePlugin" style="width: 100%;box-sizing: border-box;min-height: 390px;"
+                            name="" id=""></textarea>
+                    </div>
+                    <div class="btn" style="text-align: right;margin-top: 6px;">
+                        <button id="submitEditSinglePlugin" data-i18n="submit_btn">提交</button>
+                        <button onclick="closeModal('#editSinglePluginModal')" data-i18n="close_btn">关闭</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 定时重启模态框 -->
+            <div class="mask" id="scheduleRebootModal" style="display: none">
+                <div class="modal" style="width: 90%;max-width: 400px; display: flex;flex-direction: column;">
+                    <form id="scheduleRebootForm" onsubmit="handleScheduleRebootFormSubmit(event)">
+                        <div class="title" style="margin-bottom: 4px;" data-i18n="schedule_reboot_title">每日定时重启</div>
+                        <div style="text-align: left;font-size: 14px;">
+                            <p>
+                                <label>
+                                    <span data-i18n="schedule_reboot_enable">启用每日定时重启？</span>
+                                    <input id="SCHEDULE_ENABLED" type="checkbox" name="restart_schedule_switch">
+                                </label>
+                            </p>
+                            <p>
+                                <label data-i18n="schedule_reboot_time">每日重启时间：</label>
+                                <input id="SCHEDULE_TIME" name="restart_time" placeholder="00:00"
+                                    data-i18n-placeholder="schedule_reboot_time_placeholder" type="text"
+                                    style="width: 100%;max-width: 60px;padding: 6px 10px;margin: 4px 0;">
+                            </p>
+                        </div>
+                        <div class="btn" style="text-align: right;margin-top: 6px;">
+                            <button type="submit" data-i18n="submit_btn">提交</button>
+                            <button type="button" onclick="closeModal('#scheduleRebootModal')"
+                                data-i18n="close_btn">关闭</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <!-- TTYD模态框 -->
+            <div class="mask" id="TTYDModal" style="display: none">
+                <div class="modal" style="width: 90%;max-width: 400px; display: flex;flex-direction: column;">
+                    <form id="TTYDForm" onsubmit="handleTTYDFormSubmit(event)">
+                        <div class="title" style="margin-bottom: 4px;" data-i18n="dev_menu">开发者菜单</div>
+                        <div style="text-align: left;margin-top: 10px;font-size: .8rem;">
+                            <div style="font-size: .75rem;margin-bottom: 10px;" class="title"><i
+                                    data-i18n="need_advanced_func_use_dev_menu">有些特性需要开启高级功能才能使用</i>
+                            </div>
+                            <div style="display: flex;gap: 10px;;">
+                                <label style="display: flex;align-items: center;"><span
+                                        data-i18n="auto_apply_boot">开机自动应用</span><input type="checkbox" name=""
+                                        id="dev_bootup">
+                                </label>
+                                <label style="display: flex;align-items: center;"><span
+                                        data-i18n="also_apply_to_ipv6">也应用到ipv6</span><input type="checkbox" name=""
+                                        id="dev_ipv6">
+                                </label>
+                            </div>
+                            <div style="display: flex;gap: 10px;margin: 10px 0;align-items: center;">
+                                <span data-i18n="port">端口：</span>
+                                <input placeholder="1234" id="port_iptables" style="padding: 6px;flex: 1;width: 100%;"
+                                    type="number">
+                                <button onclick="event.preventDefault();setPort(true)"
+                                    data-i18n="accept_firewall">放行</button>
+                                <button onclick="event.preventDefault();setPort(false)"
+                                    data-i18n="deny_firewall">阻止</button>
+                            </div>
+                            <div style="display: flex;gap: 10px;margin: 10px 0;">
+                                <button style="width: 100%;" onclick="event.preventDefault();toggleTTYD(true)"
+                                    data-i18n="enable_ttyd_port">启用TTYD端口</button>
+                                <button style="width: 100%;" onclick="event.preventDefault();toggleTTYD(false)"
+                                    data-i18n="disable_ttyd_port">禁用TTYD端口</button>
+                            </div>
+                            <div style="display: flex;gap: 10px;margin: 10px 0;">
+                                <button style="width: 100%;" onclick="event.preventDefault();toggleADBIP(true)"
+                                    data-i18n="enable_adb_tcpip_port">启用无线ADB端口</button>
+                                <button style="width: 100%;" onclick="event.preventDefault();toggleADBIP(false)"
+                                    data-i18n="disable_adb_tcpip_port">禁用无线ADB端口</button>
+                            </div>
+                            <hr style="background-color: pink;" />
+                            <div style="display: flex;gap: 10px;margin: 10px 0;">
+                                <button style="width: 100%;" onclick="event.preventDefault();toggleLogCat(true)"
+                                    data-i18n="enable_log">启用Log</button>
+                                <button style="width: 100%;" onclick="event.preventDefault();toggleLogCat(false)"
+                                    data-i18n="disable_log">禁用Log</button>
+                            </div>
+                            <div style="display: flex;gap: 10px;margin: 10px 0;">
+                                <button style="width: 100%;" onclick="event.preventDefault();toggleWakeLock(true)"
+                                    data-i18n="wake_lock_enabled">启用唤醒锁</button>
+                                <button style="width: 100%;" onclick="event.preventDefault();toggleWakeLock(false)"
+                                    data-i18n="wake_lock_disabled">禁用唤醒锁</button>
+                            </div>
+                            <div style="display: flex;gap: 10px;margin: 10px 0;">
+                                <button style="width: 100%;" class="btn"
+                                    onclick="disableButtonWhenExecuteFunc(event,handleShell)"
+                                    data-i18n="advance_run_shell">一键执行shell脚本(非root)<br>(脚本需在/sdcard/one_click_shell.sh)</button>
+                            </div>
+                            <p style="display: flex;flex-wrap: nowrap;align-items: center;gap: 4px;">
+                                <span data-i18n="ttyd_port">TTYD 端口
+                                    (默认:1146)：</span><input name="ttyd_port" placeholder="1145" type="number"
+                                    id="TTYD_INPUT"
+                                    style="text-align: center;width: 100%;;flex:1;padding: 6px 10px;margin: 4px 0;">
+                                <button type="submit" data-i18n="submit_btn">提交</button>
+                            </p>
+                            <p style="display: flex;flex-wrap: nowrap;align-items: center;gap: 4px;"><span
+                                    data-i18n="resources_server">资源服务器：</span><input name="resources_server"
+                                    placeholder="https://pan.kanokano.cn" type="text" id="RES_SERVER_INPUT"
+                                    style="text-align: center;width: 100%;flex:1;padding: 6px 10px;margin: 4px 0;">
+                                <button data-i18n="submit_btn" onclick="changeResServer(event)">提交</button>
+                            </p>
+                            <div style="display: flex;flex-wrap: wrap;gap: 10px;">
+                                <button onclick="event.preventDefault();resetTTYDPort()"
+                                    data-i18n="reset_ttyd_port">重置TTYD端口</button>
+                                <button onclick="event.preventDefault();clearAPPUploadData()"
+                                    data-i18n="clear_uploads_file">清除所有上传的文件</button>
+                                <button class="btn" onclick="event.preventDefault();handleOpenUploadFilesList()"
+                                    data-i18n="upload_file_manager">上传文件管理</button>
+                                <button class="btn" onclick="event.preventDefault();OP(event)">?</button>
+                            </div>
+                        </div>
+                        <div class="btn" style="text-align: right;margin-top: 6px;">
+                            <button type="button" data-i18n="close_btn" onclick="closeModal('#TTYDModal')">关闭</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <!-- AT指令模态框 -->
+            <div class="mask" id="ATModal" style="display: none">
+                <div class="modal" style="width: 90%;max-width: 800px; display: flex;flex-direction: column;">
+                    <div class="title" style="margin-bottom: 4px;" data-i18n="at_title">AT指令</div>
+
+                    <div class="title" style="margin-bottom: 4px;font-size: 12px;">
+                        <div style="font-size: 10px;">
+                            <i style="color: yellow;" data-i18n="at_warning_1">
+                                ⚠️警告：执行自定义AT属于高级操作，请务必确保输入准确无误。因执行指令所引发的任何后果，需由您自行承担。
+                            </i><br>
+                            <i style="color: yellow;" data-i18n="at_warning_2">
+                                ⚠️提示：AT指令(同网络ADB)生效版本：F50:B09\B24 U30:B17\B19 M3:B07
+                                无法使用请带上你的固件版本提问，拒绝无效提问（恢复出厂设置能解决99%问题）
+                            </i>
+                        </div>
+                    </div>
+
+                    <p style="font-size: 12px;margin-bottom: 0;margin-top:10px;" data-i18n="at_custom_title">自定义AT指令</p>
+
+                    <div style="margin: 6px 0;">
+                        <span style="font-size: 12px;" data-i18n="at_slot_label">AT执行槽位：</span>
+                        <select class="select" id="AT_SLOT" style="width: 100%;max-width: 100px;padding: 6px 10px;"
+                            value="0">
+                            <option data-value="0" value="0">0</option>
+                            <option data-value="1" value="1">1</option>
+                        </select>
+                    </div>
+
+                    <div style="text-align: left">
+                        <div style="margin-bottom: 0;">
+                            <input name="at_text" placeholder="AT+开头的指令" type="text" id="AT_INPUT"
+                                data-i18n-placeholder="at_input_placeholder"
+                                style="width: 100%;max-width: 200px;padding: 6px 10px;margin: 4px 0;">
+                            <button class="btn" data-i18n="at_exec_btn"
+                                onclick="disableButtonWhenExecuteFunc(event,handleATFormSubmit)">GO</button>
+                        </div>
+
+                        <div style="margin-top: 2px;margin-bottom: 10px;">
+                            <div style="display: flex;flex-wrap: wrap; gap: 10px;">
+                                <div>
+                                    <p style="font-size: 12px;margin-bottom: 4px;margin-top: 4px;"
+                                        data-i18n="at_quick_label">快捷指令</p>
+                                    <button class="btn" onclick="disableButtonWhenExecuteFunc(event,handleQosAT)"
+                                        data-i18n="at_qos">签约速率</button>
+                                    <button class="btn"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleAT('AT+CGSN'))"
+                                        data-i18n="at_imei">IMEI</button>
+                                    <button class="btn"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleForceIMEI())"
+                                        data-i18n="at_force_imei">强力查串</button>
+                                    <button class="btn" style="margin-top: 6px;"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>inputIMEIAT())"
+                                        data-i18n="at_fill_imei">填入改串指令</button>
+                                    <button class="btn"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleAT('AT+CGMR'))"
+                                        data-i18n="at_modem">基带信息</button>
+                                    <button class="btn"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleAT('AT+CFUN=1,1'))"
+                                        data-i18n="at_modem_reboot">重启基带</button>
+                                    <button class="btn" style="margin-top: 6px;"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleAT('AT+CIMI'))"
+                                        data-i18n="at_imsi">IMSI</button>
+                                    <button class="btn" id="VoLTESwitchBtn" style="margin-top: 6px;"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleVoLTE())">VoLTE(slot0)</button>
+                                    <button class="btn" id="VoNRSwitchBtn" style="margin-top: 6px;"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleVoNR())">VoNR(slot0)</button>
+                                    <button class="btn" id="VoLTESwitchBtn1" style="margin-top: 6px;"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleVoLTE1())">VoLTE(slot1)</button>
+                                    <button class="btn" id="VoNRSwitchBtn1" style="margin-top: 6px;"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleVoNR1())">VoNR(slot1)</button>
+                                    <button class="btn" style="margin-top: 6px;" id="highRailModeBtn"
+                                        onclick="disableButtonWhenExecuteFunc(event,()=>handleHighRailMode(event))"
+                                        data-i18n="at_high_rail_mode">高铁模式</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="title" style="margin-top: 14px;" data-i18n="at_result_title">执行结果</div>
+                        <p id="AT_RESULT" style="margin:20px 0;margin-top: 14px;; font-size: 14px;width: 100%;">
+                            <!-- +CGEQOSRDP: 1,6,0,0,0,0,1000000,300000 -->
+                        </p>
+                    </div>
+
+                    <div class="btn" style="text-align: right;margin-top: 6px;">
+                        <button type="button" data-i18n="close_btn" onclick="closeModal('#ATModal')">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 高级功能模态框 -->
+            <div class="mask" id="advanceModal" style="display: none">
+                <div class="modal" style="width: 90%;max-width: 800px; display: flex;flex-direction: column;">
+                    <div class="title" style="margin-bottom: 4px;" data-i18n="advance_title">高级功能</div>
+
+                    <div class="content" style="text-align: left;max-height: 500px;">
+                        <div class="title" style="margin-bottom: 4px;font-size: 12px;">
+                            <b style="color: red;">
+                                <i data-i18n="advance_warning">
+                                    ⚠️ 警告：此功能适合有一定动手能力或对设备了解较多的玩机用户使用。普通用户请勿轻易尝试，否则可能会导致设备异常、数据丢失或无法恢复的问题。
+                                </i>
+                            </b>
+                        </div>
+
+                        <div style="margin-top: 2px;margin-bottom: 10px;">
+                            <div style="display: flex;flex-wrap: wrap; gap: 10px;">
+                                <div>
+                                    <div class="title" style="font-size: 11px;margin-bottom: 10px;">
+                                        <div data-i18n="advance_feature_list">
+                                            <b>注意，开启高级功能后不可关闭文件共享，否则高级功能会失效</b><br>
+                                            <i class="user_select">如去除高级功能报错，可以在TTYD上执行 sh /sdcard/unlock_samba.sh
+                                                重启生效</i>
+                                            <i><br>添加高级功能包括:<br>
+                                                1.优化Samba目录(添加sd卡目录，设备根目录)<br>
+                                                2.添加TTYD，自带RootShell<br>
+                                                3.默认阻止官方后台 TTYD 网络ADB SMB 的ipv6访问，提升安全性<br>
+                                                4.添加定时脚本(30s左右定时执行一次，脚本在内部存储目录下ufi_tools_schedule.sh)<br>
+                                                5.添加开机自启脚本(脚本在内部存储目录下ufi_tools_boot.sh)<br>
+                                                <span style="color: pink;">(感谢酷安 @QuTick @AiCherub @atwat 提供的思路)</span>
+                                            </i>
+                                        </div>
+                                    </div>
+
+                                    <div class="title socat_status"
+                                        style="font-size: 12px;margin: 8px 0;margin-bottom: 0;"></div>
+                                    <div class="adb_status title" style="font-size: 12px;margin: 4px 0;margin-top: 0;">
+                                    </div>
+                                    <div class="advanced-btns">
+                                        <button class="btn"
+                                            onclick="disableButtonWhenExecuteFunc(event,()=>handleSambaPath())"
+                                            data-i18n="advance_add">添加高级功能</button>
+                                        <button class="btn"
+                                            onclick="disableButtonWhenExecuteFunc(event,()=>handleSambaPath('0'))"
+                                            data-i18n="advance_remove">移除高级功能(重启生效)</button>
+                                        <button class="btn"
+                                            onclick="disableButtonWhenExecuteFunc(event,handleDisableFOTA)"
+                                            data-i18n="advance_disable_update">禁用更新</button>
+                                        <button onclick="handleEditBootScriptModal()"
+                                            data-i18n="edit_boot_script">编辑启动脚本</button>
+                                        <button class="btn" onclick="disableButtonWhenExecuteFunc(event,()=>getBoot())"
+                                            data-i18n="advance_dump_boot">提取Boot</button>
+                                        <button onclick="event.preventDefault();toggleWakeLock(true)"
+                                            data-i18n="wake_lock_enabled">启用唤醒锁</button>
+                                        <button onclick="event.preventDefault();toggleWakeLock(false)"
+                                            data-i18n="wake_lock_disabled">禁用唤醒锁</button>
+                                        <button id="ADB" class="btn" data-i18n="usb_debugging"
+                                            onclick="createToast(t('please_login'),'red')">USB调试</button>
+                                        <button id="ADB_NET" class="btn" data-i18n="adb_autostart"
+                                            onclick="createToast(t('please_login'),'red')">ADB自启</button>
+                                        <button id="PERF" class="btn" data-i18n="performance_mode"
+                                            onclick="createToast(t('please_login'),'red')">性能模式</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="title" style="margin-top: 14px;" data-i18n="advance_result">执行结果</div>
+                        <p id="AD_RESULT" style="margin:20px 0;margin-top: 14px; font-size: 14px;width: 100%;"></p>
+                    </div>
+
+                    <div class="btn" style="text-align: right;margin-top: 6px;">
+                        <button type="button" data-i18n="close_btn" onclick="closeAdvanceToolsModal()">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 更改密码模态框 -->
+            <div class="mask" id="changePassModal" style="display: none;">
+                <div class="modal" style="max-width: 500px;">
+                    <div class="title" data-i18n="change_password_title">更改密码(某兴WEB密码)</div>
+                    <div class="title" style="display: block;font-size: .7rem;margin-top: 10px;line-height: 20px;">
+                        <span
+                            data-i18n="change_pass_tip1">请务必使用UFI-TOOLS后台网页更改官方后台的密码，请不要直接在官方后台内更改密码，否则会导致后台记录密码与官方后台密码不一致，造成UFI-TOOLS部分功能（如定时任务）失效！</span><br />
+                        <span data-i18n="change_pass_tip2">当前UFI-TOOLS保存的密码为：</span>&nbsp;<span
+                            id="official_web_pwd"></span>
+                    </div>
+                    <form onsubmit="handleChangePassword(event)" id="changePassForm">
+                        <input type="text" autocomplete="username" name="username" value="admin" style="display: none;">
+                        <div class="content" style="overflow-y: scroll; padding: 15px; width: 66vw; max-width: 400px;">
+                            <div class="item" style="margin: 10px auto;">
+                                <label style="display: flex; align-items: center;">
+                                    <span style="flex: 1;" data-i18n="old_password">旧的密码：</span>
+                                    <input style="flex: 1;padding: 4px 6px;width: 100%;" name="oldPassword"
+                                        type="password" value="02:00:00:00:00:00" placeholder="旧密码"
+                                        autocomplete="current-password"
+                                        data-i18n-placeholder="old_password_placeholder">
+                                </label>
+                            </div>
+                            <div class="item" style="margin: 10px auto;">
+                                <label style="display: flex; align-items: center;">
+                                    <span style="flex: 1;" data-i18n="new_password">新的密码：</span>
+                                    <input style="flex: 1;padding: 4px 6px;width: 100%;" name="newPassword"
+                                        type="password" placeholder="新密码" autocomplete="new-password"
+                                        data-i18n-placeholder="new_password_placeholder">
+                                </label>
+                            </div>
+                            <div class="item" style="margin: 10px auto;">
+                                <label style="display: flex; align-items: center;">
+                                    <span style="flex: 1;" data-i18n="confirm_password">确认密码：</span>
+                                    <input style="flex: 1;padding: 4px 6px;width: 100%;" name="confirmPassword"
+                                        type="password" placeholder="确认密码" autocomplete="new-password"
+                                        data-i18n-placeholder="confirm_password_placeholder">
+                                </label>
+                            </div>
+                        </div>
+                        <div class="btn" style="text-align: right;">
+                            <button type="submit" data-i18n="submit_btn">提交</button>
+                            <button type="button" onclick="onCloseChangePassForm()" data-i18n="close_btn">关闭</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <!-- 更改token模态框 -->
+            <div class="mask" id="changeTokenModal" style="display: none">
+                <div class="modal">
+                    <div class="title" data-i18n="change_token_title">更改登录口令</div>
+
+                    <div class="title" style="margin-top: 10px;font-size: .7rem;" data-i18n="token_change_notice">
+                        密码最短为8位，至少包含字母和数字</div>
+                    <form onsubmit="handleChangeToken(event)" id="changeTokenForm">
+                        <div class="content" style="overflow-y: scroll; padding: 15px; width: 66vw; max-width: 400px;">
+                            <div class="item" style="margin: 10px auto;">
+                                <label style="display: flex; align-items: center;">
+                                    <span style="flex: 1;" data-i18n="new_token">新的口令：</span>
+                                    <input style="flex: 1;padding: 4px 6px;width: 100%;" name="newToken" type="password"
+                                        placeholder="新口令" autocomplete="new-token"
+                                        data-i18n-placeholder="new_token_placeholder">
+                                </label>
+                            </div>
+                            <div class="item" style="margin: 10px auto;">
+                                <label style="display: flex; align-items: center;">
+                                    <span style="flex: 1;" data-i18n="confirm_token">确认口令：</span>
+                                    <input style="flex: 1;padding: 4px 6px;width: 100%;" name="confirmToken"
+                                        type="password" placeholder="确认口令" autocomplete="new-token"
+                                        data-i18n-placeholder="confirm_token_placeholder">
+                                </label>
+                            </div>
+                        </div>
+                        <div class="btn" style="text-align: right;">
+                            <button type="submit" data-i18n="submit_btn">提交</button>
+                            <button type="button" onclick="onCloseChangeTokenForm()" data-i18n="close_btn">关闭</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            <!-- 内网测速模态框 -->
+            <div class="modal" id="speedTestModal" style="display: none">
+                <div class="title" data-i18n="modal_speedtest_title">内网测速(不准)</div>
+
+                <div class="content" style="overflow-y: scroll; padding: 15px; width: 66vw; max-width: 400px;">
+                    <div class="item" style="margin: 10px auto;">
+                        <label style="display: flex; font-size: 14px; align-items: center;">
+                            <span data-i18n="speedtest_block_size_label">块大小(8MB 最大 1024)：</span>
+                            <input style="flex: 1;padding: 4px 6px;width: 100%;" value="1024" id="ckSize" type="number"
+                                max="1024">
+                        </label>
+                    </div>
+                    <div class="speedtest" id="speedtestResult" data-i18n="speedtest_ready">准备就绪</div>
+                </div>
+
+                <div class="btn" style="text-align: right;">
+                    <button id="startSpeedBtn" onclick="startTest(event)" data-i18n="speedtest_start_btn">开始测速</button>
+                    <button id="loopMode" onclick="handleLoopMode(event)" data-i18n="speedtest_loop_btn">循环测速</button>
+                    <button type="button" onclick="closeModal('#speedTestModal')" data-i18n="close_btn">关闭</button>
+                </div>
+            </div>
+            <!-- 自定义测速 -->
+            <div class="modal" id="CellularTestModal" style="display: none">
+                <div class="title" data-i18n="cellular_speed_test">流量测速</div>
+                <div class="title" style="font-size: 12px;margin-top: 10px;"><i
+                        data-i18n="cellular_speed_test_notice">测速经过内网代理转发，数据仅供参考</i></div>
+                <div class="content" style="overflow-y: scroll; padding: 10px; width: 66vw; max-width: 400px;">
+                    <div class="item" style="margin: 10px auto;">
+                        <label style="display: flex; font-size: 14px; align-items: center;">
+                            <span data-i18n="cellular_speed_test_url">测速地址：</span>
+                            <input onchange="saveCellularTestUrl(event)" style="flex: 1;padding: 4px 6px;width: 100%;"
+                                id="CellularTestUrl" type="text">
+                        </label>
+                        <div style="margin-top: 10px;;display: flex; font-size: 14px; align-items: center;">
+                            <span data-i18n="cellular_speed_test_thread">线程数量：</span>
+                            <span id="thread_num" style="padding-right: 6px;">1</span>
+                            <input value="1" oninput="onThreadNumChange(event)" style="flex:1" type="range" min="1"
+                                max="5" name="" id="">
+                        </div>
+                    </div>
+                    <div class="speedtest" id="CellularTestResult" data-i18n="cellular_speed_test_prepared">准备就绪</div>
+                </div>
+
+                <div class="btn" style="text-align: right;">
+                    <button id="startSpeedBtn" onclick="runSingleTest(event)"
+                        data-i18n="speedtest_start_btn">开始测速</button>
+                    <button id="loopMode" onclick="handleCellularLoopMode(event)"
+                        data-i18n="speedtest_loop_btn">循环测速</button>
+                    <button type="button" onclick="closeCellularTest('#CellularTestModal')"
+                        data-i18n="close_btn">关闭</button>
+                </div>
+            </div>
+            <!-- usb状态 -->
+            <div class="modal" id="USBStatusModal" style="display: none;">
+                <div class="title" data-i18n="usb_status">USB状态</div>
+                <div class="title" style="font-size: 12px;margin: 10px 0"><i
+                        data-i18n="usb_status_notice">仅展示机器Type-C口连接的设备列表，数据仅供参考</i></div>
+                <div class="content"
+                    style="font-size: .7rem;overflow-y: auto; padding: 10px 0;margin-bottom: 10px;; width: 66vw; max-width: 500px;">
+                </div>
+
+                <div class="btn" style="text-align: right;">
+                    <button type="button" onclick="closeUSBStatusModal('#USBStatusModal')"
+                        data-i18n="close_btn">关闭</button>
+                </div>
+            </div>
+            <!-- 版本更新模态框 -->
+            <div class="mask" id="updateSoftwareModal" style="display: none;">
+                <div class="modal" style="width: 90%; max-width: 800px;">
+                    <button onclick="forceEnableOTABtn()"
+                        style="opacity: 0;border-radius: 50%;position: absolute;right: 10px;top: 10px;">&nbsp;</button>
+                    <div class="title" data-i18n="update_title">UFI-TOOLS 软件更新</div>
+                    <div class="title socat_status" style="font-size: 12px;margin: 8px 0;margin-bottom: 0;"></div>
+                    <div style="font-size: 12px;margin-top: 0px;" class="adb_status title"></div>
+                    <div class="title" style="font-size: 10px;margin-top: 10px;">
+                        <div>
+                            <i
+                                data-i18n="update_notice_1">软件更新需要启用USB调试+网络ADB调试功能(重启，或者关闭开启一下USB调试),如无法正常使用一键更新功能,可以点击下载安装包自行下载安装。</i><br>
+                            <i data-i18n="update_notice_2">由于Android的包管理机制,更新过程中请不要断电，请确保更新完成后能正常进入后台再重启。</i>
+                        </div>
+                    </div>
+                    <div class="speedtest" style="border-left: 6px solid pink;font-size: 12px;margin-top: 10px;"
+                        id="OTATextContent" data-i18n="update_checking">正在检查更新...</div>
+                    <div class="content" style="margin: 15px 0; overflow-y: scroll; max-height: 250px;">
+                        <div class="speedtest" style="font-size: 12px;" id="ChangelogTextContent"></div>
+                    </div>
+                    <div class="btn" style="text-align: right;">
+                        <button id="doUpdate" data-i18n="btn_update">一键更新</button>
+                        <button id="downloadAPK" data-i18n="btn_download">下载安装包</button>
+                        <button id="closeUpdateBtn" type="button" onclick="closeModal('#updateSoftwareModal')"
+                            data-i18n="close_btn">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <!-- 短信转发模态框 -->
+            <div class="mask" id="smsForwardModal" style="display: none">
+                <div class="modal">
+                    <div class="title" style="justify-content: space-between;"><span
+                            data-i18n="sms_forward_title">短信转发(Beta)</span> <button type="button"
+                            onclick="closeModal('#smsForwardModal')" data-i18n="close_btn">关闭</button></div>
+                    <span data-i18n="sms_forward_toggle">总开关:</span>
+                    <div style="margin-top: 8px;display: inline-block;" id="collapse_smsforward_btn"></div>
+                    <!-- tab -->
+                    <div class="tabs" onclick="switchSmsForwardMethodTab(event)"
+                        style="width: 100%;display: flex;margin-top: 10px;gap: 10px;">
+                        <button id="smtp_btn" data-method="smtp" id="smtpForwardBtn" style="flex: 1;" class="tab-btn"
+                            data-i18n="smtp_method">SMTP方式</button>
+                        <button id="curl_btn" data-method="curl" id="curlForwardBtn" style="flex: 1;" class="tab-btn"
+                            data-i18n="curl_method">CURL方式</button>
+                        <button id="dingtalk_btn" data-method="dingtalk" id="dingtalkForwardBtn" style="flex: 1;"
+                            class="tab-btn" data-i18n="dingtalk_method">钉钉方式</button>
+                    </div>
+                    <div id="collapse_smsforward" class="collapse">
+                        <div class="collapse_box">
+                            <div style="display: flex;gap: 10px;">
+                                <!-- 电量提醒 -->
+                                <div style="padding-top: 8px;display: flex;align-items: center;"
+                                    id="collapse_smsforward_power_status_btn">
+                                    <span data-i18n="power_status_forward_title"
+                                        style="font-size: .8rem;min-width: fit-content;flex-shrink: 0;">电源状态转发</span>
+                                </div>
+                                <!-- 转发规则 -->
+                                <button style="margin-top: 8px;flex: 1;" id="forward_method_setting_btn"
+                                    data-i18n="forward_method_setting_btn">转发规则</button>
+                                <button style="margin-top: 8px;flex: 1;" id="forward_nickname_setting_btn"
+                                    data-i18n="forward_nickname_setting_btn">设置别名</button>
+                            </div>
+                            <!-- smtp转发 -->
+                            <form onsubmit="handleSmsForwardForm(event)" id="smsForwardForm">
+                                <div class="content" style="
+                        overflow:hidden;
+                        margin: 10px 0;
+                        width: 80vw;
+                        font-size: .9rem;
+                        max-width: 400px;">
+                                    <div class="title" style="font-size: 12px;" data-i18n="smtp_hint">
+                                        接收方邮箱也可以是转发方邮箱
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span data-i18n="smtp_host">主机：</span><input
+                                                style="flex: 1;padding: 4px 6px;width: 100%;" id="smtp_host"
+                                                name="smtp_host" type="text" placeholder="smtp.xxx.com"></label>
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span data-i18n="smtp_port">端口：</span><input
+                                                style="flex: 1;padding: 4px 6px;width: 100%;" id="smtp_port"
+                                                name="smtp_port" type="number" placeholder="465"></label>
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span data-i18n="smtp_username">用户：</span><input
+                                                style="flex: 1;padding: 4px 6px;width: 100%;" id="smtp_username"
+                                                name="smtp_username" type="text" placeholder="example@xx.com"></label>
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span data-i18n="smtp_password">密码：</span><input autocomplete="off"
+                                                style="flex: 1;padding: 4px 6px;width: 100%;" id="smtp_password"
+                                                name="smtp_password" type="password" placeholder=""></label>
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span data-i18n="smtp_to">发给：</span><input style="flex: 1;padding: 4px 6px;width: 100%;"
+                                                id="smtp_to" name="smtp_to" type="email"
+                                                placeholder="to@xxx.com"></label>
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="display: flex;align-items: center;"><span
+                                                data-i18n="forward_dev_info_text">同时转发设备信息：</span><input
+                                                name="forward_dev_info" type="checkbox" class="checkbox"></label>
+                                    </div>
+                                </div>
+                                <div class="btn" style="text-align: right;">
+                                    <button type="submit" data-i18n="submit_btn">提交</button>
+                                    <button type="button" data-i18n="close_btn"
+                                        onclick="closeModal('#smsForwardModal')">关闭</button>
+                                </div>
+                            </form>
+                            <!-- curl请求转发 -->
+                            <form onsubmit="handleSmsForwardCurlForm(event)" id="smsForwardCurlForm"
+                                style="display: none;">
+                                <div class="content" style="
+                                    overflow:hidden;
+                                    margin: 10px 0;
+                                    width: 80vw;
+                                    max-width: 400px;">
+                                    <div class="title user_select" style="display:block;font-size: .7rem;">
+                                        <span data-i18n="curl_hint">注意：命令需是“一口气”输入的，不要中途按回车换行或用 \ 接续，注意参数间的空格
+                                            短信内容占位符：</span>
+                                        <br>
+                                        <span onclick="copyText(event)">{{sms-body}} {{sms-time}}
+                                            {{sms-from}}
+                                        </span>
+                                        <br>
+                                        <span onclick="copyText(event)">
+                                            {{daily-flow}} {{cpu-temp}} {{cpu-usage}} {{mem-usage}} {{app-ver}}
+                                            {{battery-level}}
+                                            {{battery-current}} {{battery-voltage}} {{model}} {{nickname}} {{boot-time}}
+                                            {{monthly-flow-count}} {{monthly-flow-sum}}
+                                        </span>
+                                    </div>
+                                    <div
+                                        style="display: grid;gap: 10px;margin-top: 10px;grid-template-columns: 1fr 1fr;">
+                                        <button style="width: 100%;"
+                                            onclick="event.preventDefault();fillCurl('tg')">Telegram</button>
+                                        <button style="width: 100%;" onclick="event.preventDefault();fillCurl('wechat')"
+                                            data-i18n="wechat_group">企业微信</button>
+                                        <button style="width: 100%;"
+                                            onclick="event.preventDefault();fillCurl('pushplus')">PushPlus</button>
+                                        <button style="width: 100%;"
+                                            onclick="event.preventDefault();fillCurl('bark')">Bark</button>
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <div style="
+                                display: flex;
+                                align-items: center;
+                            ">
+                                            <textarea rows="10" style="flex: 1;padding: 4px 6px;width: 100%;"
+                                                id="curl_text" name="curl_text" type="text"
+                                                placeholder="curl 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx'"></textarea>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="btn" style="text-align: right;">
+                                    <button type="submit" data-i18n="submit_btn">提交</button>
+                                    <button type="button" data-i18n="close_btn"
+                                        onclick="closeModal('#smsForwardModal')">关闭</button>
+                                </div>
+                            </form>
+                            <!-- 钉钉webhook转发 -->
+                            <form onsubmit="handleSmsForwardDingTalkForm(event)" id="smsForwardDingTalkForm"
+                                style="display: none;">
+                                <div class="content" style="
+                                    overflow:hidden;
+                                    margin: 10px 0;
+                                    width: 80vw;
+                                    max-width: 400px;">
+                                    <div class="title" style="font-size: .7rem;" data-i18n="dingtalk_hint">
+                                        配置钉钉群机器人webhook地址，支持加签安全设置
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span data-i18n="dingtalk_webhook"
+                                                style="display: inline-block; width:110px;font-size: .8rem;">Webhook地址：</span><input
+                                                style="flex: 1;padding: 4px 6px;width: 100%;" id="dingtalk_webhook"
+                                                name="dingtalk_webhook" type="text"
+                                                placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"></label>
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="
+                                display: flex;
+                                align-items: center;
+                            "><span data-i18n="dingtalk_secret"
+                                                style="display: inline-block; width:110px;font-size: .8rem;">加签密钥：</span><input
+                                                style="flex: 1;padding: 4px 6px;width: 100%;" id="dingtalk_secret"
+                                                name="dingtalk_secret" type="text"
+                                                placeholder="SEC000000000000000000000" optional></label>
+                                    </div>
+                                    <div class="item" style="margin: 10px auto;">
+                                        <label style="font-size: .8rem;display: flex;align-items: center;"><span
+                                                data-i18n="forward_dev_info_text">同时转发设备信息：</span><input
+                                                name="forward_dev_info" type="checkbox" class="checkbox"></label>
+                                    </div>
+                                </div>
+                                <div class="btn" style="text-align: right;">
+                                    <button type="submit" data-i18n="submit_btn">提交</button>
+                                    <button type="button" data-i18n="close_btn"
+                                        onclick="closeModal('#smsForwardModal')">关闭</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- APN设置模态框 -->
+            <div class="mask user_select_none" id="APNManagementModal" style="display: none">
+                <form id="APNManagementForm" class="modal"
+                    style="max-width: 440px;display: block;box-sizing: border-box;">
+                    <div class="title" data-i18n="apn_setting">APN设置</div>
+                    <div class="title" style="font-style: italic;;font-size: .62rem;margin-top: 10px;"
+                        data-i18n="apn_title_info">
+                        接入点名称(APN)用于您设备连接运营商网络的名称，该信息会根据您的sim卡自动匹配。如果无法上网可以尝试修改这组参数，参数作用请咨询当地运营商。
+                    </div>
+                    <div class="content flex"
+                        style="flex-direction: column;gap: 10px;overflow-y: scroll; padding: 10px 0;font-size: 14px; width: 66vw; max-width: 400px;">
+                        <div class="flex" style="gap: 15px;">
+                            <span data-i18n="current_apn">当前APN</span><span name="apn_wan_apn"></span>
+                        </div>
+                        <div class="flex" style="gap: 10px;">
+                            <span data-i18n="auto_apn">自动APN</span>
+                            <label class="flex items-center"><input id="autoAPNMode"
+                                    onclick="onChangeIsAutoFrofile(true)" name="apn_mode" type="radio" checked><span
+                                    data-i18n="auto">自动</span></label>
+                            <label class="flex items-center"><input id="apnMode" onclick="onChangeIsAutoFrofile(false)"
+                                    name="apn_mode" type="radio"><span data-i18n="manual">手动</span></label>
+                        </div>
+                        <div id="autoProfileEl" class="flex items-center" style="gap: 10px;">
+                            <span data-i18n="profile">配置文件</span>
+                            <div class="profileItems flex items-center" style="flex-wrap: wrap;flex: 1;gap: 10px;">
+                                <div style="flex: 1">
+                                    <select class="select" style="min-width: 100px;width: 100%;" name="autoProfile"
+                                        id="autoProfile">
+                                    </select>
+                                </div>
+                                <div class="options" style="justify-self: start;">
+                                    <button class="btn" onclick="onViewAPNProfile(event)" data-i18n="view">查看</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="profileEl" class="flex items-center" style="display: none;gap: 10px;">
+                            <span data-i18n="profile">配置文件</span>
+                            <div class="profileItems flex items-center" style="flex-wrap: wrap;flex: 1;gap: 10px;">
+                                <div style="flex: 1">
+                                    <select class="select" name="profile" style="min-width: 100px;width: 100%;"
+                                        id="manualProfile">
+                                    </select>
+                                </div>
+                                <div class="options">
+                                    <button class="btn" id="addAPNProfile" data-i18n="add">添加</button>
+                                    <button class="btn" id="editAPNProfile" data-i18n="edit">编辑</button>
+                                    <button class="btn" id="delAPNProfile" data-i18n="del">删除</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="btn" style="text-align: right;">
+                        <button name="submit" data-i18n="submit_btn">提交</button>
+                        <button type="button" onclick="closeModal('#APNManagementModal')"
+                            data-i18n="close_btn">关闭</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- APN查看模态框 -->
+            <div class="mask user_select_none" id="APNViewModal" style="display: none">
+                <div class="modal" style="max-width: 300px;display: block;box-sizing: border-box;">
+                    <div class="title" data-i18n="apn_info">APN信息</div>
+                    <div class="content flex"
+                        style="flex-direction: column;gap: 10px;overflow-y: scroll; padding: 10px 0;font-size: 14px; width: 66vw; max-width: 400px;">
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="apn_name">配置名称</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" disabled
+                                name="profile_name">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;">APN</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" disabled name="apn">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="username">用户名</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" disabled name="username">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="password">密码</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" disabled name="password">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="auth_type">鉴权方式</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" disabled
+                                name="auth_method">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="pdp_type">PDP类型</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" disabled name="pdp_method">
+                        </div>
+                    </div>
+                    <div class="btn" style="text-align: right;">
+                        <button type="button"
+                            onclick="closeModal('#APNViewModal',300,()=>{showModal('#APNManagementModal')})"
+                            data-i18n="close_btn">关闭</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 添加、修改APN -->
+            <div class="mask user_select_none" id="APNEditModal" style="display: none">
+                <div class="modal" style="max-width: 300px;display: block;box-sizing: border-box;">
+                    <div class="title" id="APN_MOD_TITLE">APN</div>
+                    <div class="content flex"
+                        style="flex-direction: column;gap: 10px;overflow-y: scroll; padding: 10px 0;font-size: 14px; width: 66vw; max-width: 400px;">
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="profile_name">配置名称</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" name="profile_name"
+                                value="">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;">APN</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" name="apn" value="">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="username">用户名</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" name="username" value="">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="password">密码</span>
+                            <input class="fw max-150" style="padding: 6px 10px;" type="text" name="password" value="">
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="auth_type">鉴权方式</span>
+                            <select class="select fw max-150" name="auth_method" value="none">
+                                <option value="none">NONE</option>
+                                <option value="chap">CHAP</option>
+                                <option value="pap">PAP</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center" style="gap: 10px;">
+                            <span style="min-width: 80px;" data-i18n="pdp_type">PDP类型</span>
+                            <select class="select fw max-150" name="pdp_method" value="IP">
+                                <option value="IP">IPv4</option>
+                                <option value="IPv6">IPv6</option>
+                                <option value="IPv4v6">IPv4v6</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="btn" style="text-align: right;">
+                        <button name="submit" data-i18n="submit_btn">提交</button>
+                        <button type="button"
+                            onclick="closeModal('#APNEditModal',300,()=>{showModal('#APNManagementModal')})"
+                            data-i18n="close_btn">关闭</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ❤️ -->
+            <div class="mask" id="payModal" style="display: none" onclick="handleClosePayModal(event)">
+                <div class="modal">
+                    <div class="title" style="width: 100%;display: flex;justify-content:space-between;"><span
+                            data-i18n="pay_title">打赏作者/群组链接</span>
+                        <button type="button" onclick="onClosePayModal()" data-i18n="pay_btn_dismiss"
+                            style="margin-right: 15px;">不再显示</button>
+                    </div>
+                    <div class="title"
+                        style="display: flex;align-items: center;margin-top: 10px;font-size: 12px;margin-bottom: 10px;">
+                        <div>
+                            <p style="margin: 0; font-style: italic;" data-i18n="pay_tip_1">开发不易，打赏随意～</p>
+                            <p style="margin: 0; font-style: italic;" data-i18n="pay_tip_2">长按赞赏码可保存为图片</p>
+                        </div>
+                    </div>
+                    <div class="title" style="font-size: 14px;display: flex;flex-direction: column;">
+                        <button style="width: 100%;"><a href="https://t.me/ufi_tools_chat" target="_blank"
+                                data-i18n="tg_group">点我加入TG群组:
+                                @ufi_tools_chat</a></button>
+                    </div>
+                    <div class="donate_content"
+                        style="display: flex; flex-direction: row; justify-content: space-between; padding: 15px; width: 70vw; max-width: 400px; flex-wrap: wrap;">
+
+                        <a href="https://api.kanokano.cn/pay/zsm.png" target="_blank"
+                            style="display:flex;width: 48%; height: auto; border-radius: 20px;">
+                            <img src="https://api.kanokano.cn/pay/zsm.png"
+                                style="flex:1;width: 100%; height: auto;border-radius: 20px;" alt=""
+                                onerror="this.onerror=null; this.src='/img/zsm.png'">
+                        </a>
+                        <a href="https://api.kanokano.cn/pay/group.png" target="_blank"
+                            style="display:flex;width: 48%; height: auto; border-radius: 20px;">
+                            <img src="https://api.kanokano.cn/pay/group.png"
+                                style="flex:1;width: 100%; height: auto;border-radius: 20px;" alt=""
+                                onerror="this.onerror=null; this.src='/img/group.png'">
+                        </a>
+
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="footer">
+        <p>Made by <a href="https://github.com/kanoqwq/UFI-TOOLS" target="_blank">MiniKano</a> with love ❤️&nbsp;<a
+                href="javascript:;" onclick="showModal('#payModal')" data-i18n="pay_title">打赏作者</a></p>
+    </div>
+
+    <div class="toolbar">
+        <div id="top_btn" class="top" onclick="scroolToTop()" style="display: none;opacity: 0;">
+            <svg width="100%" fill="var(--dark-text-color)" stroke="currentColor" height="100%" viewBox="0 0 1024 1024"
+                version="1.1" xmlns="http://www.w3.org/2000/svg">
+                <path
+                    d="M79.856 126.156V64.421h864.288v61.735H79.856z m61.735 432.146h30.867v-30.867h30.867v-30.867h30.867V465.7h30.867v-30.867h30.867v-30.87h30.867v-30.868h30.867V342.23h30.867v-30.867h30.867v-30.867h30.867v-30.867h30.867v-30.867h61.735v30.867h30.867v30.867h30.867v30.867h30.867v30.867h30.867v30.867h30.867v30.867h30.867v30.867h30.874v30.867h30.867v30.867h30.867v30.867h30.867v30.867h30.867v30.867h30.867v61.736H851.54v-30.867h-30.867v-30.868h-30.867V558.3H758.94v-30.867h-30.867v-30.867h-30.867v-30.867h-30.867v-30.867h-30.867v-30.868h-30.867v-30.867h-30.867V342.23H542.87v617.349h-61.738v-617.35h-30.867v30.867h-30.867v30.867h-30.867v30.867h-30.867v30.867h-30.867v30.867H295.93v30.867h-30.867v30.867h-30.867v30.867h-30.871v30.867h-30.867v30.867h-61.735v-61.735h30.867v-30.861z" />
+            </svg>
+        </div>
+        <div class="refresh" onclick="location.reload()">
+            <svg width="100%" fill="var(--dark-text-color)" stroke="currentColor" height="100%" viewBox="0 0 1024 1024"
+                version="1.1" xmlns="http://www.w3.org/2000/svg">
+                <path
+                    d="M815.36 184.96V128a36.48 36.48 0 0 1 10.24-26.88 37.76 37.76 0 0 1 52.48 0 40.96 40.96 0 0 1 11.52 26.88v172.16a40.32 40.32 0 0 1-37.12 37.12h-173.44a40.32 40.32 0 0 1-26.88-11.52 37.76 37.76 0 0 1 0-52.48 35.84 35.84 0 0 1 26.88-10.24h108.8a372.48 372.48 0 0 0-453.12-75.52A367.36 367.36 0 0 0 170.24 364.8a374.4 374.4 0 0 0-19.84 242.56 369.92 369.92 0 0 0 132.48 202.24A375.04 375.04 0 0 0 512 888.32a368.64 368.64 0 0 0 263.68-108.8A376.32 376.32 0 0 0 885.12 512H960A448 448 0 1 1 136.32 270.08a438.4 438.4 0 0 1 192-164.48 444.16 444.16 0 0 1 256-32 455.68 455.68 0 0 1 230.4 111.36z" />
+            </svg>
+        </div>
+    </div>
+    <div id="toastContainer"></div>
+    <script src="/script/draglist.js"></script>
+    <script src="/script/i18n.js"></script>
+    <script src="/script/utils.js"></script>
+    <script src="/script/theme.js"></script>
+    <script src="/script/charts.js"></script>
+    <script src="/script/main.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,43 @@
+[Unit]
+Description=UFI-TOOLS web backend (Linux / E5-LINUX port)
+Documentation=file:///usr/share/doc/ufi-tools/README.md
+# The AT bridge wants the modem channels up, and the goform feature wants the
+# network: start after both, but never require them, so a device without a modem
+# still serves the UI.
+After=network-online.target e5-vendor.service
+Wants=network-online.target
+# The AT bridge is unisoc-cpd in the G2 shape (e5-atd is gone): ask the owner
+# through /opt/e5/e5-at, never open the tty.
+After=unisoc-cpd.service
+Wants=unisoc-cpd.service
+
+[Service]
+Type=simple
+# The port binds 2333 by default; the token and every setting live here.
+Environment=UFI_TOOLS_DATA=/var/lib/ufi-tools
+Environment=PYTHONPATH=/usr/lib/ufi-tools
+Environment=UFI_TOOLS_WWW=/usr/share/ufi-tools/www
+WorkingDirectory=/usr/lib/ufi-tools
+ExecStart=/usr/bin/python3 -m ufitools serve
+Restart=always
+RestartSec=5
+
+# The service drives systemd units (hotspot, mobile data), talks to the AT
+# broker and runs operator scripts, so it needs to be root.  It is bound to the
+# management LAN and protected by the UFI-TOOLS token; see README.md.
+User=root
+
+# A watchdog reboot must not wait on vendor teardown (docs/STATUS.md, "32 s
+# shutdown"): stop fast and hard.
+KillSignal=SIGTERM
+TimeoutStopSec=5
+FinalKillSignal=SIGKILL
+
+# Modest hardening that does not break the hardware bridges.
+NoNewPrivileges=no
+ProtectHome=no
+ProtectSystem=no
+PrivateTmp=no
+
+[Install]
+WantedBy=multi-user.target

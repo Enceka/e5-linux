@@ -1,0 +1,19 @@
+[Unit]
+Description=gotty web terminal (the UFI-TOOLS console page)
+Documentation=file:///usr/share/doc/ufi-tools/README.md
+# UFI-TOOLS' 「启用/禁用 TTYD 端口」 buttons start and stop this unit, which is
+# why it is not enabled at boot: the terminal port is off until it is asked for,
+# the same shape the Android build had.
+[Service]
+Type=simple
+# UFI-TOOLS' config carries ttyd_port = 1146 and the console page links there, so
+# gotty listens on the port ttyd would have.  gotty is the drop-in here: ttyd is
+# no longer in Debian trixie (the package is gone from the index and apt refuses
+# the build), and gotty ships a single static aarch64 binary that needs no
+# libraries at all.
+ExecStart=/usr/local/bin/gotty --port 1146 --permit-write --reconnect /bin/bash -l
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,77 +1,31 @@
 #!/bin/sh
-# Send an AT command through e5-atd (which owns the modem's AT channel; see that script for why).
-# (port of mu300-linux/rootfs/overlay/opt/mu300/bin/mu300-at)
+# Send an AT command through unisoc-cpd, the one process that owns the modem's
+# AT channel in the G2 shape (the e5-atd fifo client this replaces is gone with
+# e5-atd itself).
+#
 #   e5-at "AT+CSQ"            print the reply
-#   e5-at -t 20 "AT+SFUN=4"   wait longer than the default 6 s
-# Falls back to opening the tty directly when the daemon is not running - that works once, and then the channel
-# needs a modem restart, so the daemon is strongly preferred.
-# Needs a shell with "read -t" (bash or busybox ash): dash has no such option, and this tty ignores the termios
-# timer and blocks in the driver instead - see e5-atd for the whole story.
+#   e5-at -t 20 "AT+SFUN=4"   accepted for compatibility; the daemon owns the
+#                             timeout (8 s), so the value is parsed and ignored
+#
+# Why not open /dev/stty_nr1 here: a second reader splits replies with the owner
+# and makes the CP's PS task assert with "The queue was full" -- the whole point
+# of the daemon.  Asking it by name keeps that promise: the command goes over
+# /run/unisoc-cpd/cmd.sock and the daemon paces and serialises it.
 set -u
-export PATH="$PATH:/opt/e5/bin:/usr/sbin:/sbin"
-if [ -n "$(read -t 1 _probe </dev/null 2>&1)" ]; then
-    for sh in /bin/bash /usr/bin/bash /bin/busybox; do
-        [ -x "$sh" ] || continue
-        case $sh in */busybox) exec "$sh" ash "$0" "$@" ;; *) exec "$sh" "$0" "$@" ;; esac
-    done
-    echo "e5-at: need bash or busybox ash (this shell has no 'read -t')" >&2; exit 1
-fi
-DIR=${E5_AT_DIR:-/run/e5-at}
-DEV=${E5_AT_DEV:-/dev/stty_nr1}
-CR=$(printf '\r')
-T=6
-[ "${1:-}" = -t ] && { T=$2; shift 2; }
-cmd=${1:-}
-[ -n "$cmd" ] || { echo "usage: e5-at [-t SECONDS] \"AT+COMMAND\"" >&2; exit 2; }
 
-if [ -p "$DIR/cmd" ]; then
-    # one client at a time: the daemon serves a single command per round. The wait has to cover the slowest
-    # command somebody else may be running (AT+SFUN=4 takes ~20 s), not just this one.
-    lock=$DIR/lock
-    wait=${E5_AT_LOCK_WAIT:-90}
-    n=0
-    while ! mkdir "$lock" 2>/dev/null; do
-        # a client killed with SIGKILL cannot clean up after itself; take the lock over when its owner is gone
-        owner=$(cat "$lock/pid" 2>/dev/null || true)
-        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then rm -rf "$lock"; continue; fi
-        n=$((n + 1)); [ "$n" -gt $((wait * 10)) ] && { echo "e5-at: busy" >&2; exit 1; }
-        sleep 0.1 2>/dev/null || sleep 1
-    done
-    echo $$ > "$lock/pid" 2>/dev/null || true
-    trap 'rm -rf "$lock" 2>/dev/null' EXIT INT TERM
-    # The answer comes back in a file of our own, not through a fifo: a fifo needs both ends at the same time,
-    # so a client that gave up waiting used to leave the daemon (or a leftover writer) blocked for ever.
-    answer=$DIR/answer.$$
-    rm -f "$answer" "$answer.part"
-    trap 'rm -rf "$lock" "$answer" "$answer.part" 2>/dev/null' EXIT INT TERM
-    if command -v timeout >/dev/null 2>&1; then
-        timeout $((T + 6)) sh -c 'printf "%s %s %s\n" "$1" "$2" "$3" > "$4"' _ "$T" "$answer" "$cmd" "$DIR/cmd" || {
-            echo "e5-at: the daemon is not reading commands" >&2; exit 1; }
-    else
-        printf '%s %s %s\n' "$T" "$answer" "$cmd" > "$DIR/cmd"
-    fi
-    n=0
-    while [ ! -e "$answer" ]; do
-        n=$((n + 1))
-        [ "$n" -gt $(( (T + 8) * 10 )) ] && { echo "e5-at: no answer from the daemon" >&2; exit 1; }
-        sleep 0.1 2>/dev/null || sleep 1
-    done
-    cat "$answer"
-    exit 0
-fi
-
-echo "e5-at: daemon not running, using $DEV directly (this can wedge the channel)" >&2
-[ -c "$DEV" ] || { echo "e5-at: no $DEV" >&2; exit 1; }
-exec 3<>"$DEV"
-stty raw -echo <&3 2>/dev/null || true
-while :; do j=; IFS= read -r -t 1 j <&3 || break; done
-printf '%s\r' "$cmd" >&3
-end=$(( $(date +%s) + T ))
-while [ "$(date +%s)" -lt "$end" ]; do
-    l=
-    IFS= read -r -t 2 l <&3 || continue
-    l=${l%"$CR"}; [ -n "$l" ] || continue
-    echo "$l"
-    case $l in OK|ERROR|+CME\ ERROR*|+CMS\ ERROR*|CONNECT*|NO\ CARRIER) break ;; esac
+have_cmd=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -t) shift; [ $# -gt 0 ] && shift ;;
+        --) shift; have_cmd=1; break ;;
+        *) have_cmd=1; break ;;
+    esac
 done
-exec 3>&-
+
+if [ "$have_cmd" = 0 ] || [ $# -eq 0 ]; then
+    echo "usage: e5-at [-t SECONDS] AT+COMMAND" >&2
+    exit 2
+fi
+
+exec /usr/local/bin/unisoc-cpd --mode native --profiles-dir /etc/unisoc-cpd \
+    --socket /run/unisoc-cpd/cmd.sock at "$1"

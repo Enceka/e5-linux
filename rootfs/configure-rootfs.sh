@@ -57,11 +57,11 @@ bash "$HERE/e5-chroot.sh" '
 echo "=== services ==="
 bash "$HERE/e5-chroot.sh" '
     set -e
-    systemctl enable sddm.service >/dev/null 2>&1 || echo "warn: sddm enable failed"
-    systemctl enable e5-boot-ok.service >/dev/null 2>&1 || echo "warn: e5-boot-ok enable failed"
-    systemctl enable NetworkManager.service >/dev/null 2>&1 || echo "warn: NM enable failed"
-    systemctl enable e5-zram.service >/dev/null 2>&1 || echo "warn: zram enable failed"
-    systemctl enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
+    systemctl --root=/ enable sddm.service >/dev/null 2>&1 || echo "warn: sddm enable failed"
+    systemctl --root=/ enable e5-boot-ok.service >/dev/null 2>&1 || echo "warn: e5-boot-ok enable failed"
+    systemctl --root=/ enable NetworkManager.service >/dev/null 2>&1 || echo "warn: NM enable failed"
+    systemctl --root=/ enable e5-zram.service >/dev/null 2>&1 || echo "warn: zram enable failed"
+    systemctl --root=/ enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
     # The baseband, G2 shape: the vendor modem_control chroot boots the CP, the
     # two vendor helpers persist the modem NV data, and unisoc-cpd is the one
     # owner of the AT/URC channels for the whole boot (it replaced e5-atd and
@@ -79,9 +79,9 @@ bash "$HERE/e5-chroot.sh" '
     for s in e5-vendor e5-cp_diskserver e5-refnotify \
              unisoc-cpd e5-bearer-up \
              e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do
-        systemctl enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
+        systemctl --root=/ enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done
-    systemctl enable serial-getty@ttyGS0.service >/dev/null 2>&1 || echo "warn: getty enable failed"
+    systemctl --root=/ enable serial-getty@ttyGS0.service >/dev/null 2>&1 || echo "warn: getty enable failed"
     systemctl set-default graphical.target >/dev/null 2>&1 || true
     echo "enabled:"; ls /etc/systemd/system/graphical.target.wants/ /etc/systemd/system/multi-user.target.wants/ 2>/dev/null | head -30
 '

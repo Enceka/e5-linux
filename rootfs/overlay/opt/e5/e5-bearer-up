@@ -1,0 +1,51 @@
+#!/bin/sh
+# One round: make sure the radio is on, then bring the bearer up.
+#
+# Exactly one pass, no loop and no sleep -- retrying is systemd's job
+# (Restart=on-failure, RestartSec=60), so the unit's state and journal show one
+# attempt per minute instead of a hidden loop inside here.  An earlier version
+# ran the radio recovery in a six-second loop, which flooded the AT channel
+# until the CP stopped answering and the boot never completed.
+#
+# Two things have to be true before there is data, and neither is the daemon's
+# own business (docs/FINDINGS.md 25.3):
+#
+#   * the CP can sit at +CFUN: 0 with its stack down, and nothing on this side
+#     used to turn it on -- so the bearer was attempted against a radio that was
+#     off and sipa_eth0 never came up.  A CP that booted without a RIL (ours:
+#     modem_control boots it) registers after the plain SFUN pair, so `cfun on`
+#     is tried first; the documented cold cycle `cfun cold` follows once for the
+#     state a RIL shutdown leaves behind.  If neither worked, exit 1 -- the next
+#     round tries again.
+#   * the bearer only makes sense once the CP is registered, so an unregistered
+#     modem is a failed round, not something to wait for in here.
+set -u
+
+CPD=${E5_CPD:-/usr/local/bin/unisoc-cpd}
+SOCK=${E5_CPD_SOCKET:-/run/unisoc-cpd/cmd.sock}
+
+cpd() { timeout 90 "$CPD" --mode native --socket "$SOCK" "$@"; }
+
+radio_is_on() { cpd cfun status 2>/dev/null | grep -q '+CFUN: 1'; }
+registered() { cpd register 2>/dev/null | grep -qE '\+CEREG: 2,(1|5)'; }
+
+if ! radio_is_on; then
+    echo "radio: +CFUN is not 1, bringing it up (AT+SFUN=2/4)"
+    cpd cfun on >/dev/null 2>&1 || true
+fi
+if ! radio_is_on; then
+    echo "radio: still down, one cold cycle (AT+CFUN=0 -> SFUN=2/4)"
+    cpd cfun cold >/dev/null 2>&1 || true
+fi
+if ! radio_is_on; then
+    echo "radio: still not on" >&2
+    exit 1
+fi
+
+if ! registered; then
+    echo "not registered yet" >&2
+    exit 1
+fi
+
+echo "registered; bringing the bearer up"
+cpd data up

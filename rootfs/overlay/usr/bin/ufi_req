@@ -1,0 +1,20 @@
+#!/bin/sh
+# ufi_req for Linux -- signed request tool (drop-in for the Android Go binary).
+# Same two layouts as bin/ufi-tools: a source checkout, or install.sh's /usr/lib.
+set -eu
+
+if [ -d /usr/lib/ufi-tools/ufitools ]; then
+    LIB=/usr/lib/ufi-tools
+else
+    SELF=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    LIB=$(dirname "$SELF")
+fi
+
+if [ -n "$PYTHONPATH" ]; then
+    PYTHONPATH="$LIB:$PYTHONPATH"
+else
+    PYTHONPATH="$LIB"
+fi
+export PYTHONPATH
+
+exec python3 -c 'import sys; from ufitools.req import main; sys.exit(main())' "$@"

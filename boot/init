@@ -317,7 +317,7 @@ if [ -n "$rootdir" ]; then
         # and neither the image builder (boot/build-boot-image.py packs files and
         # directories, and skips symlinks) nor the loop above can carry a link, so
         # the ones the overlay would have shipped are made here.
-        for unit in e5-bt-attach.service ufi-tools.service; do
+        for unit in e5-bt-attach.service ufi-tools.service dnsmasq.service; do
             if [ -f "/newroot/etc/systemd/system/$unit" ]; then
                 mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
                 ln -sf "../$unit" \

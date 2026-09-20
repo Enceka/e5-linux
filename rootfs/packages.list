@@ -82,6 +82,11 @@ dnsmasq
 # without these comes up to a display manager that has no session to start.
 phosh
 phoc
+# phosh only Recommends gnome-session, and this list is installed with
+# --no-install-recommends -- so /usr/bin/phosh-session, a wrapper that execs
+# "gnome-session --session=phosh", exited without a word and the device came up
+# with a display manager that could not start a session.  It is a Depends here.
+gnome-session
 phosh-osk-stub
 squeekboard
 foot

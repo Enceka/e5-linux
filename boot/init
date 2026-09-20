@@ -317,7 +317,14 @@ if [ -n "$rootdir" ]; then
         # and neither the image builder (boot/build-boot-image.py packs files and
         # directories, and skips symlinks) nor the loop above can carry a link, so
         # the ones the overlay would have shipped are made here.
-        for unit in e5-bt-attach.service ufi-tools.service dnsmasq.service; do
+        # Everything the overlay ships that has to start, listed explicitly: a
+        # fresh rootfs cannot enable these (the overlay is not part of the image
+        # it packs), and a device whose rootfs predates this needs them too.
+        for unit in e5-bt-attach.service ufi-tools.service dnsmasq.service \
+                     e5-vendor.service e5-cp_diskserver.service e5-refnotify.service \
+                     unisoc-cpd.service e5-bearer-up.service e5-regdb-load.service \
+                     e5-hotspot.service e5-telnetd.service e5-gadget-guard.service \
+                     e5-fixups.service; do
             if [ -f "/newroot/etc/systemd/system/$unit" ]; then
                 mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
                 ln -sf "../$unit" \

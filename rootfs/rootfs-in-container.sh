@@ -112,6 +112,14 @@ if want pack; then
     rm -f "$OUT"
     mkdir -p "$(dirname "$OUT")"
     truncate -s "${IMG_MIB}M" "$OUT"
+    # The chroot shim copies the *build container's* /etc/resolv.conf into the
+    # tree so apt can resolve during the install, and that file then travels into
+    # the image.  On the device it is a Docker resolver (0.250.250.200) that
+    # answers nothing: dnsmasq forwarded to it, so every client of the hotspot got
+    # "connected, no internet" and the device's own apt could not resolve either.
+    # Write a real one before packing; NetworkManager/resolved overwrite it once
+    # an interface with DNS is up.
+    printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\n' > "$ROOT/etc/resolv.conf"
     mkfs.ext4 -F -q -L e5linux "$OUT"
     M=/mnt/e5img
     mkdir -p "$M"

@@ -6,8 +6,10 @@ Documentation=man:dnsmasq(8)
 # script restarts "dnsmasq", so a device without it hands out no leases at all
 # (clients associate and then sit there -- "cannot connect to the wifi").
 #
-# Deliberately not enabled at boot: with interface=wlan0 in its config it must
-# not start before the AP exists.  hotspot-start.sh restarts it once wlan0 is up.
+# Enabled at boot: it is the DHCP + DNS server for the management LAN too, and
+# that has to be there before anyone logs in over it.  The config uses
+# bind-dynamic, so the AP's wlan0 may appear later; hotspot-start.sh restarts it
+# once the AP is up anyway.
 After=network.target
 [Service]
 Type=simple

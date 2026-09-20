@@ -1,0 +1,37 @@
+[Unit]
+Description=unisoc-cpd: resident owner of the CP (G2 control plane)
+Documentation=file:/etc/unisoc-cpd/README.md
+# The SIPC tty only exists once the vendor modem stack is up.
+ConditionPathExists=/dev/stty_nr1
+After=e5-vendor.service
+Wants=e5-vendor.service
+# The incumbents are the other owners of /dev/stty_nr1 (the plan's only red
+# line: never two readers on one AT channel).  `serve` refuses to become a
+# second reader, so starting it means *replacing* them, not joining them; stop
+# them first and let systemd resolve the conflict in one go.
+Conflicts=e5-atd.service e5-mobile-data.service e5-mobile-data-watch.service
+# The soak holds the same channel and would only fight this unit for it.
+Conflicts=unisoc-cpd-soak.service
+
+[Service]
+Type=simple
+# The daemon answers capability requests on /run/unisoc-cpd/cmd.sock for the
+# whole boot; a client asks with
+#   unisoc-cpd --mode native --socket /run/unisoc-cpd/cmd.sock <capability>
+# and asks the daemon itself with `state` or `urc` in place of the capability.
+ExecStart=/usr/local/bin/unisoc-cpd --profile e5 --mode native \
+    --profiles-dir /etc/unisoc-cpd --runs-dir /var/lib/unisoc-cpd/runs \
+    --state-dir /run/unisoc-cpd \
+    serve --socket /run/unisoc-cpd/cmd.sock
+# Losing the device (a CP restart takes the tty with it) is not fatal: the
+# channel layer reopens with backoff, so the daemon must outlive it.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+# A watchdog reboot must not wait on vendor teardown.
+TimeoutStopSec=10
+Nice=5
+RuntimeDirectory=unisoc-cpd
+
+[Install]
+WantedBy=multi-user.target

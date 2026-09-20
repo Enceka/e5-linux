@@ -1,0 +1,131 @@
+# Rongyue E5 -- Unisoc UMS9621 (qogirn6lite), Android 13 on slot a.
+#
+# Every value here was read off the device (see docs/BASEBAND-CONTRACTS.md):
+# the SIPC tty numbering, the spool nodes, the partition names from
+# /dev/block/by-name, and the mailbox the interrupt table names.
+#
+# This file is the only place in unisoc-cpd that may name the E5.
+
+name = "e5"
+generation = "unisoc-ums9621-nr"
+description = "Rongyue E5 (UMS9621 / qogirn6lite), Android 13 slot a"
+# The *values* below were read off the device; `verified` only goes true once
+# this platform has passed a link soak with the daemon as the only AT owner.
+verified = false
+
+[channels]
+# nr1 is the clean command channel; nr0 is the URC channel and must be read
+# continuously (a queued URC was once read as the answer to +CEREG?).
+cmd   = "/dev/stty_nr1"
+urc   = "/dev/stty_nr0"
+log   = "/dev/slog_ch"
+dump  = "/dev/cp_dump"
+stime = "/dev/stime_ch"
+
+[channels.spool]
+slog_ch  = "/dev/slog_ch"
+slog_nr  = "/dev/slog_nr"
+slog_phy = "/dev/slog_phy"
+slog_pm  = "/dev/slog_pm"
+cp_dump  = "/dev/cp_dump"
+
+[at]
+# The CP asserts with "The queue was full" when AT is not paced.
+pace_seconds = 0.3
+default_timeout = 6.0
+reopen_backoff = 1.0
+idle_probe_seconds = 60.0
+urc_gap_seconds = 5.0
+# The generation's URC prefixes are the core's defaults; nothing to add here yet.
+
+[boot]
+method = "chroot-modem_control"
+runner = "/opt/e5/android-run"
+partitions = [
+  "nr_modem",
+  "nr_phy",
+  "nr_fixnv1",
+  "nr_fixnv2",
+  "nr_deltanv",
+  "nr_runtimenv1",
+  "nr_runtimenv2",
+  # The remaining measured NV stores (contracts section 5): nv backup covers
+  # everything with "nv" in the name, and an identity write backs these up too.
+  "prodnv",
+  "calinv",
+]
+slot_suffixes = ["_a", "_b"]
+# Android runs slot a, and slot a is where its RIL configured the modem, so a
+# slot-b Linux trial still boots slot a's firmware and NV.
+active_slot = "_a"
+
+[nv]
+persist = "cp_diskserver"
+node = "/dev/snv_nr"
+# The plan's only red line is the AT channel; NV/identity writes are allowed
+# through the guarded paths alone.  Every write path refuses while this is
+# true, and when it is false the guards still demand --yes, a vouched sha256,
+# an exact partition-size match and a post-write hash (contracts section 8).
+readonly = false
+# The diag character node identity items are read from.  It exists on the
+# Android side of this generation; whether it comes up under our kernel is
+# still an open contract item -- `imei read` says so plainly if it is absent.
+diag_node = "/dev/sdiag_nr"
+# The NV items that hold the identity values, indexed the way the CP and
+# Android name them -- ZERO-BASED: SIM slot 1 is IMEI0 (5E81), SIM slot 2 is
+# IMEI1 (5E82), and 5E90 is the spare third item.  BCD, low nibble first.
+# Measured on this unit (Android side, 2026-09-20): 5E81 answers with the
+# provisioned, Luhn-valid IMEI; 5E82/5E90 read all-zero (slot 2 is not
+# individually provisioned here).
+imei_items = [
+  { index = 0, id = "5e81" },
+  { index = 1, id = "5e82" },
+  { index = 2, id = "5e90" },
+]
+
+[imei]
+# Write dialect, pinned by the owner (2026-09-20) from the factory tool this
+# unit was provisioned with: AT+SPIMEI=<slot>,"<imei>" with the slot
+# ZERO-BASED -- SIM slot 1 is 0, SIM slot 2 is 1.  {index} substitutes that
+# zero-based slot, {imei} the 15-digit value.  (Not found in the researched
+# AT surface; it came from the factory path, which is the better provenance.)
+write_command = 'AT+SPIMEI={index},"{imei}"'
+# Read-form probes.  SPACTCARD is this surface's per-slot router: a command
+# prefixed AT+SPACTCARD=<phoneId>; executes against that card's context --
+# but measured on the unit it only ever serves the ACTIVE card, so per-slot
+# AT reads are not a way to see a second slot's identity (diag items are).
+probes = [
+  "AT+SPIMEI?",
+  "AT+EGMR?",
+  "AT+SPACTCARD=0;AT+CGSN",
+  "AT+SPACTCARD=1;AT+CGSN",
+]
+
+[mailbox]
+driver = "sprd-mailbox"
+irq_match = "mailbox"
+
+[data]
+ifname = "sipa_eth0"
+cid = 1
+apn_source = "/etc/e5/mobile-data.conf"
+vendor_script = "/opt/e5/mobile-data"
+
+[voice]
+# No UCM port yet, so there is no in-call audio path to route.
+supported = false
+mixer = []
+
+[telemetry]
+paths = ["/proc/interrupts", "/sys/class/net/sipa_eth0/statistics"]
+assert_pattern = "CP assert"
+
+# --mode vendor delegates to the incumbent implementation for a differential
+# run; these are the same commands a human would type on this image.
+[vendor]
+sim      = "mobile-data at \"AT+CPIN?\""
+register = "mobile-data status"
+signal   = "mobile-data signal"
+cfun     = "mobile-data at \"AT+CFUN?\""
+band     = "mobile-data at \"AT+SPRAT?\""
+data     = "mobile-data status"

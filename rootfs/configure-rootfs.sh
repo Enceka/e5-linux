@@ -62,11 +62,12 @@ bash "$HERE/e5-chroot.sh" '
     systemctl enable NetworkManager.service >/dev/null 2>&1 || echo "warn: NM enable failed"
     systemctl enable e5-zram.service >/dev/null 2>&1 || echo "warn: zram enable failed"
     systemctl enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
-    # The baseband, installed the way mu300-linux installs it: the vendor
-    # modem_control chroot, the AT channel keeper, mobile data and its watchdog,
-    # and the two vendor helpers that persist the modem NV data.  Every AT command
-    # goes through e5-atd, which owns /dev/stty_nr1 for the whole boot -- a single
-    # owner is what the SIPC channel and the CP command queue both require.
+    # The baseband, G2 shape: the vendor modem_control chroot boots the CP, the
+    # two vendor helpers persist the modem NV data, and unisoc-cpd is the one
+    # owner of the AT/URC channels for the whole boot (it replaced e5-atd and
+    # e5-mobile-data; its unit carries Conflicts= against them for images that
+    # still have them enabled).  A single owner is what the SIPC channel and the
+    # CP command queue both require.
     #
     # e5-regdb-load and e5-hotspot are what the Wi-Fi hotspot is (the regulatory
     # database and hostapd on wlan0), e5-telnetd is the way in on a device with no
@@ -75,7 +76,8 @@ bash "$HERE/e5-chroot.sh" '
     # fresh install had no hotspot at all.  e5-fixups is the port of mu300-fixups:
     # it restores ping's cap_net_raw and links e5-next-boot/mobile-data/e5-at into
     # /usr/local/bin, which is what makes `sudo e5-next-boot android` work.
-    for s in e5-vendor e5-atd e5-mobile-data e5-mobile-data-watch e5-cp_diskserver e5-refnotify \
+    for s in e5-vendor e5-cp_diskserver e5-refnotify \
+             unisoc-cpd \
              e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do
         systemctl enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done

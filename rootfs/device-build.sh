@@ -62,4 +62,13 @@ echo "configured: $(grep -c "^Status: install ok installed" $ROOT/var/lib/dpkg/s
 echo "=== apt dependency check ==="
 chroot "$ROOT" /bin/sh -c 'DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root -f install -y 2>&1 | tail -25' || true
 
+echo "=== ownership ==="
+# The tree was packed on the build host by a non-root user, and mkfs.ext4 -d
+# preserves those uid/gid numbers verbatim: a base system whose /bin/sh is
+# owned by uid 1000 only works by luck.  On the device the chroot runs as real
+# root, so fix every uid inside the root filesystem at once (-xdev keeps the
+# bind-mounted /proc /sys /dev out).
+chroot "$ROOT" /bin/sh -c 'find / -xdev -exec chown root:root {} +' 2>&1 | tail -3 || true
+echo "owner fixed: $(find "$ROOT" -maxdepth 1 | wc -l) top-level entries"
+
 echo "DEVICE-BUILD-DONE"

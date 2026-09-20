@@ -8,7 +8,7 @@
 table ip e5nat {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
-        ip saddr 192.168.9.0/24 oifname "sipa_eth0" masquerade
-        ip saddr 192.168.77.0/24 oifname "sipa_eth0" masquerade
+        ip saddr 192.168.9.0/24 oifname "sipa_eth*" masquerade
+        ip saddr 192.168.77.0/24 oifname "sipa_eth*" masquerade
     }
 }

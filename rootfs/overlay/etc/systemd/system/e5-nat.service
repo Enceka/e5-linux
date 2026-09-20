@@ -1,0 +1,16 @@
+[Unit]
+Description=E5 NAT for the hotspot and the USB management LAN
+Documentation=file:///usr/share/doc/e5-linux/README.md
+# After the baseband link exists, but it does not have to wait for it: the rule
+# only matches packets while sipa_eth0 is up.
+After=e5-bearer-up.service unisoc-cpd.service
+Wants=unisoc-cpd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/e5/nat.nft
+ExecStop=/usr/sbin/nft delete table ip e5nat
+
+[Install]
+WantedBy=multi-user.target

@@ -1,9 +1,10 @@
-"""Configuration storage: the Linux replacement for Android SharedPreferences.
+"""Configuration storage.
 
-Android keeps everything in ``.../shared_prefs/kano_ZTE_store.xml``; here the
-same key/value pairs live in ``config.json`` under the data directory.  Keeping
-the *keys* identical lets an existing device export be imported and keeps this
-module diffable against the Kotlin it replaces.
+Everything lives in ``config.json`` under the data directory: the access token,
+the service settings, the hardware unit names, the forwarding configuration and
+the traffic thresholds.  Key names follow the ones the Android app used, so a
+preferences export from a device can be imported and the two implementations
+stay comparable.
 
 Data directory resolution order:
 

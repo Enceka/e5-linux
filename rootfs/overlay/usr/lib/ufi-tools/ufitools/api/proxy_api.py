@@ -6,10 +6,10 @@ download an external file through the tunnel).  The SSRF filter from the Android
 implementation is kept verbatim: loopback, link-local and RFC1918 destinations
 are refused, so a compromised page cannot use the device to probe the LAN.
 
-The vendor-specific ``/api/goform`` reverse proxy that used to live here is gone:
-the E5 is not a ZTE device and there is no vendor web backend to forward to.  The
-only thing still served under that path is the web UI's own login handshake,
-which lives in :mod:`ufitools.api.ui_compat`.
+This module is only the outbound proxy.  The vendor web-UI reverse proxy that
+used to live here is gone: there is no vendor backend to forward to.  The field
+and action surface the frontend uses now lives in
+:mod:`ufitools.api.ui_compat`.
 """
 
 from __future__ import annotations

@@ -2658,3 +2658,30 @@ not because the password was wrong:
 -- the same family of timeouts, this time inside logind while udev was still
 absorbing the boot's device flood.  The next boot logged `Authentication for
 user "e5" successful` and the session stayed on seat0.
+## 27. Two sessions, one working: SDDM, the renderer, and a profile that was not readable
+
+The phosh desktop did not come up for a day, and the cause was three things stacked.
+
+First the login: the e5 password in the deployed rootfs did not match the one being
+typed, so SDDM's autologin failed and SDDM fell back to its greeter -- and the Wayland
+greeter cannot draw on this image (it wants kwin_wayland, which left with KDE), which
+looks exactly like a black screen with a working backlight.
+
+Then a wrong turn of mine: reading that as "SDDM is unusable", I replaced it with an
+autologin on tty1.  That path does not carry the env line the image's own
+phosh.desktop has -- Exec=env WLR_RENDERER=gles2 phosh-session -- and without it phoc
+spins at 90% CPU: the session never reaches the UI, and the physical keys look dead.
+They are not: a raw capture of /dev/input/event2 shows the keypad reporting KP_ENTER,
+BACK plus BACKSPACE, digits and DOWN the whole time; nothing was consuming them.
+(The profile pins gles2 against a stray WLR_RENDERER=pixman in /etc/environment, which
+is worse still.  Removing the line makes the session not start at all -- verified both
+ways.)
+
+Third, and invisible: /home/e5/.bash_profile arrived from the overlay as 0600 root:root,
+so the login shell stopped at the permission check and exited without a word.  cpio
+records the packing host's modes and uid; boot/init now chowns /home/e5 back to e5.
+
+With the password reset, the ownership fixed and the no-display-manager change reverted,
+SDDM autologins into phosh and touch, the physical keys and phosh-osk-stub (the on-screen
+keyboard) all work.  The X11 greeter works too, since X is installed -- anyone who wants
+a login screen only has to clear Autologin/User.

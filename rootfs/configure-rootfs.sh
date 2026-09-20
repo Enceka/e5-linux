@@ -60,6 +60,14 @@ bash "$HERE/e5-chroot.sh" '
     systemctl --root=/ enable sddm.service >/dev/null 2>&1 || echo "warn: sddm enable failed"
     systemctl --root=/ enable e5-boot-ok.service >/dev/null 2>&1 || echo "warn: e5-boot-ok enable failed"
     systemctl --root=/ enable e5-zram.service >/dev/null 2>&1 || echo "warn: zram enable failed"
+    # usb0's management LAN -- its 192.168.77.1 and its DHCP server -- is
+    # /etc/systemd/network/10-e5-usb0.network, i.e. systemd-networkd, and the
+    # busybox telnetd that is the only way into a device with no usable keypad
+    # rides on that address.  Nothing else starts networkd: it used to be a
+    # NetworkManager drop-in (Wants=systemd-networkd.service), which went away
+    # with NetworkManager, and the device promptly came back with usb0 down,
+    # no lease, and no way in.
+    systemctl --root=/ enable systemd-networkd.service systemd-networkd.socket >/dev/null 2>&1 || echo "warn: networkd enable failed"
     systemctl --root=/ enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
     # The baseband, G2 shape: the vendor modem_control chroot boots the CP, the
     # two vendor helpers persist the modem NV data, and unisoc-cpd is the one

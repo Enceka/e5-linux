@@ -41,6 +41,9 @@ echo "=== user ==="
 bash "$HERE/e5-chroot.sh" '
     set -e
     if ! id e5 >/dev/null 2>&1; then
+        # netdev is not in the fresh base tree (a package postinst creates it on
+        # a full system), and useradd refuses a group that does not exist.
+        getent group netdev >/dev/null || groupadd -r netdev
         useradd -m -s /bin/bash -G sudo,video,render,input,audio,netdev e5
     fi
     echo "e5:123456" | chpasswd

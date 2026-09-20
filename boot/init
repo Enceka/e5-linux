@@ -324,6 +324,18 @@ if [ -n "$rootdir" ]; then
                     "/newroot/etc/systemd/system/multi-user.target.wants/$unit"
             fi
         done
+
+        # systemd-networkd is a distribution unit (it lives in /usr/lib), and it
+        # is what gives usb0 its 192.168.77.1 and the DHCP server the management
+        # LAN needs.  A rootfs build enables it; this is for a device whose
+        # rootfs was built before that was true, because the overlay cannot carry
+        # enable symlinks either.  Without it usb0 comes up bare, the host gets
+        # no lease, and the only way in is the screen.
+        if [ -f /newroot/usr/lib/systemd/system/systemd-networkd.service ]; then
+            mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
+            ln -sf /usr/lib/systemd/system/systemd-networkd.service \
+                /newroot/etc/systemd/system/multi-user.target.wants/systemd-networkd.service
+        fi
     fi
     # The initramfs busybox is a static arm64 binary and doubles as the userspace
     # busybox for the management LAN (e5-telnetd.service runs telnetd from it), so no

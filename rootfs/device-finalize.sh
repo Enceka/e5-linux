@@ -35,7 +35,7 @@ run 'id e5 >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo,video,render,input
      id e5'
 
 echo "=== services ==="
-run 'for s in sddm e5-boot-ok e5-zram serial-getty@ttyGS0 \
+run 'for s in sddm e5-boot-ok e5-zram systemd-networkd serial-getty@ttyGS0 \
                 e5-vendor e5-cp_diskserver e5-refnotify \
                 unisoc-cpd e5-bearer-up \
                 e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do

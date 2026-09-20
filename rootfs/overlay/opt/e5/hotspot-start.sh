@@ -19,6 +19,15 @@ mkdir -p /etc/systemd/network/20-e5-wlan0.network.d
     echo "[Network]"
     awk '/^nameserver[ \t]/{print "DNS="$2}' /etc/resolv.conf | head -4
 } > /etc/systemd/network/20-e5-wlan0.network.d/10-dns.conf
+# The WCN SDIO chip takes its time on a cold boot: on one boot wlan0 did not
+# exist until ~100 s in, so "ip link set wlan0 up" failed with "RTNETLINK
+# answers: No such device" while the service's own start timeout was already
+# running.  Wait for the interface rather than race it.
+for _ in $(seq 60); do
+    [ -e /sys/class/net/wlan0 ] && break
+    sleep 2
+done
+[ -e /sys/class/net/wlan0 ] || { echo "hotspot: wlan0 never appeared" >&2; exit 1; }
 iw reg set CN 2>/dev/null || true
 sleep 1
 systemctl stop wpa_supplicant 2>/dev/null || true
@@ -47,7 +56,12 @@ echo "hostapd: $(pgrep -c hostapd) process(es)"
 [ "$(pgrep -c hostapd)" != 0 ] || { echo "hotspot: hostapd is not running" >&2; exit 1; }
 iw reg get | head -2
 iw dev wlan0 info | grep -E 'type|ssid' | head -2
-systemctl restart systemd-networkd
-systemctl restart dnsmasq
+# Bounded on purpose: these restart jobs queue behind other units, and during a
+# boot with network-online.target still unreached the blocking form of this call
+# never returned -- the script was killed by its own start timeout with hostapd
+# already running, and the SIGKILL left wlan0 powered down.  The AP is up by
+# now; DHCP must not be able to hang this script.
+timeout 20 systemctl restart systemd-networkd || true
+timeout 20 systemctl restart dnsmasq || true
 sleep 5
 ip -br addr show wlan0

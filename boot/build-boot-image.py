@@ -49,7 +49,14 @@ PERSIST_LOG_OFFSET = 56 << 20
 BOOT_CMDLINE = (
     b'console=tty0 console=ttyGS0,115200 loglevel=7 '
     b'selinux=0 androidboot.selinux=permissive enforcing=0 '
-    b'panic=10 softlockup_panic=1 '
+    # CONFIG_PANIC_ON_OOPS=y in this kernel, and the E5 has a pre-existing
+    # vsprintf/uevent oops about 25 s into every boot, so panic=10 alone turns
+    # that into a boot loop back into Android.  sysctl.kernel.panic_on_oops=0 is
+    # handled by the sysctl code during early init and is what makes the boot
+    # survive it; every image that has booted this device carried it.
+    # softlockup_panic=1 was dropped at the same time: a hung task has to show up
+    # in the log, not take the machine down.
+    b'panic=10 sysctl.kernel.panic_on_oops=0 '
     # No 'fw_devlink=permissive' here on purpose.  The E5's USB controller
     # (64a00000.usb) lists the AW322xx charger (i2c:2-006a, which declares the
     # "vddvbus" regulator musb wants in host mode) among its devicetree

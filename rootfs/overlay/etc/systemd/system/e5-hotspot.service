@@ -13,8 +13,14 @@ ConditionPathExists=/lib/firmware/wcnmodem.bin
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/e5/hotspot-start.sh
-ExecStop=/usr/bin/pkill -f hostapd
-TimeoutStartSec=120
+# -9 and "-": hostapd's shutdown path blocks in this driver (systemd spent 15 s
+# in final-sigterm and then reported the unit failed with the process still
+# running).  The kill powers the WCN chip down either way; the start script
+# redoes the whole init, so a clean hostapd exit buys nothing.
+ExecStop=-/usr/bin/pkill -9 -f hostapd
+# The script waits for wlan0 (up to 120 s on a cold boot) and then for the WCN
+# firmware to accept a beacon; 120 s was measured being hit exactly.
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target

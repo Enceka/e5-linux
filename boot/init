@@ -338,6 +338,16 @@ if [ -n "$rootdir" ]; then
         # rootfs was built before that was true, because the overlay cannot carry
         # enable symlinks either.  Without it usb0 comes up bare, the host gets
         # no lease, and the only way in is the screen.
+        # The serial console has to survive too -- it is the only way in when the
+        # management LAN is down (docs/FINDINGS.md section 26).  A rootfs build
+        # cannot enable a template instance from a chroot ("warn: getty enable
+        # failed"), so the link is made here.
+        if [ -f /newroot/lib/systemd/system/serial-getty@.service ]; then
+            mkdir -p /newroot/etc/systemd/system/getty.target.wants
+            ln -sf /lib/systemd/system/serial-getty@.service \
+                "/newroot/etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service"
+        fi
+
         if [ -f /newroot/usr/lib/systemd/system/systemd-networkd.service ]; then
             mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
             ln -sf /usr/lib/systemd/system/systemd-networkd.service \

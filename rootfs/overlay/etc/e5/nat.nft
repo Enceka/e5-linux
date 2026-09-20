@@ -1,0 +1,14 @@
+# Declarative, so re-running it is a no-op rather than a "File exists" error.
+#
+# The hotspot's clients get 192.168.9.1 as router and DNS from dnsmasq, and the
+# USB management LAN gets 192.168.77.1 -- but nothing was masquerading them out
+# of the baseband, so a connected phone could not reach anything.  The unit that
+# used to do this (e5-mobile-data) was replaced by e5-bearer-up and the rules went
+# with it.
+table ip e5nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr 192.168.9.0/24 oifname "sipa_eth0" masquerade
+        ip saddr 192.168.77.0/24 oifname "sipa_eth0" masquerade
+    }
+}

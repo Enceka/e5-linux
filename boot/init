@@ -333,7 +333,7 @@ if [ -n "$rootdir" ]; then
                      e5-vendor.service e5-cp_diskserver.service e5-refnotify.service \
                      unisoc-cpd.service e5-bearer-up.service e5-regdb-load.service \
                      e5-hotspot.service e5-telnetd.service e5-gadget-guard.service \
-                     e5-fixups.service; do
+                     e5-fixups.service e5-nat.service; do
             if [ -f "/newroot/etc/systemd/system/$unit" ]; then
                 mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
                 ln -sf "../$unit" \

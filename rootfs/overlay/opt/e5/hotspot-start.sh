@@ -11,6 +11,10 @@ set -u
 CONF=${1:-/etc/hostapd/e5.conf}
 FW=/lib/firmware/wcnmodem.bin
 if [ ! -e /dev/block/by-name/wcnmodem ] && [ -f "$FW" ]; then
+    # The initramfs makes /dev/block/by-name; on the real root it does not exist,
+    # and "ln -sfn" then fails silently -- the driver finds no firmware node, the
+    # WCN chip refuses to power on, and the hotspot fails for the whole boot.
+    mkdir -p /dev/block/by-name
     LO=$(losetup -f --show "$FW" 2>/dev/null)
     [ -n "$LO" ] && ln -sfn "$LO" /dev/block/by-name/wcnmodem
 fi

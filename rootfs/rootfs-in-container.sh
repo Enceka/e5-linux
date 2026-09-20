@@ -117,7 +117,7 @@ if want pack; then
     # the image.  On the device it is a Docker resolver (0.250.250.200) that
     # answers nothing: dnsmasq forwarded to it, so every client of the hotspot got
     # "connected, no internet" and the device's own apt could not resolve either.
-    # Write a real one before packing; NetworkManager/resolved overwrite it once
+    # Write a real one before packing; systemd-resolved would overwrite it once
     # an interface with DNS is up.
     printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\n' > "$ROOT/etc/resolv.conf"
     mkfs.ext4 -F -q -L e5linux "$OUT"

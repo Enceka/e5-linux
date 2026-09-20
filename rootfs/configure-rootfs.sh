@@ -59,7 +59,6 @@ bash "$HERE/e5-chroot.sh" '
     set -e
     systemctl --root=/ enable sddm.service >/dev/null 2>&1 || echo "warn: sddm enable failed"
     systemctl --root=/ enable e5-boot-ok.service >/dev/null 2>&1 || echo "warn: e5-boot-ok enable failed"
-    systemctl --root=/ enable NetworkManager.service >/dev/null 2>&1 || echo "warn: NM enable failed"
     systemctl --root=/ enable e5-zram.service >/dev/null 2>&1 || echo "warn: zram enable failed"
     systemctl --root=/ enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
     # The baseband, G2 shape: the vendor modem_control chroot boots the CP, the

@@ -6,6 +6,12 @@ mu300-linux/
 kernel_sprd_ums9158/
 UFI-TOOLS/
 
+# unisoc-cpd is an independent repository of its own
+# (https://github.com/Enceka/unisoc-cpd), developed outside this tree with its
+# own findings log; a checkout may sit here untracked, but nothing in this
+# repo depends on it being present.
+unisoc-cpd/
+
 # build trees / outputs
 out_linux/
 out_modules/

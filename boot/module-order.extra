@@ -125,18 +125,22 @@ matrix-keymap.ko
 sprdbt_tty.ko
 
 # --- UMS9620 audio ------------------------------------------------------------
-# The audio card is a vendor UMP9620/VBC stack.  These modules are intentionally
-# staged together: the AGDSP genpd provider must precede its consumers, and the
-# card/dma symbol dependencies are resolved by gen-module-order.py.
+# The audio card is a vendor UMP9620/VBC stack.  These modules are deliberately
+# NOT loaded here: they are staged into the root filesystem instead
+# (rootfs/configure-rootfs.sh puts them in /usr/lib/modules/<rel>/audio) and
+# /opt/e5/e5-audio-dsp modprobes them as the first step of the DSP bring-up that
+# e5-audio.service runs before the session starts.
 #
-# Commented out on 2026-09-19.  With them in the initramfs the device comes up,
-# reaches the login prompt, and then hard-resets about twenty seconds later --
-# the same "reboot after switch-root" the audio session of 2026-09-19 was left
-# with (docs/STATUS.md).  Measured: the same rootfs and the same boot image minus
-# these modules (the 78-module build the session called its last known-good) runs
-# for 16+ minutes with the session up.  Uncommenting is all it takes to go back
-# to the audio experiment; whatever starts the AGDSP (pipewire probing the card)
-# is what takes the board down.
+# Why not the initramfs, which is where this list used to live (commented out
+# since 2026-09-19): with the modules loaded at boot the card exists long before
+# anything can boot the DSP -- the AGDSP image is a rootfs/partition read and a
+# sysfs write -- and the session's pipewire then probes a card whose power
+# domain's core has nothing to execute, which is what hard-reset the board twenty
+# seconds into those sessions (docs/STATUS.md).  mu300-linux loads its audio set
+# from the root filesystem for the same reason, and the sequence this port uses
+# (modules -> card registered -> firmware write -> DSP start -> routes) is the
+# one it proved on this driver family.  The list below is kept as the inventory
+# of what the kernel build produces; gen-module-order.py is not involved.
 #agdsp_pd.ko
 #audio_mem.ko
 #audio_sipc.ko

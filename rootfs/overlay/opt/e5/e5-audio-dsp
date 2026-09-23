@@ -1,0 +1,328 @@
+#!/bin/sh
+# Bring up the E5's Unisoc sound card and boot its audio DSP, the way mu300-linux
+# does it for the F50 -- adapted to what this device actually has, so that
+# PipeWire (already installed) finds a working card when the session starts.
+#
+#   e5-audio-dsp status    what is loaded, whether the DSP wakes and answers
+#   e5-audio-dsp load      modprobe the 24 vendor audio modules, bind the card
+#   e5-audio-dsp start     load, write the AGDSP image, start the DSP, routes+profiles
+#   e5-audio-dsp routes    just the mixer route for the speaker (see set_routes)
+#   e5-audio-dsp profiles [MODE]  load the DSP parameter blobs and select a mode
+#   e5-audio-dsp stop      stop the DSP (the modules stay loaded)
+#
+# Why the DSP at all: docs/FINDINGS.md section 24 measured that the AP-side data
+# path already streams (the AGCP DMA advances, the VBC playback FIFO drains), but
+# no completion interrupt ever reaches ALSA -- both AGCP/VBC interrupt-status
+# registers sit pending and are never cleared, and nothing in the vendor audio
+# tree calls snd_pcm_period_elapsed() because the DMA callback never runs.  On
+# Android that is the AGDSP firmware's job (the interrupt-selector registers
+# REG_VBC_AUD_CHNL_INT_SEL / REG_VBC_AUD_INT_EN are defined-but-never-written by
+# the kernel: the DSP is who writes them), and the same firmware owns the VBC
+# consumer side for call audio.  mu300-linux proved the whole load-and-boot
+# sequence on this driver family; the E5 needs none of its kernel patches
+# because its device tree is complete:
+#
+#   reserved-memory/audio-mem@af700000 + audiodsp-mem@afa00000   (both present)
+#   audio-mem-mgr/memory-region = <phandle phandle>               (the F50 lacks these)
+#   audiocp_boot with the full register set, probed at
+#   /sys/devices/platform/audiocp_boot, ldinfo reading 0xafa00000 / 0x600000
+#
+# And unlike the F50, this device carries its own AGDSP image: the l_agdsp_a
+# partition (mmcblk0p26, 6 MiB, header SharkL5_AUDCP_2023Y_VER_3029).  The image
+# is exactly ldinfo's size, so it is the right binary for this SoC, not a donor.
+# rootfs/pull-audio-firmware.sh stages it at $FW; without it, this script reads
+# the partition directly (the by-name link exists once node-perms.sh has run,
+# mmcblk0p26 is the slot-a fallback).
+#
+# There is no request_firmware() involved: sprd_audcp_boot takes the image
+# through sysfs, in chunks, between "stop" and "start" -- see agdsp_store() in
+# that driver.  agdsp_store() clamps every write to ldinfo's size minus what it
+# has already taken, so a firmware bigger than the reserved region is silently
+# truncated and dd still reports success; the size is checked here instead.
+#
+# The card must be registered before the DSP is started: with it missing, the
+# AGDSP power domain is never enabled, and writing the reset registers into an
+# unpowered domain reboots the device outright (mu300-linux measured both ways).
+#
+# Modules load with modprobe from /usr/lib/modules/$(uname -r)/audio/, staged by
+# rootfs/configure-rootfs.sh; dependencies between them (sprd-dmaengine-pcm
+# needs symbols snd_soc_sprd_card exports) are resolved by modules.dep, and the
+# two passes catch probes that defer once.
+set -u
+export PATH="$PATH:/opt/e5:/usr/sbin:/sbin"
+
+BOOT=/sys/devices/platform/audiocp_boot
+FW=${E5_AGDSP_FW:-/lib/firmware/l_agdsp_a.img}
+PART_BYNAME=/dev/block/by-name/l_agdsp_a
+PART_FALLBACK=/dev/mmcblk0p26
+
+# Dependency-ordered, but modprobe pulls in whatever a module itself needs; the
+# order that matters is: the genpd provider and the DSP loader before the ASoC
+# stack, and the card last.  These are the 24 modules the kernel build makes
+# from CONFIG_UNISOC_AUDIO_* and CONFIG_SND_SOC_UNISOC_* (=m in
+# e5_rongyue_defconfig) -- the same set Android runs built-in.
+MODULES="agdsp_pd audio_mem audio_sipc sprd_audcp_boot sprd_audcp_dvfs
+mcdt_hw_r2p0 sprd_apipe audio-pipe audio-dsp-dump voice_trigger_irq
+snd-soc-sprd-dummy-codec snd-soc-fsa4480 snd-soc-sprd-pa-aw87xxx
+snd-soc-sprd-codec-ump9620-power snd-soc-sprd-codec-ump9620-power-dev
+snd-soc-sprd-codec-ump9620 snd-soc-sprd-pdm-r2p0 snd-soc-sprd-tdm
+snd-soc-sprd-vbc-v4 snd-soc-sprd-vbc-fe sprd-compr-2stage-dma
+sprd-platform-pcm-routing snd-soc-sprd-card sprd-dmaengine-pcm"
+
+loaded() { grep -q "^$(echo "$1" | tr - _)" /proc/modules; }
+
+load_all() {
+    K=/usr/lib/modules/$(uname -r)/audio
+    [ -d "$K" ] || { echo "no audio modules in $K -- configure-rootfs.sh stages them from out_modules" >&2; return 1; }
+    n=0
+    for pass in 1 2; do
+        for m in $MODULES; do
+            loaded "$m" && continue
+            modprobe "$m" 2>/dev/null && n=$((n + 1))
+        done
+    done
+    total=$(echo $MODULES | wc -w)
+    up=$(for m in $MODULES; do loaded "$m" && echo x; done | wc -l)
+    echo "audio modules: $up/$total loaded ($n modprobes this run)"
+    bind_card
+}
+
+# The card's probe runs before its components exist and is not retried -- it
+# returns 0 even when snd_soc_register_card deferred (mu300-linux found the same
+# behaviour), so bind it again by hand once everything is up.  On this board the
+# machine driver is vbc-rxpx-codec-sc27xx and the node is sound@0 (verified on
+# the device's own Android, which binds exactly that pair).
+bind_card() {
+    drv=/sys/bus/platform/drivers/vbc-rxpx-codec-sc27xx
+    [ -d "$drv" ] || return 0
+    grep -q sprdphone /proc/asound/cards 2>/dev/null && return 0
+    echo sound@0 > "$drv/unbind" 2>/dev/null
+    sleep 2
+    echo sound@0 > "$drv/bind" 2>/dev/null
+    sleep 5
+}
+
+# status is a struct, not a string: three u32s, core_status / sys_status /
+# sleep_status, and sys_status is the one that matters -- 0 means "power up
+# finished", 7 means "power off".  Reading it as text says nothing.
+#
+# It is also not a test of whether the firmware loaded: the AGDSP power domain
+# is only powered while something is using it, so a loaded, healthy, idle DSP
+# reads 7 exactly like one that never started.  dsp_wakes/dsp_alive below tell
+# those apart.
+dsp_running() {
+    set -- $(od -An -tu4 -N12 "$BOOT/status" 2>/dev/null)
+    [ "${2:-7}" = 0 ]
+}
+
+# Does the power domain come up when asked?  Open a PCM for a moment and watch
+# sys_status.  NOT a test of the firmware: agdsp_access_enable() powers the
+# domain through the PMU whether or not the core has anything to execute.
+dsp_wakes() {
+    command -v aplay >/dev/null 2>&1 || return 2
+    card=$(awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null)
+    [ -n "$card" ] || return 2
+    head -c 192000 /dev/zero | aplay -D "hw:$card,0" -f S16_LE -r 48000 -c 2 -q >/dev/null 2>&1 &
+    p=$!
+    sleep 1
+    dsp_running; r=$?
+    kill $p 2>/dev/null; wait $p 2>/dev/null
+    return $r
+}
+
+# Is the core actually executing the image?  aud_send_cmd's exit trace line is
+# only reached when the DSP replied -- an unanswered command retries four times
+# and leaves through "failed to get command" without printing it (audio-sipc.c
+# around line 700).  A recent "out,cmd" line with repeat_count=1 is a reply on
+# the first try.
+dsp_alive() {
+    command -v dmesg >/dev/null 2>&1 || return 1
+    card=$(awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null)
+    [ -n "$card" ] || return 1
+    dmesg -c >/dev/null 2>&1 || true
+    # any PCM open sends the DSP a scene command; the reply is what we look for
+    if command -v aplay >/dev/null 2>&1; then
+        head -c 192000 /dev/zero | aplay -D "hw:$card,0" -f S16_LE -r 48000 -c 2 -q >/dev/null 2>&1 &
+        p=$!; sleep 2; kill $p 2>/dev/null; wait $p 2>/dev/null
+    fi
+    dmesg 2>/dev/null | grep -q 'aud_send_cmd out,cmd' &&
+        ! dmesg 2>/dev/null | grep -q 'failed to get command'
+}
+
+# The card registers with every route switched off, so opening a PCM fails with
+# "FE_NORMAL_AP01: ASoC: no backend DAIs enabled" and aplay reports "Unable to
+# install hw params" -- which reads like a broken driver and is not one.
+# Android's HAL sets these from its own configuration (the idle mixer state was
+# captured from the device's Android: both DEV_CHANGE controls already sit at
+# TYPE_SPK there, VBC DAC0 DG at 39,39); nothing inherits that here, so set the
+# speaker path explicitly.  Every name below exists on this card (verified in
+# the 340-control tinymix dump taken on Android).
+ROUTES=${E5_AUDIO_ROUTES:-"VBC_CUSTM_DEV_CHANGE=TYPE_SPK|VBC_SYSTEM_DEV_CHANGE=TYPE_SPK|Speaker Function=1|Speaker1 Function=1|Speaker Mute=0|agdsp_access_en=1|S_NORMAL_AP01_P_CODEC SWITCH=1|VBC DAC0 DG Set=39,39|AO Mixer AOL Switch=1|AO Mixer AOR Switch=1|Virt Output Switch=1"}
+set_routes() {
+    command -v amixer >/dev/null 2>&1 || { echo "no amixer; install alsa-utils" >&2; return 1; }
+    card=$(awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null)
+    [ -n "$card" ] || { echo "no sprdphone card" >&2; return 1; }
+    n=0
+    old=$IFS; IFS='|'
+    for s in $ROUTES; do
+        IFS=$old
+        name=${s%%=*}
+        val=${s#*=}
+        amixer -c "$card" cset name="$name" "$val" >/dev/null 2>&1 && n=$((n + 1)) ||
+            echo "  route failed: $name=$val" >&2
+        IFS='|'
+    done
+    IFS=$old
+    echo "audio routes: $n set on card $card"
+}
+
+# The DSP parameter blobs.  The kernel fetches them itself
+# (vbc_profile_loading -> request_firmware) under the bare names below, so
+# writing 1 to the matching "Profile Update" control loads /lib/firmware/<name>
+# (rootfs/pull-audio-firmware.sh builds them from this device's own
+# /odm/etc/audio_params/sprd XMLs).  Writing the select value then applies one
+# mode: the value is (mode << 24) | (param_id << 16) | dsp_case.
+#
+# The modes are call scenes (audio_structure.xml: Handset, Handsfree, Headset,
+# BTHS, ... x NB/WB/SWB/FB/VOIP, plus Loopback at the end) -- there is no media
+# mode; media playback does not depend on them.  param_id 0x5e is what a working
+# device of this family carries in both selects (mu300-linux); with 0 the apply
+# is a no-op.  This device's Android idle state reads 0x09090005 / 0x404B0000,
+# which are leftovers from its last scene change, not a recommendation.
+do_profiles() {
+    command -v amixer >/dev/null 2>&1 || { echo "no amixer; install alsa-utils" >&2; exit 1; }
+    card=$(awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null)
+    [ -n "$card" ] || { echo "the sound card is not registered" >&2; exit 1; }
+    mode=${1:-${E5_AUDIO_MODE:-7}}
+    pid=${E5_AUDIO_PARAM_ID:-0x5e}
+    sel=$(( (mode << 24) | (pid << 16) ))
+    n=0
+    for p in audio_structure dsp_vbc cvs dsp_smartamp; do
+        [ -f "/lib/firmware/$p" ] || continue
+        case $p in
+            audio_structure) u='Audio Structure Profile Update' ;;
+            dsp_vbc)         u='DSP VBC Profile Update' ;;
+            cvs)             u='CVS Profile Update' ;;
+            dsp_smartamp)    u='DSP SMARTAMP Update' ;;
+        esac
+        amixer -c "$card" cset name="$u" 1 >/dev/null 2>&1 && n=$((n + 1))
+    done
+    for s in 'Audio Structure Profile Select' 'DSP VBC Profile Select'; do
+        amixer -c "$card" cset name="$s" "$sel" >/dev/null 2>&1
+    done
+    echo "profiles: $n loaded, mode $mode selected (value $sel)"
+}
+
+resolve_fw() {
+    [ -s "$FW" ] && return 0
+    for p in "$PART_BYNAME" "$PART_FALLBACK"; do
+        [ -b "$p" ] || continue
+        mkdir -p /run
+        dd if="$p" of=/run/l_agdsp_a.img bs=1M count=6 2>/dev/null || continue
+        if [ "$(wc -c < /run/l_agdsp_a.img)" -ge 6291456 ]; then
+            FW=/run/l_agdsp_a.img
+            echo "using the DSP image straight off $p (nothing staged at $FW)"
+            return 0
+        fi
+    done
+    return 1
+}
+
+case "${1:-status}" in
+load)
+    load_all || exit 1
+    if grep -q sprdphone /proc/asound/cards 2>/dev/null; then
+        echo "cards:"; sed 's/^/  /' /proc/asound/cards
+    else
+        echo "the card did not register; see dmesg" >&2
+    fi
+    ;;
+
+start)
+    # card first, always: see the comment block at the top
+    load_all || exit 1
+    [ -d "$BOOT" ] || { echo "no $BOOT -- sprd_audcp_boot did not probe" >&2; exit 1; }
+    grep -q sprdphone /proc/asound/cards 2>/dev/null ||
+        { echo "the sound card is not registered; starting the DSP now would reboot the device" >&2; exit 1; }
+    resolve_fw || { echo "no AGDSP image: stage $FW (rootfs/pull-audio-firmware.sh) or keep $PART_BYNAME readable" >&2; exit 1; }
+    dsp_running && { echo "the DSP is already running"; do_profiles "${2:-}"; set_routes; exit 0; }
+    # ldinfo is a struct too: char name[32]; u32 load_phy_addr; u32 size.  The
+    # size is what agdsp_store() clamps every write to, so a bigger image would
+    # be truncated silently -- refuse instead.
+    set -- $(od -An -tu4 -j32 -N8 "$BOOT/ldinfo" 2>/dev/null)
+    if [ -n "${1:-}" ]; then
+        room=${2:-0}; fsize=$(wc -c < "$FW")
+        [ "$fsize" -le "$room" ] || { echo "image is $fsize bytes, ldinfo has room for $room" >&2; exit 1; }
+        printf 'ldinfo:  loads at %#x, room for %s bytes
+' "$1" "$room"
+    fi
+    echo 1 > "$BOOT/stop" 2>/dev/null
+    # one write, not a loop: the driver tracks its own offset across writes
+    if dd if="$FW" of="$BOOT/agdsp" bs=4096 2>/dev/null; then
+        echo 1 > "$BOOT/start" 2>/dev/null
+        do_profiles "${2:-}"
+        set_routes
+        dsp_wakes; w=$?
+        case $w in
+            0) echo "wrote $FW ($(wc -c < "$FW") bytes); the power domain comes up on demand"
+               dsp_alive && echo "and the DSP answered a command on the first try" ||
+                   echo "but the core is not answering -- see dmesg for 'failed to get command'" ;;
+            2) echo "DSP started from $FW ($(wc -c < "$FW") bytes); install alsa-utils to confirm it wakes" ;;
+            *) echo "wrote $FW but the DSP did not wake when a PCM was opened; see dmesg" >&2; exit 1 ;;
+        esac
+        # the machine driver may have given up before the DSP existed; rebind
+        bind_card
+        echo "cards:"; sed 's/^/  /' /proc/asound/cards
+        echo "endpoints: $(grep -c . /proc/asound/pcm 2>/dev/null) PCM devices; normal playback:"
+        grep NORMAL_AP01 /proc/asound/pcm 2>/dev/null | head -1 | sed 's/^/  /'
+    else
+        echo "could not write $FW to $BOOT/agdsp" >&2; exit 1
+    fi
+    ;;
+
+stop)
+    [ -d "$BOOT" ] || { echo "no $BOOT"; exit 0; }
+    echo 1 > "$BOOT/stop" 2>/dev/null && echo "DSP stopped"
+    ;;
+
+status)
+    total=$(echo $MODULES | wc -w)
+    up=$(for m in $MODULES; do loaded "$m" && echo x; done | wc -l)
+    echo "modules:  $up/$total loaded"
+    echo "firmware: $([ -s "$FW" ] && echo "$FW ($(wc -c < "$FW") bytes)" || echo "not staged at $FW (start reads $PART_BYNAME)")"
+    if [ -d "$BOOT" ]; then
+        set -- $(od -An -tu4 -N12 "$BOOT/status" 2>/dev/null)
+        echo "power:    core=$1 sys=$2 sleep=$3 (sys 0 is powered, 7 is off -- off is normal when idle)"
+        set -- $(od -An -tu4 -j32 -N8 "$BOOT/ldinfo" 2>/dev/null)
+        [ -n "${1:-}" ] && printf 'ldinfo:   %s loads at %#x, room for %s bytes
+' \
+            "$(head -c 32 "$BOOT/ldinfo" 2>/dev/null | tr -d '\0')" "$1" "$2"
+        case "$(dsp_wakes; echo $?)" in
+            0) echo "power-up: yes -- the domain came up when a PCM was opened" ;;
+            2) echo "power-up: unknown -- install alsa-utils to open a PCM and find out" ;;
+            *) echo "power-up: no; run 'start'" ;;
+        esac
+        if dsp_alive; then
+            echo "dsp:      running -- it answered a command on the first try"
+        else
+            echo "dsp:      no reply -- run 'start', then look for 'aud_send_cmd out,cmd'"
+            echo "          against 'failed to get command' in dmesg"
+        fi
+    else
+        echo "dsp:      sprd_audcp_boot has not probed (load the modules first)"
+    fi
+    echo "cards:"; sed 's/^/  /' /proc/asound/cards 2>/dev/null
+    ;;
+
+routes)
+    set_routes
+    ;;
+
+profiles)
+    do_profiles "${2:-}"
+    ;;
+
+*)
+    sed -n '2,9p' "$0" | sed 's/^# \{0,1}//'
+    exit 2 ;;
+esac

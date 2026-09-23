@@ -2411,6 +2411,52 @@ captured the last `dmesg` before a post-switch-root death.
   `PCM_NOIRQ`-style (`SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP`), feed it at a fixed rate
   and listen.  That path needs no interrupt at all, and it is the one Android uses.
 
+### 24.7 The E5 ships the missing piece: measured on Android, 2026-09-23
+
+_One `adb root` session against the handset's own Android, no flashing.  It settles
+who was supposed to write the interrupt-selector registers, and where the AGDSP
+image was all along._
+
+* **The firmware is on the device.**  The F50 has no audio DSP partition and mu300
+  had to hunt a donor image; this device has `l_agdsp_a` / `l_agdsp_b` in the GPT
+  (`/dev/block/mmcblk0p26` / `p27`).  The image is 6 MiB with the header
+  `SharkL5_AUDCP_2023Y_VER_3029` (`AUDCP.SharkL6`, sha256 `6384966f...a6157a`), and
+  `audiocp_boot`'s `ldinfo` on the running Android reads `0xafa00000 / 6291456`: the
+  image *is* the reserved `audiodsp-mem` region, so it is this SoC's own binary.
+* **The device tree is complete where the F50's was stripped.**
+  `reserved-memory/audio-mem@af700000` and `audiodsp-mem@afa00000` are present, and
+  `audio-mem-mgr` carries `memory-region = <phandle 218> <phandle 219>` -- exactly
+  the property whose absence forced mu300's `of-reserved-mem-add` /
+  `audio-mem-fixed-region` patches.  None of that machinery is needed here.
+* **Android runs the whole stack built-in** -- the card is up (`sprdphone-sc2730`,
+  19 PCM devices, `FE_ST_NORMAL_AP01` on 00-00) with zero audio modules in
+  `/proc/modules`, and `vbc-rxpx-codec-sc27xx` binds `sound@0`.  The same driver
+  sources this port builds as modules are what Android compiled in.
+* **The AGDSP is a real, load-bearing component here** (unlike on the audio-less
+  F50): `audiocp_boot/status` reads powered-down while idle (`core=7 sys=7`), the
+  340-control mixer carries the full profile select/update surface, and /odm has
+  the native parameter XMLs (`audio_structure` 0x43 modes x 0x2da, `dsp_vbc` 0x48
+  x 0x6c4, `cvs` 0x43 x 0x33c).
+* **The bring-up is now ported** (mu300-linux's `mu300-audio-dsp` flow, on this
+  device's own firmware): `tools/vbc-profile` converts the XMLs,
+  `rootfs/pull-audio-firmware.sh` stages image + blobs into the rootfs overlay, and
+  `/opt/e5/e5-audio-dsp` (run by `e5-audio.service` before the session starts, so
+  PipeWire only ever sees a card whose DSP is up) does modules -> card registered ->
+  firmware write -> DSP start -> speaker route -> profiles.  The modules load from
+  the root filesystem (`/usr/lib/modules/<rel>/audio`, modprobe/depmod), not the
+  initramfs -- the 2026-09-19 resets were the session's pipewire probing a card
+  whose power domain's core had nothing to execute.
+* **One correction to 24.1's narrative:** `agdsp_pd` in the kernel tree is the stock
+  vendor driver (the "hybrid" variant only ever lived in test images).  That is the
+  right base here precisely because it is what Android runs *with the DSP booted*;
+  the boot-order guarantee above is what replaces the hybrid's neutralisations.
+* **The open question after the first boot of this image** is 24.6's first bullet
+  restated: with the DSP actually executing this image, do the AGCP/VBC completion
+  interrupts reach the GIC and `snd_pcm_period_elapsed()` fire (in which case
+  PipeWire needs nothing else), or not (in which case `/opt/e5/e5-noirq-play` -- the
+  `NO_PERIOD_WAKEUP` feeder the Android HAL uses, already in the image -- is the
+  audibility test, and the kthread ticker the kernel-side fallback).
+
 ## 25. The first on-device takeover: `unisoc-cpd` as the only reader of the AT channel (G2)
 
 _2026-09-20, on the handset booted into Android (slot a), rooted, `urild` the

@@ -1,12 +1,34 @@
 # Status
 
-_Last updated 2026-09-20._
+_Last updated 2026-09-23._
 
 Reasoning, evidence and dead ends live in `docs/FINDINGS.md`.  This file is only the
 work list.  Done work is removed from it once its result is in the table at the
 bottom.
 
 ## Now (目前要做)
+
+- **Audio: the mu300-linux bring-up is ported, and this device turns out to carry
+  everything the F50 had to fake (2026-09-23, Android side).**  Measured on the
+  handset's own Android, in one session over adb: the sound stack runs **built-in**
+  (the whole card is up with zero audio modules in `/proc/modules`); the DT is
+  complete where the F50's was stripped -- `reserved-memory/audio-mem@af700000` and
+  `audiodsp-mem@afa00000` exist, and `audio-mem-mgr` carries the `memory-region`
+  phandles mu300 had to patch in; `audiocp_boot` is probed at
+  `/sys/devices/platform/audiocp_boot` with `ldinfo` reading exactly
+  `0xafa00000 / 0x600000`; and the AGDSP image is **on the device**: partition
+  `l_agdsp_a` (mmcblk0p26, 6 MiB, header `SharkL5_AUDCP_2023Y_VER_3029`) -- the
+  very partition the F50 lacks.  The port: `tools/vbc-profile` +
+  `rootfs/pull-audio-firmware.sh` (image + the native `/odm/etc/audio_params/sprd`
+  XMLs, converted to the three kernel-loadable profile blobs), `/opt/e5/e5-audio-dsp`
+  + `e5-audio.service` (modules -> card -> firmware write -> DSP start -> speaker
+  route, so PipeWire finds the card ready), audio module staging in
+  `rootfs/configure-rootfs.sh`, `alsa-utils` in the package set, and
+  `/opt/e5/e5-noirq-play` as the Android-mode (NO_PERIOD_WAKEUP) fallback player.
+  Not yet flashed or booted (the session was Android-side only); the first Linux
+  boot with `e5-audio.service` is the next gate, then whether the period interrupt
+  arrives with the DSP running (FINDINGS 24.6/24.7).
+
 
 - **G2: the daemon has taken the RIL's seat on the handset, and the hotspot
   runs on our bearer (2026-09-20, Android side).**  What `unisoc-cpd` now does
@@ -168,7 +190,9 @@ bottom.
   really does ride IMS/VoLTE).
 - **IPv6** is live but unrouted: the carrier hands out `2408:893a:...` with an RA default
   route and nothing uses it.
-- **Audio** is unverified (the MU300 port found its amplifier silent on I2C).
+- **Audio** is ported but unbooted: the bring-up (DSP firmware, route, profiles)
+  is in the tree as `e5-audio.service`, waiting for its first slot-b session; the
+  open question after that is the period interrupt (FINDINGS 24.6).
 - **Suspend is unusable** while the modem data path refuses it
   (`sipa 25220000.sipa: thread prepare suspend err`), which is why the power key cannot
   mean "suspend".
@@ -412,3 +436,61 @@ but that is not evidence against a kernel panic: this device's reset path clears
 the ramoops/sysdump area before the next boot. The fresh boot log ends at
 `switch-root`; audio initialization is proven, while the post-systemd panic
 needs live serial or vendor minidump capture.
+
+### 2026-09-23 (audio: the E5 ships the AGDSP image; the mu300-linux bring-up is ported)
+
+Everything below was measured on the device's own Android (slot a, `adb root`),
+no flashing.  It answers the question FINDINGS 24.6 was left with -- *"the AGDSP
+firmware is the suspect ... and it is not running here"* -- in the best possible way:
+
+* **The firmware is on the device.**  `/dev/block/by-name/` has `l_agdsp_a`/`l_agdsp_b`
+  (mmcblk0p26/p27); the image is 6 MiB, header `SharkL5_AUDCP_2023Y_VER_3029 /
+  AUDCP.SharkL6`, sha256 `6384966f...a6157a`.  `audiocp_boot/ldinfo` on the running
+  Android reads `0xafa00000 / 6291456` -- the image is *exactly* the reserved region,
+  so it is this SoC's own binary, not the donor hunting ground the F50 forced.
+* **The DT is complete.**  `reserved-memory/audio-mem@af700000` (3 MiB) and
+  `audiodsp-mem@afa00000` (6 MiB) exist, and `audio-mem-mgr` has the `memory-region`
+  phandles (218/219) -- the single property ZTE stripped from the F50, which is what
+  forced mu300's `of-reserved-mem-add` + `audio-mem-fixed-region` patches.  None of
+  that is needed here; the stock `audio_mem` module just works off the DT.
+* **Android runs the whole stack built-in.**  Card `sprdphone-sc2730` up, zero audio
+  modules in `/proc/modules`; `vbc-rxpx-codec-sc27xx` binds `sound@0`; 19 PCM devices
+  with `FE_ST_NORMAL_AP01` (00-00) as the media endpoint.  `audiocp_boot/status`
+  reads `core=7 sys=7` -- powered down while idle, which is normal (the domain is
+  only up while a PCM is open).
+* **The mixer vocabulary is captured** (340 controls, `/tmp/e5-mixer-idle.txt` shape:
+  both `VBC_*_DEV_CHANGE` already `TYPE_SPK`, `VBC DAC0 DG Set` 39/39, the profile
+  update/select controls present, `Speaker1 Function`/`AO Mixer`/`Virt Output`/
+  `agdsp_access_en` all there) -- the speaker route the old sessions derived by hand
+  is now written down as data in `e5-audio-dsp`'s ROUTES.
+* **The native parameter XMLs are on /odm** (`audio_structure` 0x43x0x2da, `dsp_vbc`
+  0x48x0x6c4, `cvs` 0x43x0x33c) and convert cleanly with the ported `vbc-profile`
+  (zero misplaced-field warnings, which is the converter's built-in format check).
+
+What is in the tree now: `tools/vbc-profile/vbc-profile.py`,
+`rootfs/pull-audio-firmware.sh` (already run once against the device: image + three
+profile blobs are in `rootfs/overlay/lib/firmware/`, gitignored as vendor blobs),
+`/opt/e5/e5-audio-dsp` + `e5-audio.service`, audio-module staging + service enable in
+`rootfs/configure-rootfs.sh`, `alsa-utils` in `packages.list`, and `/opt/e5/e5-noirq-play`
+(the NO_PERIOD_WAKEUP feeder Android's HAL uses, as the audibility fallback if the
+period interrupt stays missing even with the DSP running).
+
+Two corrections to the record:
+
+* **`agdsp_pd` in the kernel tree is the stock vendor driver** (smsg kthread, vendor
+  power_on/off).  The "hybrid" variant STATUS 2026-09-19 describes as "now in the
+  kernel tree" only ever lived in that session's test images.  That is fine for this
+  port on purpose: the stock driver is what Android runs successfully *with the DSP
+  booted*, and the boot order now guarantees the DSP is booted (the 2026-09-19 resets
+  were the stock handshake and pipewire's probe meeting a DSP with no firmware).
+* The old initramfs path for the audio modules stays retired.  Modules now load from
+  the root filesystem (`/usr/lib/modules/<rel>/audio`, modprobe + depmod) inside the
+  service, matching mu300-linux's architecture.
+
+Next gates, in order: build + flash a slot-b image with this rootfs; watch
+`e5-audio.service` bring the stack up (`e5-audio-dsp status`); then the real question
+-- does `aplay` on hw:0,0 complete with the DSP running, i.e. do the AGCP/VBC
+completion interrupts finally reach the GIC (FINDINGS 24.6)?  If yes, PipeWire needs
+nothing else.  If no, `e5-noirq-play` is the audibility test, and the kthread ticker
+with try-lock is the kernel-side fallback.
+

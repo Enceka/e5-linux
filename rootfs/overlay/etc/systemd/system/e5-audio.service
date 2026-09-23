@@ -1,0 +1,27 @@
+[Unit]
+Description=E5 Unisoc sound card and audio DSP (sprdphone-sc2730)
+# The full bring-up sequence from mu300-linux, on this device's own firmware:
+# modprobe the 24 vendor audio modules, register the card, write the AGDSP image
+# (l_agdsp_a) into audiocp_boot and start the DSP, then set the speaker route and
+# load the DSP profiles.  PipeWire/WirePlumber are user services that start with
+# the session (sddm is on graphical.target, which waits for multi-user), so by
+# the time they scan for cards the DSP is up and hw:0 answers normally --
+# WirePlumber's udev monitor would also pick the card up later, but the session
+# must not probe a card whose DSP is still dead: that is the 2026-09-19 reset
+# (docs/STATUS.md), pipewire opening a PCM agdsp_access_enable()s a domain whose
+# core has nothing to execute.
+ConditionPathExists=/opt/e5/e5-audio-dsp
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# "start" refuses to touch the DSP reset registers unless the card is registered
+# (that combination reboots the device), and falls back to reading the AGDSP
+# image straight off the l_agdsp_a partition when /lib/firmware has none staged.
+ExecStart=/opt/e5/e5-audio-dsp start
+ExecStop=/opt/e5/e5-audio-dsp stop
+# bind_card waits out deferred probes; the DSP start itself is fast.
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

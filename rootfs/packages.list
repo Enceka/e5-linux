@@ -122,8 +122,13 @@ python3
 strace
 lsof
 
-# --- audio (UCM for the UMS9621 codec is not ported; PipeWire is here so the
-#     stack exists once it is) ---
+# --- audio ---
+# The bring-up is /opt/e5/e5-audio-dsp (e5-audio.service): the vendor modules,
+# the AGDSP firmware off l_agdsp_a and the speaker route, ported from mu300-linux
+# (docs/FINDINGS.md section 24).  alsa-utils is what drives the mixer (amixer) and
+# what the DSP-liveness probes play through (aplay); PipeWire then finds hw:0
+# answering normally and WirePlumber publishes it as the default sink.
+alsa-utils
 pipewire
 wireplumber
 # PulseAudio/ALSA compatibility for desktop apps (the Android HAL's paths do not

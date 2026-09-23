@@ -51,3 +51,6 @@ opengl-meson.tgz
 # carries the scripts that build these, never the results.
 out/
 .DS_Store
+
+# python bytecode left by running the tools
+__pycache__/

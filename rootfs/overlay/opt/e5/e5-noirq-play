@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Feed the sprdphone PCM the way Android's HAL does: NO_PERIOD_WAKEUP, paced by a timer.
+
+    e5-noirq-play [-c CARD] [-d DEV] file.wav [file2.wav ...]
+
+Why this exists (docs/FINDINGS.md 24.3/24.6): the AP-side data path streams,
+but if no completion interrupt reaches ALSA then every normal client -- aplay,
+PipeWire, anything that waits on a period -- blocks on its third write and
+drains forever.  Android never sees that because its HAL opens the PCM with
+SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP: the driver then builds the DMA link list
+with SPRD_DMA_NO_INT, registers no callback, and the HAL feeds the stream at a
+fixed rate from its own mixer thread.
+
+This tool is that mode: open hw:C,0 (FE_ST_NORMAL_AP01, the speaker path), set the
+hw_params flags to NO_PERIOD_WAKEUP, prepare, and write one period every
+period-size/rate seconds off the monotonic clock.  The driver's pointer keeps
+working (it reads the live DMA address), so nothing is lost by skipping the
+interrupt; this is also the quickest audibility test for the speaker route.
+
+The mixer route has to be on first: /opt/e5/e5-audio-dsp start (or at least
+"routes") -- otherwise hw_params fails with "no backend DAIs enabled".
+Only 16-bit PCM WAV files are accepted; the wave module parses the header.
+"""
+import argparse
+import ctypes
+import ctypes.util
+import fcntl
+import os
+import struct
+import sys
+import time
+import wave
+
+SNDRV_PCM_IOCTL_PVERSION = 0x8004_1600
+SNDRV_PCM_IOCTL_HW_PARAMS = 0xC260_1611  # _IOWR('A', 0x11, 608 bytes)
+SNDRV_PCM_IOCTL_HW_FREE = 0x4161_1612
+SNDRV_PCM_IOCTL_SW_PARAMS = 0xC068_1613  # _IOWR('A', 0x13, sw_params = 104 on LP64)
+SNDRV_PCM_IOCTL_PREPARE = 0x4161_1640
+SNDRV_PCM_IOCTL_DROP = 0x4161_1643
+SNDRV_PCM_IOCTL_WRITEI_FRAMES = 0x4010_6150  # _IOW('A', 0x50, xferi = 16 on LP64)
+
+SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP = 1 << 2
+
+# mask params
+HW_PARAM_ACCESS, HW_PARAM_FORMAT, HW_PARAM_SUBFORMAT = 0, 1, 2
+# interval params (the intervals array starts at param 16)
+HW_PARAM_CHANNELS, HW_PARAM_RATE = 18, 19
+HW_PARAM_PERIOD_SIZE, HW_PARAM_BUFFER_SIZE = 21, 24
+
+ACCESS_RW_INTERLEAVED = 3
+FORMAT_S16_LE = 2
+SUBFORMAT_STD = 0
+
+
+class Mask(ctypes.Structure):
+    _fields_ = [("bits", ctypes.c_uint32 * 8)]
+
+    def set(self, index):
+        self.bits[index >> 5] |= 1 << (index & 31)
+
+
+class Interval(ctypes.Structure):
+    _fields_ = [("min", ctypes.c_uint32), ("max", ctypes.c_uint32),
+                 ("flags", ctypes.c_uint32)]  # bitfields collapse into one word
+
+    def set(self, value):
+        self.min = self.max = value
+
+        self.flags = 0
+
+
+class HwParams(ctypes.Structure):
+    _fields_ = [("flags", ctypes.c_uint32),
+                 ("masks", Mask * 3), ("mres", Mask * 5),
+                 ("intervals", Interval * 12), ("ires", Interval * 9),
+                 ("rmask", ctypes.c_uint32), ("cmask", ctypes.c_uint32),
+                 ("info", ctypes.c_uint32), ("msbits", ctypes.c_uint32),
+                 ("rate_num", ctypes.c_uint32), ("rate_den", ctypes.c_uint32),
+                 ("fifo_size", ctypes.c_ulong),
+                 ("reserved", ctypes.c_ubyte * 64)]
+
+
+class SwParams(ctypes.Structure):
+    _fields_ = [("tstamp_mode", ctypes.c_int),
+                 ("period_step", ctypes.c_uint32), ("avail_min", ctypes.c_uint32),
+                 ("start_threshold", ctypes.c_uint32), ("stop_threshold", ctypes.c_uint32),
+                 ("silence_threshold", ctypes.c_uint32), ("silence_size", ctypes.c_uint32),
+                 ("boundary", ctypes.c_ulong), ("proto", ctypes.c_uint32),
+                 ("tstamp_type", ctypes.c_uint32), ("reserved", ctypes.c_ubyte * 56)]
+
+
+class Xferi(ctypes.Structure):
+    _fields_ = [("buf", ctypes.c_void_p), ("size", ctypes.c_ulong)]
+
+
+def ioctl_checked(fd, req, arg, what):
+    try:
+        fcntl.ioctl(fd, req, arg, True)
+    except OSError as e:
+        sys.exit(f"{what}: {e}")
+
+
+def play_file(fd, path, period_frames):
+    with wave.open(path, "rb") as w:
+        channels, swidth, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()
+        if swidth != 2:
+            sys.exit(f"{path}: {swidth * 8}-bit samples; this tool plays 16-bit only")
+
+        hw = HwParams()
+        ctypes.memset(ctypes.byref(hw), 0, ctypes.sizeof(hw))
+        hw.flags = SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP
+        hw.masks[HW_PARAM_ACCESS].set(ACCESS_RW_INTERLEAVED)
+        hw.masks[HW_PARAM_FORMAT].set(FORMAT_S16_LE)
+        hw.masks[HW_PARAM_SUBFORMAT].set(SUBFORMAT_STD)
+        hw.intervals[HW_PARAM_CHANNELS - 16].set(channels)
+        hw.intervals[HW_PARAM_RATE - 16].set(rate)
+        hw.intervals[HW_PARAM_PERIOD_SIZE - 16].set(period_frames)
+        hw.intervals[HW_PARAM_BUFFER_SIZE - 16].set(period_frames * 4)
+        hw.rmask = 0xFFFFFFFF
+        ioctl_checked(fd, SNDRV_PCM_IOCTL_HW_PARAMS, hw, "hw_params")
+
+        sw = SwParams()
+        ctypes.memset(ctypes.byref(sw), 0, ctypes.sizeof(sw))
+        sw.avail_min = period_frames
+        sw.start_threshold = 1
+        sw.stop_threshold = period_frames * 4
+        sw.boundary = 1 << 62
+        ioctl_checked(fd, SNDRV_PCM_IOCTL_SW_PARAMS, sw, "sw_params")
+
+        ioctl_checked(fd, SNDRV_PCM_IOCTL_PREPARE, 0, "prepare")
+
+        period_bytes = period_frames * channels * 2
+        period_ns = period_frames * 1_000_000_000 // rate
+        print(f"{path}: {channels}ch {rate}Hz, period {period_frames} frames "
+              f"({period_ns // 1_000_000} ms), NO_PERIOD_WAKEUP")
+
+        next_deadline = time.clock_gettime(time.CLOCK_MONOTONIC)
+        while True:
+            data = w.readframes(period_frames)
+            if not data:
+                break
+            if len(data) < period_bytes:
+                data = data.ljust(period_bytes, b"\0")
+            next_deadline += period_ns / 1e9
+            now = time.clock_gettime(time.CLOCK_MONOTONIC)
+            if next_deadline > now:
+                time.sleep(next_deadline - now)
+            xfer = Xferi(ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p),
+                        len(data) // (channels * 2))
+            try:
+                fcntl.ioctl(fd, SNDRV_PCM_IOCTL_WRITEI_FRAMES, xfer, True)
+            except OSError as e:
+                sys.exit(f"write: {e}")
+
+        # DRAIN would wait for a period event that never comes in this mode;
+        # let the buffer play out, then DROP.
+        time.sleep(period_frames * 4 / rate + 0.05)
+        ioctl_checked(fd, SNDRV_PCM_IOCTL_DROP, 0, "drop")
+        ioctl_checked(fd, SNDRV_PCM_IOCTL_HW_FREE, 0, "hw_free")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("wav", nargs="+")
+    ap.add_argument("-c", "--card", type=int, default=0)
+    ap.add_argument("-d", "--device", type=int, default=0,
+                    help="PCM device (default 0 = FE_ST_NORMAL_AP01)")
+    ap.add_argument("-p", "--period", type=int, default=1024,
+                    help="period size in frames (default 1024)")
+    args = ap.parse_args()
+
+    dev = f"/dev/snd/pcmC{args.card}D{args.device}p"
+    try:
+        fd = os.open(dev, os.O_RDWR)
+    except OSError as e:
+        sys.exit(f"{dev}: {e}")
+    try:
+        for path in args.wav:
+            play_file(fd, path, args.period)
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    main()

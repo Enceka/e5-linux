@@ -63,7 +63,7 @@ bash "$HERE/e5-chroot.sh" '
     # SDDM, after all.  Its Wayland *greeter* cannot draw on this image
     # (kwin_wayland went with KDE, x11-user was never installed), but the session
     # does not go through the greeter: /etc/sddm/wayland-session execs the session
-    # directly and the image's own sddm config carries the WLR_RENDERER=gles2 that
+    # directly and the sddm config in the image carries the WLR_RENDERER=gles2 that
     # phoc needs on this panel.  Autologin takes it from there, both on the
     # display and on the keypad.
     #
@@ -105,10 +105,60 @@ bash "$HERE/e5-chroot.sh" '
              e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do
         systemctl --root=/ enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done
+    # The sound card: e5-audio loads the 24 vendor audio modules, boots the AGDSP
+    # off l_agdsp_a and sets the speaker route before session PipeWire can
+    # probe the card (the 2026-09-19 resets were exactly that probe landing on a
+    # DSP with no firmware).  Enabling fails softly when the unit is absent, and
+    # the service itself refuses to start the DSP without the card registered.
+    systemctl --root=/ enable e5-audio.service >/dev/null 2>&1 || echo "warn: e5-audio enable failed (no unit staged?)"
     systemctl --root=/ enable serial-getty@ttyGS0.service >/dev/null 2>&1 || echo "warn: getty enable failed"
     systemctl set-default graphical.target >/dev/null 2>&1 || true
     echo "enabled:"; ls /etc/systemd/system/graphical.target.wants/ /etc/systemd/system/multi-user.target.wants/ 2>/dev/null | head -30
 '
+
+echo "=== audio modules ==="
+# Stage the vendor audio modules (sound/soc/sprd + drivers/unisoc_platform/sprd_audio,
+# =m in e5_rongyue_defconfig) into the image so /opt/e5/e5-audio-dsp can modprobe
+# them at boot.  They deliberately stay out of the initramfs (boot/module-order.extra
+# documents why): loading them is the first step of the controlled DSP bring-up, not
+# a boot requirement, and the initramfs path is what put a dead-DSP card in front of
+# pipewire in the 2026-09-19 sessions.
+#
+# The modules come straight from the kernel output tree (out_modules carries only
+# what the initramfs loads, which does not include them); depmod makes modules.dep
+# for modprobe, whose dependency resolution is what orders sprd-dmaengine-pcm after
+# snd_soc_sprd_card (it needs the symbols the card exports -- boot/module-order.txt
+# derives the same order for the initramfs from nm output).
+OL="$HERE/../out_linux"
+if [ -d "$OL" ] && [ -f "$OL/include/generated/utsrelease.h" ]; then
+    REL=$(sed -n 's/^#define UTS_RELEASE "\(.*\)"$/\1/p' "$OL/include/generated/utsrelease.h")
+    AMOD="$ROOT/usr/lib/modules/$REL/audio"
+    rm -rf "$AMOD"; mkdir -p "$AMOD"
+    n=0
+    find "$OL/sound/soc/sprd" "$OL/drivers/unisoc_platform/sprd_audio" -name '*.ko' -type f 2>/dev/null |
+    while read -r f; do
+        cp "$f" "$AMOD/"; n=$((n + 1)); echo "  $(basename "$f")"
+    done
+    n=$(ls "$AMOD" | wc -l)
+    if [ "$n" -gt 0 ]; then
+        for f in modules.builtin modules.builtin.modinfo; do
+            [ -f "$OL/$f" ] && cp "$OL/$f" "$ROOT/usr/lib/modules/$REL/$f"
+        done
+        # host depmod parses ELF modinfo sections without executing them, so it
+        # works on the arm64 modules from any host; the python fallback is
+        # stage-modules.sh's rule for hosts without kmod.
+        if command -v depmod >/dev/null 2>&1; then
+            depmod -b "$ROOT" "$REL" 2>&1 | head -3 || true
+        else
+            python3 "$HERE/../boot/gen-modules-dep.py" "$ROOT/usr/lib/modules/$REL" > "$ROOT/usr/lib/modules/$REL/modules.dep"
+        fi
+        echo "staged $n audio modules for $REL"
+    else
+        echo "  warn: no audio .ko under out_linux (build the kernel first); e5-audio-dsp will have nothing to load" >&2
+    fi
+else
+    echo "  warn: no out_linux kernel build; skipping audio module staging" >&2
+fi
 
 echo "=== sessions available ==="
 ls "$ROOT"/usr/share/wayland-sessions/ 2>/dev/null || echo "(none)"

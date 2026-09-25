@@ -12,7 +12,7 @@ import subprocess
 import sys
 import urllib.request
 
-HOST = os.environ.get('E5_UPLOAD', 'http://192.168.77.92:8020/')
+HOST = os.environ.get('E5_UPLOAD', 'http://192.168.9.2:8020/')
 
 
 def main():

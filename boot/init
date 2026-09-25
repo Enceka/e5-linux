@@ -357,6 +357,7 @@ if [ -n "$rootdir" ]; then
         # it packs), and a device whose rootfs predates this needs them too.
         for unit in e5-bt-attach.service ufi-tools.service dnsmasq.service \
                      e5-vendor.service e5-cp_diskserver.service e5-refnotify.service \
+                     e5-net-bridge.service \
                      unisoc-cpd.service unisoc-cpd-web.service e5-bearer-up.service \
                      e5-regdb-load.service \
                      e5-hotspot.service e5-telnetd.service e5-gadget-guard.service \
@@ -368,12 +369,6 @@ if [ -n "$rootdir" ]; then
             fi
         done
 
-        # systemd-networkd is a distribution unit (it lives in /usr/lib), and it
-        # is what gives usb0 its 192.168.77.1 and the DHCP server the management
-        # LAN needs.  A rootfs build enables it; this is for a device whose
-        # rootfs was built before that was true, because the overlay cannot carry
-        # enable symlinks either.  Without it usb0 comes up bare, the host gets
-        # no lease, and the only way in is the screen.
         # Timers go to timers.target, not multi-user.target.
         for timer in e5-hotspot-retry.timer e5-bearer-watch.timer; do
             if [ -f "/newroot/etc/systemd/system/$timer" ]; then
@@ -393,11 +388,9 @@ if [ -n "$rootdir" ]; then
                 "/newroot/etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service"
         fi
 
-        if [ -f /newroot/usr/lib/systemd/system/systemd-networkd.service ]; then
-            mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
-            ln -sf /usr/lib/systemd/system/systemd-networkd.service \
-                /newroot/etc/systemd/system/multi-user.target.wants/systemd-networkd.service
-        fi
+        # (systemd-networkd used to be linked here, because it gave usb0 its
+        # address.  The LAN is br0 now, built by e5-net-bridge with ip, and
+        # networkd manages no link at all -- etc/systemd/network/*.network.)
     fi
     # The initramfs busybox is a static arm64 binary and doubles as the userspace
     # busybox for the management LAN (e5-telnetd.service runs telnetd from it), so no

@@ -1,6 +1,6 @@
 [Unit]
 Description=BusyBox telnetd on the USB management LAN
-After=systemd-networkd.service
+After=e5-net-bridge.service
 # Enabled by rootfs/device-finalize.sh at image build time: the overlay travels
 # into the initramfs as plain files and cannot carry enable symlinks.  It arrives
 # with systemd-networkd, which brings up usb0 and its DHCP server.

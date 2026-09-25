@@ -3,17 +3,17 @@ Description=unisoc-cpd web UI (W7: browser face over the resident owner)
 Documentation=file:/etc/unisoc-cpd/README.md
 After=unisoc-cpd.service
 Requires=unisoc-cpd.service
-# e5-linux: bound to the management LAN only (usb0, 192.168.77.1) -- the page
-# has no authentication and can send AT, SMS and IMEI writes, so it must not be
-# reachable from the hotspot.  Until usb0 has its address the bind fails and
-# Restart= tries again.
+# e5-linux: bound to the LAN (br0, 192.168.9.1), and only the USB port of br0
+# reaches it: the page has no authentication and can send AT, SMS and IMEI
+# writes, and etc/e5/nat.nft drops frames for it that arrive on the Wi-Fi port.
+# Until br0 has its address the bind fails and Restart= tries again.
 
 [Service]
 # The web server is a socket client of the resident owner; it owns no channel
 # itself, which is why it Requires= the daemon but opens no tty.
 ExecStart=/usr/local/bin/unisoc-cpd --profile e5 --mode native --profiles-dir /etc/unisoc-cpd \
     --runs-dir /var/lib/unisoc-cpd/runs --state-dir /run/unisoc-cpd \
-    --socket /run/unisoc-cpd/cmd.sock web 192.168.77.1:7887
+    --socket /run/unisoc-cpd/cmd.sock web 192.168.9.1:7887
 Restart=on-failure
 RestartSec=5
 

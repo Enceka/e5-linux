@@ -77,14 +77,11 @@ bash "$HERE/e5-chroot.sh" '
     systemctl --root=/ enable systemd-timesyncd.service >/dev/null 2>&1 || echo "warn: timesyncd enable failed"
     systemctl --root=/ enable e5-boot-ok.service >/dev/null 2>&1 || echo "warn: e5-boot-ok enable failed"
     systemctl --root=/ enable e5-zram.service >/dev/null 2>&1 || echo "warn: zram enable failed"
-    # The usb0 management LAN -- its 192.168.77.1 and its DHCP server -- is
-    # /etc/systemd/network/10-e5-usb0.network, i.e. systemd-networkd, and the
-    # busybox telnetd that is the only way into a device with no usable keypad
-    # rides on that address.  Nothing else starts networkd: it used to be a
-    # NetworkManager drop-in (Wants=systemd-networkd.service), which went away
-    # with NetworkManager, and the device promptly came back with usb0 down,
-    # no lease, and no way in.
-    systemctl --root=/ enable systemd-networkd.service systemd-networkd.socket >/dev/null 2>&1 || echo "warn: networkd enable failed"
+    # The LAN -- br0, usb0 and the hotspot on 192.168.9.1, 192.168.77.1 kept as a
+    # second address -- is built by e5-net-bridge.service with ip, and the busybox
+    # telnetd that is the only way into a device with no usable keypad rides on it.
+    # systemd-networkd is not involved any more (its rtnl requests time out on this
+    # SoC; etc/systemd/network/*.network mark every link Unmanaged=yes).
     systemctl --root=/ enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
     # The baseband, G2 shape: the vendor modem_control chroot boots the CP, the
     # two vendor helpers persist the modem NV data, and unisoc-cpd is the one
@@ -101,7 +98,7 @@ bash "$HERE/e5-chroot.sh" '
     # it restores the cap_net_raw on ping and links e5-next-boot/mobile-data/e5-at into
     # /usr/local/bin, which is what makes `sudo e5-next-boot android` work.
     for s in e5-vendor e5-cp_diskserver e5-refnotify \
-             unisoc-cpd unisoc-cpd-web e5-bearer-up \
+             e5-net-bridge unisoc-cpd unisoc-cpd-web e5-bearer-up \
              e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do
         systemctl --root=/ enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done

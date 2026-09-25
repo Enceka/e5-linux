@@ -1,11 +1,8 @@
+# networkd leaves wlan0 alone: it is a port of br0, placed there by hostapd
+# (bridge=br0), and br0 holds the addresses (opt/e5/net-bridge.sh).  Kept, not
+# deleted, for the same reason as 10-e5-usb0.network.
 [Match]
 Name=wlan0
 
-[Network]
-Address=192.168.9.1/24
-# DHCP and DNS for the hotspot come from dnsmasq (etc/dnsmasq.d/e5-hotspot.conf): networkd
-# can hand out addresses but cannot answer the DNS queries it would advertise.
-DHCPServer=no
-# dnsmasq sends the router advertisements here (the bearer's /64, opt/e5/e5-ipv6-share);
-# the AP itself must not listen to any.
-IPv6AcceptRA=no
+[Link]
+Unmanaged=yes

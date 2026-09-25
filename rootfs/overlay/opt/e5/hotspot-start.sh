@@ -1,6 +1,14 @@
 #!/bin/sh
 # Wi-Fi hotspot on the E5: 5 GHz, channel 149, 80 MHz (VHT80), DHCP+DNS from dnsmasq,
-# NATed out through the baseband by e5-mobile-data.
+# NATed out through the baseband (etc/e5/nat.nft).
+#
+# The AP is a port of br0, the one LAN it shares with the USB port (192.168.9.1/24,
+# opt/e5/net-bridge.sh).  hostapd places wlan0 in the bridge itself (bridge=br0),
+# and only if br0 exists when it starts -- otherwise it brings the AP up anyway and
+# every client associates and never gets a lease.  An interface hostapd owns cannot
+# be enslaved afterwards (silently refused), and iw cannot change the type of an
+# enslaved one ("Interface wlan0 wasn't started").  So: wait for br0, take wlan0 out
+# before the type/up dance, and do not call it a success unless the port is there.
 #
 # hostapd configures the 80 MHz channel itself.  What it needs from this script is only
 # that wlan0 is in AP mode and that the regulatory domain is set: with a country and the
@@ -16,11 +24,8 @@ CONF=${1:-/etc/hostapd/e5.conf}
 # ETXTBSY (-26).  After one failure the driver never asks the loader again, so
 # a WCN power-on that landed after the losetup (Bluetooth's, usually) cost
 # Wi-Fi for the whole boot: "buff is NULL", "marlin download timeout".
-mkdir -p /etc/systemd/network/20-e5-wlan0.network.d
-{
-    echo "[Network]"
-    awk '/^nameserver[ \t]/{print "DNS="$2}' /etc/resolv.conf | head -4
-} > /etc/systemd/network/20-e5-wlan0.network.d/10-dns.conf
+# (networkd no longer manages wlan0; the DNS drop-in older versions wrote is dead)
+rm -rf /etc/systemd/network/20-e5-wlan0.network.d
 # The WCN SDIO chip takes its time on a cold boot: on one boot wlan0 did not
 # exist until ~100 s in, so "ip link set wlan0 up" failed with "RTNETLINK
 # answers: No such device" while the service's own start timeout was already
@@ -30,9 +35,15 @@ for _ in $(seq 60); do
     sleep 2
 done
 [ -e /sys/class/net/wlan0 ] || { echo "hotspot: wlan0 never appeared" >&2; exit 1; }
+for _ in $(seq 60); do
+    [ -e /sys/class/net/br0/brif/usb0 ] && break
+    sleep 1
+done
+[ -e /sys/class/net/br0 ] || { echo "hotspot: br0 never appeared (e5-net-bridge)" >&2; exit 1; }
+up() { pgrep -x hostapd >/dev/null && [ -e /sys/class/net/br0/brif/wlan0 ]; }
 # Already up (this script also runs from e5-hotspot-retry.timer): leave it alone.
-if pgrep -x hostapd >/dev/null; then
-    echo "hotspot: hostapd is already running"
+if up; then
+    echo "hotspot: hostapd is already running, wlan0 in br0"
     exit 0
 fi
 iw reg set CN 2>/dev/null || true
@@ -40,6 +51,7 @@ sleep 1
 systemctl stop wpa_supplicant 2>/dev/null || true
 pkill -x hostapd 2>/dev/null || true
 sleep 1
+ip link set wlan0 nomaster 2>/dev/null || true
 ip link set wlan0 down 2>/dev/null || true
 iw dev wlan0 set type __ap 2>/dev/null || true
 ip link set wlan0 up
@@ -50,19 +62,23 @@ ip link set wlan0 up
 # come up -- e5-hotspot-retry.timer tries again later, and a green unit with no
 # hotspot is how this stayed invisible for days.
 attempt=0
-while [ "$(pgrep -c hostapd)" = 0 ] && [ "$attempt" -lt 4 ]; do
+while ! up && [ "$attempt" -lt 4 ]; do
     attempt=$((attempt + 1))
     pkill -x hostapd 2>/dev/null || true
     sleep 3
+    ip link set wlan0 nomaster 2>/dev/null || true
     ip link set wlan0 down 2>/dev/null || true
     iw dev wlan0 set type __ap 2>/dev/null || true
     ip link set wlan0 up 2>/dev/null || true
     hostapd -B "$CONF"
     sleep 8
-    echo "hotspot: attempt $attempt, hostapd=$(pgrep -c hostapd)" >&2
+    echo "hotspot: attempt $attempt, hostapd=$(pgrep -c hostapd), br0 ports: $(ls /sys/class/net/br0/brif | tr '\n' ' ')" >&2
 done
 echo "hostapd: $(pgrep -c hostapd) process(es)"
 [ "$(pgrep -c hostapd)" != 0 ] || { echo "hotspot: hostapd is not running" >&2; exit 1; }
+[ -e /sys/class/net/br0/brif/wlan0 ] || { echo "hotspot: wlan0 is not in br0, clients would get no lease" >&2; exit 1; }
+# the router's addresses are on br0; the port itself carries none
+sysctl -qw net.ipv6.conf.wlan0.disable_ipv6=1
 iw reg get | head -2
 iw dev wlan0 info | grep -E 'type|ssid' | head -2
 # Bounded on purpose: these restart jobs queue behind other units, and during a
@@ -70,7 +86,8 @@ iw dev wlan0 info | grep -E 'type|ssid' | head -2
 # never returned -- the script was killed by its own start timeout with hostapd
 # already running, and the SIGKILL left wlan0 powered down.  The AP is up by
 # now; DHCP must not be able to hang this script.
-timeout 20 systemctl restart systemd-networkd || true
 timeout 20 systemctl restart dnsmasq || true
-sleep 5
-ip -br addr show wlan0
+/opt/e5/e5-ipv6-share
+sleep 2
+echo "br0 ports: $(ls /sys/class/net/br0/brif | tr '\n' ' ')"
+ip -br addr show br0

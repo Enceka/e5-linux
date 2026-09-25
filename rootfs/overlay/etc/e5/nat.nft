@@ -1,13 +1,15 @@
 # Declarative, so re-running it is a no-op rather than a "File exists" error.
 #
-# The hotspot's clients get 192.168.9.1 as router and DNS from dnsmasq, and the
-# USB management LAN gets 192.168.77.1 -- but nothing was masquerading them out
-# of the baseband, so a connected phone could not reach anything.  The unit that
+# The LAN's clients (br0: hotspot and USB port) get 192.168.9.1 as router and
+# DNS from dnsmasq -- but nothing was masquerading them out of the baseband, so
+# a connected phone could not reach anything.  The unit that
 # used to do this (e5-mobile-data) was replaced by e5-bearer-up and the rules went
 # with it.
 table ip e5nat {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
+        # br0, the LAN of the hotspot and the USB port (the .77 rule covers a host
+        # still holding a lease from the initramfs's rescue subnet)
         ip saddr 192.168.9.0/24 oifname "sipa_eth*" masquerade
         ip saddr 192.168.77.0/24 oifname "sipa_eth*" masquerade
     }
@@ -23,5 +25,32 @@ table inet e5fw6 {
         meta nfproto ipv6 iifname "sipa_eth*" ct state established,related accept
         meta nfproto ipv6 iifname "sipa_eth*" icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request } accept
         meta nfproto ipv6 iifname "sipa_eth*" counter drop
+    }
+}
+
+# Nothing on the device itself is for the internet.  The uplink has a public
+# IPv6 address (SLAAC from the carrier's RA), and telnetd listens on *:23 with
+# root/root, UFI-TOOLS and gotty on every address: before this table they were
+# all reachable from anywhere over IPv6.  Replies and ICMP/ICMPv6 (the RA, PMTU)
+# come in, new connections do not.
+table inet e5in {
+    chain input {
+        type filter hook input priority filter; policy accept;
+        iifname "sipa_eth*" ct state established,related accept
+        iifname "sipa_eth*" meta l4proto { icmp, ipv6-icmp } accept
+        iifname "sipa_eth*" counter drop
+    }
+}
+
+# The management services are for the USB port only.  usb0 and the hotspot
+# share br0 now (opt/e5/net-bridge.sh), so the IP layer cannot tell a laptop on
+# the cable from a phone on the Wi-Fi -- the bridge layer can: frames for the
+# device itself that arrive on the wlan0 port may not reach telnet (23, root/root),
+# gotty (1146), UFI-TOOLS (2333) or the unisoc-cpd page (7887, no authentication,
+# raw AT / SMS / IMEI writes).  DHCP, DNS and forwarding are not affected.
+table bridge e5mgmt {
+    chain input {
+        type filter hook input priority filter; policy accept;
+        iifname "wlan0" ether type { ip, ip6 } tcp dport { 23, 1146, 2333, 7887 } counter drop
     }
 }

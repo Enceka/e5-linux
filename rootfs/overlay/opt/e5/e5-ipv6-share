@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pass the bearer's public IPv6 /64 through to the hotspot's clients.
+# Pass the bearer's public IPv6 /64 through to the LAN (hotspot and USB, br0).
 #
 #     e5-ipv6-share [--wait]     (idempotent; e5-bearer-up and e5-bearer-watch run it)
 #
@@ -9,7 +9,7 @@
 # NOARP point-to-point pipe, the whole /64 is routed to the UE (3GPP 29.061),
 # and nothing is ever neighbour-solicited on it.  So the /64 is free to live on
 # one downstream link: this puts <prefix>::1/64 on the LAN interface, and
-# dnsmasq (constructor:wlan0) advertises whatever prefix wlan0 holds, so clients
+# dnsmasq (constructor:br0) advertises whatever prefix br0 holds, so clients
 # build SLAAC addresses in it and the kernel forwards (net.ipv6.conf.all.forwarding,
 # etc/sysctl.d/10-e5-forward.conf).  It is Android's tethering scheme too.
 #
@@ -23,10 +23,10 @@
 #     identifier the network assigned (+CGPADDR), which is what the RS has to
 #     come from.
 #
-# A /64 can only be on one link, so one LAN gets it: wlan0 (E5_V6_LAN).
+# A /64 can only be on one link: br0, the LAN usb0 and the hotspot share (E5_V6_LAN).
 set -u
 UP=${E5_V6_UP:-sipa_eth0}
-LAN=${E5_V6_LAN:-wlan0}
+LAN=${E5_V6_LAN:-br0}
 WAIT=0; [ "${1:-}" = --wait ] && WAIT=15
 
 [ -d "/sys/class/net/$UP" ] || { echo "ipv6-share: no $UP" >&2; exit 0; }

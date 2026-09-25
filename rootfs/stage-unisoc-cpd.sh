@@ -11,14 +11,15 @@
 #   * builds the binary with the checkout's own tools/build-aarch64.sh (static
 #     aarch64-unknown-linux-musl; rustup's target and rust-lld must be there)
 #   * copies it, README.md, docs/BASEBAND-CONTRACTS.md and the profiles
-#   * applies the two places where the Linux side differs from the checkout,
+#   * applies the places where the Linux side differs from the checkout,
 #     whose defaults describe the handset's Android:
 #       - [data.nat] is off: the checkout's profile drives Android's iptables
 #         (tetherctrl_FORWARD, the legacy_system table); on Linux e5-nat.service
 #         does the masquerading with nftables
-#       - the web page binds to the management LAN (192.168.77.1), not 0.0.0.0:
-#         it has no authentication and offers raw AT, IMEI writes, SMS and
-#         dialling, and 0.0.0.0 would hand that to every hotspot client
+#       - the web page binds to the LAN (br0, 192.168.9.1), not 0.0.0.0: it has
+#         no authentication and offers raw AT, IMEI writes, SMS and dialling, so
+#         it must not face the uplink, and etc/e5/nat.nft's bridge table keeps
+#         the Wi-Fi port of br0 away from it (only the USB port reaches it)
 #       - the web unit gets --profiles-dir /etc/unisoc-cpd, as the daemon's has
 #   * writes etc/unisoc-cpd/VERSION with the commit it was built from
 set -eu
@@ -72,13 +73,13 @@ grep -q ' web 0\.0\.0\.0:7887' "$SRC/units/unisoc-cpd-web.service" ||
 # "cannot read profile /Volumes/.../platform/profiles/e5.toml", every restart.
 pd=
 grep -q -- '--profiles-dir' "$SRC/units/unisoc-cpd-web.service" || pd=' --profiles-dir /etc/unisoc-cpd'
-sed -e 's| web 0\.0\.0\.0:7887| web 192.168.77.1:7887|' \
+sed -e 's| web 0\.0\.0\.0:7887| web 192.168.9.1:7887|' \
     -e "s|^ExecStart=/usr/local/bin/unisoc-cpd --profile e5 --mode native|&$pd|" \
     -e 's|^Requires=unisoc-cpd.service|&\
-# e5-linux: bound to the management LAN only (usb0, 192.168.77.1) -- the page\
-# has no authentication and can send AT, SMS and IMEI writes, so it must not be\
-# reachable from the hotspot.  Until usb0 has its address the bind fails and\
-# Restart= tries again.|' \
+# e5-linux: bound to the LAN (br0, 192.168.9.1), and only the USB port of br0\
+# reaches it: the page has no authentication and can send AT, SMS and IMEI\
+# writes, and etc/e5/nat.nft drops frames for it that arrive on the Wi-Fi port.\
+# Until br0 has its address the bind fails and Restart= tries again.|' \
     "$SRC/units/unisoc-cpd-web.service" > "$UNITS/unisoc-cpd-web.service"
 chmod 0644 "$UNITS/unisoc-cpd-web.service"
 

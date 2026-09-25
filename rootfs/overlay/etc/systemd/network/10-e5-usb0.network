@@ -1,13 +1,13 @@
+# networkd leaves the LAN alone: br0 and its usb0 port are built by
+# opt/e5/net-bridge.sh (e5-net-bridge.service), with ip.
+#
+# This file used to give usb0 its 192.168.77.1.  It is kept, not deleted, so
+# that a root filesystem which already has the old one gets it overwritten by
+# the overlay -- a removed overlay file stays on the device forever.  networkd's
+# rtnl requests time out on this SoC's sprd pseudo-interfaces (a bridge it
+# half-built was an empty shell, FINDINGS 28), so it is not asked to do any of it.
 [Match]
-Name=usb0
+Name=usb0 br0
 
-[Network]
-# The management LAN the initramfs also sets up: usb0 gets its address here, and
-# the leases come from dnsmasq -- not from networkd (whose DHCPServer never
-# gets as far as starting on this kernel) and not from the initramfs's
-# standalone udhcpd.  See /etc/dnsmasq.d/e5-hotspot.conf.
-Address=192.168.77.1/24
-# No DHCPServer= on purpose: it never starts on this kernel (see the note about
-# the rtnl timeouts in dnsmasq.d/e5-hotspot.conf), and dnsmasq serves this LAN
-# anyway.
-IPv6AcceptRA=no
+[Link]
+Unmanaged=yes

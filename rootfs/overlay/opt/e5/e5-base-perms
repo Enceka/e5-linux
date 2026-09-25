@@ -1,0 +1,24 @@
+#!/bin/sh
+# Restore the ownership and set-id bits of the Debian base image.
+#
+#   e5-base-perms [ROOT]      (default /)
+#
+# ROOT/var/lib/e5linux/base-perms is written by rootfs/fetch-debian-rootfs.py
+# from the image's own tar headers: "mode uid gid path" for every entry that is
+# not plain root:root or carries a set-id/sticky bit.  Wherever the tree got
+# flattened on the way (unprivileged extraction, a macOS bind mount, a blanket
+# chown), this puts back su/passwd/mount setuid, unix_chkpwd and chage setgid
+# shadow, /etc/shadow root:shadow ...  chown comes first because it clears the
+# set-id bits.  Idempotent; runs at build time and from rootfs-fixups.
+ROOT=${1:-/}
+LIST=$ROOT/var/lib/e5linux/base-perms
+[ -f "$LIST" ] || { echo "no $LIST" >&2; exit 1; }
+n=0
+while read -r mode uid gid path; do
+    case $mode in ''|\#*) continue ;; esac
+    p=$ROOT/$path
+    [ -e "$p" ] || continue
+    [ -L "$p" ] && continue
+    chown "$uid:$gid" "$p" 2>/dev/null && chmod "$mode" "$p" 2>/dev/null && n=$((n + 1))
+done < "$LIST"
+echo "base perms: $n entries restored under $ROOT"

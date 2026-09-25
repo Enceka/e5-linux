@@ -15,6 +15,33 @@ for f in /usr/bin/ping /usr/bin/mtr-packet /usr/bin/arping; do
     getcap "$f" 2>/dev/null | grep -q cap_net_raw || setcap cap_net_raw+ep "$f" 2>/dev/null || true
 done
 
+# Ownership and set-id bits of the Debian base.  Older builds flattened them (a
+# blanket chown root:root in device-build.sh, groups lost on a macOS bind
+# mount): su, passwd, mount came out 0755 root:root, and so did unix_chkpwd --
+# which broke the phosh lock screen, since pam_unix running as the session user
+# needs setgid shadow to read /etc/shadow (every password failed, rc 9).
+# Current builds record the image's real ownership (fetch-debian-rootfs.py ->
+# /var/lib/e5linux/base-perms) and e5-base-perms replays it; a rootfs built
+# before that gets Debian's known modes restored by hand.
+if [ -f /var/lib/e5linux/base-perms ]; then
+    /opt/e5/e5-base-perms / >/dev/null 2>&1 || true
+else
+    for f in /usr/bin/su /usr/bin/mount /usr/bin/umount /usr/bin/passwd /usr/bin/chsh \
+             /usr/bin/chfn /usr/bin/gpasswd /usr/bin/newgrp; do
+        [ -f "$f" ] && chown root:root "$f" && chmod 4755 "$f"
+    done
+    for f in /usr/sbin/unix_chkpwd /usr/bin/chage /usr/bin/expiry; do
+        [ -f "$f" ] && chown root:shadow "$f" && chmod 2755 "$f"
+    done
+    for f in /etc/shadow /etc/shadow- /etc/gshadow /etc/gshadow-; do
+        [ -f "$f" ] && chown root:shadow "$f" && chmod 0640 "$f"
+    done
+fi
+# dbus is not in the base image, so no list covers it; the old bind-mount builds
+# left its activation helper root:root, where messagebus cannot run it
+f=/usr/lib/dbus-1.0/dbus-daemon-launch-helper
+[ -f "$f" ] && getent group messagebus >/dev/null && chown root:messagebus "$f" && chmod 4754 "$f"
+
 # /opt/e5 is on nobody's PATH, and sudo's secure_path cannot see it at all, so the
 # commands the documentation tells people to run need links from a directory that
 # is: `sudo e5-next-boot android`, `mobile-data status`, `e5-at "AT+CSQ"`.

@@ -1,0 +1,110 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] sprdwcn, sipc, time_sync: idle kernel threads do not count as load
+
+Vendor kernel threads that spend their idle life in TASK_UNINTERRUPTIBLE
+count in the load average: on a system measured 99.4 % idle over five
+seconds, the load average never went below 6.  Five of the six are here
+(the sixth, agdsp_access, was an e5-linux retry loop, now gone):
+
+- sdiohal tx/rx and pub_int_handle: wait_for_completion_interruptible();
+  kernel threads ignore every signal, so the wait still only ends on
+  complete() -- only the accounting changes
+- sprd_time_sync_ch: TASK_IDLE, which wake_up_process() wakes the same way
+- slog_bridge: nothing on Linux sets log_transport (Android's log daemon
+  did), so its queue thread polls for the life of the system;
+  msleep_interruptible() for that poll
+
+Measured after: load average 0.64 four minutes after boot (6.2 before),
+no thread left in D state.
+
+---
+diff --git a/drivers/unisoc_platform/modem/sipc/slog_bridge.c b/drivers/unisoc_platform/modem/sipc/slog_bridge.c
+index 7c554875b..e1435301d 100644
+--- a/drivers/unisoc_platform/modem/sipc/slog_bridge.c
++++ b/drivers/unisoc_platform/modem/sipc/slog_bridge.c
+@@ -535,7 +535,12 @@ static void slog_bridge_data_move(struct slog_action *sba, int param)
+ 		while (!(ushort volatile)log_transport) {
+ 			dev_dbg(sb->dev, "wait log_transport=%d\n",
+ 				log_transport);
+-			msleep(2000);
++			/*
++			 * e5-linux: nothing on Linux sets log_transport (Android's
++			 * log daemon did), so the queue thread polls here for the
++			 * life of the system -- as a sleeping task, not as load.
++			 */
++			msleep_interruptible(2000);
+ 		}
+ 
+ 		kernel_vser_set_pass_mode(true);
+diff --git a/drivers/unisoc_platform/sprd_time_sync/sprd_time_sync_ch.c b/drivers/unisoc_platform/sprd_time_sync/sprd_time_sync_ch.c
+index 03e2e10f9..be0ab6b68 100644
+--- a/drivers/unisoc_platform/sprd_time_sync/sprd_time_sync_ch.c
++++ b/drivers/unisoc_platform/sprd_time_sync/sprd_time_sync_ch.c
+@@ -91,7 +91,12 @@ static int sprd_time_sync_ch_send_thread(void *data)
+ 	sched_setscheduler(sprd_time_sync_task, SCHED_RR, &param);
+ 
+ 	while (!kthread_should_stop()) {
+-		set_current_state(TASK_UNINTERRUPTIBLE);
++		/*
++		 * e5-linux: TASK_IDLE, not TASK_UNINTERRUPTIBLE: the thread
++		 * sleeps here from boot to resume and should not count in the
++		 * load average.  wake_up_process() wakes both.
++		 */
++		set_current_state(TASK_IDLE);
+ 		schedule();
+ 
+ 		sprd_send_ap_time();
+diff --git a/drivers/unisoc_platform/sprdwcn/sdio/sdiohal_common.c b/drivers/unisoc_platform/sprdwcn/sdio/sdiohal_common.c
+index 3c05d4049..cb6dbc6d8 100644
+--- a/drivers/unisoc_platform/sprdwcn/sdio/sdiohal_common.c
++++ b/drivers/unisoc_platform/sprdwcn/sdio/sdiohal_common.c
+@@ -224,12 +224,20 @@ void sdiohal_atomic_sub(int count, atomic_t *value)
+ 	atomic_sub(count, value);
+ }
+ 
+-/* seam for thread */
++/*
++ * seam for thread
++ *
++ * e5-linux: the tx/rx threads spend their whole idle life in these waits.
++ * Uninterruptibly, each one counted as a running task in the load average
++ * (a floor of 6 with the other SIPC/WCN waiters, on a 99 % idle system).
++ * Kernel threads ignore every signal, so the interruptible wait never ends
++ * early and only the accounting changes.
++ */
+ void sdiohal_tx_down(void)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 
+-	wait_for_completion(&p_data->tx_completed);
++	(void)wait_for_completion_interruptible(&p_data->tx_completed);
+ }
+ 
+ void sdiohal_tx_up(void)
+@@ -243,7 +251,7 @@ void sdiohal_rx_down(void)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 
+-	wait_for_completion(&p_data->rx_completed);
++	(void)wait_for_completion_interruptible(&p_data->rx_completed);
+ }
+ 
+ void sdiohal_rx_up(void)
+diff --git a/drivers/unisoc_platform/sprdwcn/sleep/sdio_int.c b/drivers/unisoc_platform/sprdwcn/sleep/sdio_int.c
+index 3b4a8d69c..2363dd6e2 100644
+--- a/drivers/unisoc_platform/sprdwcn/sleep/sdio_int.c
++++ b/drivers/unisoc_platform/sprdwcn/sleep/sdio_int.c
+@@ -96,7 +96,12 @@ static int pub_int_handle_thread(void *data)
+ 
+ 	set_user_nice(current, -20);
+ 	while (!kthread_should_stop()) {
+-		wait_for_completion(&(sdio_int.pub_int_completion));
++		/*
++		 * e5-linux: idle wait, not a load-average entry; kernel threads
++		 * ignore signals, so it only returns on complete().
++		 */
++		(void)wait_for_completion_interruptible(
++			&(sdio_int.pub_int_completion));
+ 
+ 		ret = sprdwcn_bus_aon_readb(sdio_int.pub_int_sts0,
+ 			&(pub_int_sts0.reg));

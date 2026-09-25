@@ -1,5 +1,20 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] agdsp_pd: survive loading as a module, before audio_sipc
+
+As modules, agdsp_pd has to load before audio_sipc (it exports
+agdsp_set_mboxchan()), but registering its genpd provider in probe
+re-probes the deferred audio consumers at once, which power the domain on
+before any mailbox channel exists: sprd_agdsp_pw_on() sent a NULL mail and
+called mbox_chan_txdone(NULL) -- NULL deref, panic.  Android never sees it
+because everything is built-in there and audio_sipc probes first.
+
+- register the genpd provider from agdsp_set_mboxchan(), so consumers see
+  -EPROBE_DEFER until the mailbox exists
+- sprd_agdsp_pw_on(): send the wake mail only when the channel exists
+
+---
 diff --git a/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c b/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
-index 4507e7ca4..fb846804a 100644
+index 4507e7ca4..2daad51e8 100644
 --- a/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
 +++ b/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
 @@ -119,9 +119,37 @@ static struct agdsp_access *g_agdsp_access;
@@ -73,40 +88,7 @@ index 4507e7ca4..fb846804a 100644
  		msg_index++;
  		if (msg_index >= MBOX_TX_QUEUE_LEN)
  			msg_index = 0;
-@@ -391,13 +434,25 @@ static int agdsp_access_init_thread(void *data)
- 	pr_info("agdsp access thread entry.\n");
- 
- 	/* since the channel open may hang, we call it in the sblock thread */
--	rval = smsg_ch_open(dsp_ac->dst, dsp_ac->channel, -1);
--	if (rval != 0) {
--		pr_info("Failed to open channel %d,dst=%d,rval=%d\n",
--			dsp_ac->channel, dsp_ac->dst, rval);
--		/* assign NULL to thread poniter as failed to open channel */
--		dsp_ac->thread = NULL;
--		return rval;
-+	for (;;) {
-+		rval = smsg_ch_open(dsp_ac->dst, dsp_ac->channel, -1);
-+		if (rval == 0)
-+			break;
-+		/*
-+		 * e5-linux: -ENODEV means the audio sipc target does not exist
-+		 * yet.  audio_sipc, whose probe creates it, can only load after
-+		 * this module (agdsp_set_mboxchan is exported here), so dying on
-+		 * -ENODEV leaves the DSP access handshake without its thread
-+		 * forever.  Retry until the target shows up (or we are stopped).
-+		 */
-+		if (rval != -ENODEV || kthread_should_stop()) {
-+			pr_info("Failed to open channel %d,dst=%d,rval=%d\n",
-+				dsp_ac->channel, dsp_ac->dst, rval);
-+			/* assign NULL to thread poniter as failed to open channel */
-+			dsp_ac->thread = NULL;
-+			return rval;
-+		}
-+		msleep(200);
- 	}
- 
- 	pr_info("agdsp_access_init_thread, while\n");
-@@ -599,8 +654,9 @@ static int agdsp_access_initialize(struct platform_device *pdev,
+@@ -599,8 +642,9 @@ static int agdsp_access_initialize(struct platform_device *pdev,
  	dsp_ac->pd.power_on = sprd_agdsp_pw_on;
  	ret = pm_genpd_init(&dsp_ac->pd, NULL, true);
  	pr_info("%s,pm_genpd_init ret = %d\n", __func__, ret);

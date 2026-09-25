@@ -326,6 +326,11 @@ if [ -n "$rootdir" ]; then
         applied=0
         for f in $(find /e5-overlay -type f); do
             dst="/newroot/${f#/e5-overlay/}"
+            # /var/lib is state the system writes (UFI-TOOLS keeps its login
+            # token and settings there): the overlay only seeds it.  Copied
+            # every boot, a password changed in the web UI came back as the
+            # shipped one after the next reboot.
+            case "$dst" in /newroot/var/lib/*) [ -e "$dst" ] && continue ;; esac
             mkdir -p "$(dirname "$dst")" 2>/dev/null
             cp -a "$f" "$dst" 2>/dev/null && applied=$((applied + 1))
         done

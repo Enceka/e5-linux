@@ -1,14 +1,14 @@
 {
   "image": "boot-linux-slotb.img",
-  "sha256": "7531b716d84d75304282cc9066fc819bcdf8c69f13c411c4a174e937f4b03d8a",
-  "sha256_head56m": "99d9d453aabf6c6ca4c06a22777b7dd84791459dd9dbb25039f4628b681dc6cf",
-  "kernel_sha256": "330d37693119247b9efab4278eb6f37703a53042d69ccc5f173ff9cb310c9f59",
+  "sha256": "1b271e8723bb6b26f7fa4a2791c72e4be1759d9199d296b108a65b6afddbebaa",
+  "sha256_head56m": "394a1b8f6c79e5278a6b88decc7f3e17e7da7989ccd81a80874d263e1e207f3a",
+  "kernel_sha256": "a23186f66622185300a8a57bf97fb0c6a75385c2f514ab931e93f5134feeb78d",
   "kernel_size": 33733120,
-  "ramdisk_size": 4462692,
+  "ramdisk_size": 16555670,
   "modules": 67,
-  "cmdline": "console=tty0 console=ttyGS0,115200 loglevel=7 selinux=0 androidboot.selinux=permissive enforcing=0 panic=10 softlockup_panic=1 ramoops.mem_address=0xfff80000 ramoops.mem_size=0x40000 ramoops.record_size=0x8000 ramoops.console_size=0x8000 ramoops.pmsg_size=0x8000",
+  "cmdline": "console=tty0 console=ttyGS0,115200 loglevel=7 selinux=0 androidboot.selinux=permissive enforcing=0 panic=10 sysctl.kernel.panic_on_oops=0 ramoops.mem_address=0xfff80000 ramoops.mem_size=0x40000 ramoops.record_size=0x8000 ramoops.console_size=0x8000 ramoops.pmsg_size=0x8000",
   "misc_slot_a_hex": "5f61000042434142010200009f001e000000000000000000000000000be17146",
   "misc_slot_b_trial_hex": "5f62000042434142010200009e002f000000000000000000000000009bf8546d",
-  "overlay_files": 67,
+  "overlay_files": 151,
   "persist_log_offset": 58720256
 }

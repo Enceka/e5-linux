@@ -1,0 +1,208 @@
+diff --git a/sound/soc/sprd/unisoc/codec/aw87xxx/aw87xxx.c b/sound/soc/sprd/unisoc/codec/aw87xxx/aw87xxx.c
+index 52570521c..314c64fb7 100755
+--- a/sound/soc/sprd/unisoc/codec/aw87xxx/aw87xxx.c
++++ b/sound/soc/sprd/unisoc/codec/aw87xxx/aw87xxx.c
+@@ -1950,17 +1950,6 @@ static int aw87xxx_i2c_remove(struct i2c_client *client)
+ #endif
+ }
+ 
+-static void aw87xxx_i2c_shutdown(struct i2c_client *client)
+-{
+-	struct aw87xxx *aw87xxx = i2c_get_clientdata(client);
+-
+-	AW_DEV_LOGI(&client->dev, "enter");
+-
+-	/*soft and hw power off*/
+-	aw87xxx_update_profile(aw87xxx, aw87xxx->prof_off_name);
+-}
+-
+-
+ static const struct i2c_device_id aw87xxx_i2c_id[] = {
+ 	{AW87XXX_I2C_NAME, 0},
+ 	{},
+@@ -2012,7 +2001,6 @@ static struct i2c_driver aw87xxx_i2c_driver = {
+ 		},
+ 	.probe = aw87xxx_i2c_probe,
+ 	.remove = aw87xxx_i2c_remove,
+-	.shutdown = aw87xxx_i2c_shutdown,
+ 	.id_table = aw87xxx_i2c_id,
+ };
+ 
+diff --git a/sound/soc/sprd/unisoc/machine/sprd-asoc-card-utils-legacy.c b/sound/soc/sprd/unisoc/machine/sprd-asoc-card-utils-legacy.c
+index 20c99758f..e82fd9844 100755
+--- a/sound/soc/sprd/unisoc/machine/sprd-asoc-card-utils-legacy.c
++++ b/sound/soc/sprd/unisoc/machine/sprd-asoc-card-utils-legacy.c
+@@ -566,10 +566,16 @@ EXPORT_SYMBOL(sprd_asoc_board_comm_late_probe);
+ 
+ void sprd_asoc_shutdown(struct platform_device *pdev)
+ {
+-	struct snd_soc_card *card = platform_get_drvdata(pdev);
++	struct snd_soc_card *card;
++
++	if (!pdev)
++		return;
++
++	card = platform_get_drvdata(pdev);
++	if (!card)
++		return;
+ 
+ 	memset(&board.func_switch, 0, sizeof(board.func_switch));
+ 	board_ext_pin_control(&card->dapm, 0, BOARD_FUNC_MAX);
+ }
+ EXPORT_SYMBOL(sprd_asoc_shutdown);
+-
+diff --git a/sound/soc/sprd/unisoc/machine/vbc-rxpx-codec-sc27xx.c b/sound/soc/sprd/unisoc/machine/vbc-rxpx-codec-sc27xx.c
+index 252ce186d..b36be7250 100755
+--- a/sound/soc/sprd/unisoc/machine/vbc-rxpx-codec-sc27xx.c
++++ b/sound/soc/sprd/unisoc/machine/vbc-rxpx-codec-sc27xx.c
+@@ -289,7 +289,6 @@ static struct platform_driver vbc_rxpx_codec_sc27xx_driver = {
+ 	},
+ 	.probe = vbc_rxpx_codec_sc27xx_probe,
+ 	.remove = asoc_sprd_card_remove,
+-	.shutdown = sprd_asoc_shutdown,
+ };
+ 
+ static int __init vbc_rxpx_codec_sc27xx_init(void)
+diff --git a/sound/soc/sprd/unisoc/platform/dmaengine_pcm/sprd-dmaengine-pcm.c b/sound/soc/sprd/unisoc/platform/dmaengine_pcm/sprd-dmaengine-pcm.c
+index 9d0b48753..3f4a88f16 100644
+--- a/sound/soc/sprd/unisoc/platform/dmaengine_pcm/sprd-dmaengine-pcm.c
++++ b/sound/soc/sprd/unisoc/platform/dmaengine_pcm/sprd-dmaengine-pcm.c
+@@ -624,6 +624,37 @@ static inline u32 sprd_pcm_dma_get_addr(struct dma_chan *dma_chn,
+ static int sprd_pcm_preallocate_dma_ddr32_buffer(struct snd_pcm *pcm,
+ 						int stream);
+ 
++/*
++ * The preallocated buffer can be smaller than snd_pcm_hardware advertises (see
++ * sprd_pcm_open()).  sprd_pcm_hw_params() then points runtime->dma_area at that
++ * buffer but sets runtime->dma_bytes to the negotiated size, and the ALSA core
++ * clears dma_bytes worth of it.  Clamping the constraints in open() should make
++ * this unreachable; say so out loud rather than corrupting memory if it is not.
++ */
++static int sprd_pcm_check_buffer_size(struct snd_pcm_substream *substream,
++				      size_t totsize)
++{
++	/*
++	 * A DAI with no DMA (the no_dma path below) never gets a buffer
++	 * preallocated, and the ALSA core skips the clearing memset when
++	 * dma_area is NULL, so there is nothing to overrun and nothing to
++	 * refuse.  Checking the size here anyway rejected FE_TEST_CODEC with
++	 * -EINVAL out of snd_soc_pcm_component_hw_params().
++	 */
++	if (!substream->dma_buffer.area)
++		return 0;
++
++	if (totsize > substream->dma_buffer.bytes) {
++		pr_err("ERR: %s buffer of %zu bytes requested, only %zu allocated\n",
++		       substream->stream == SNDRV_PCM_STREAM_PLAYBACK ?
++				"playback" : "capture",
++		       totsize, substream->dma_buffer.bytes);
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
+ #ifndef DMA_LINKLIST_CFG_NODE_SIZE
+ #define DMA_LINKLIST_CFG_NODE_SIZE  (sizeof(struct sprd_dma_cfg))
+ #endif
+@@ -830,6 +861,8 @@ static int sprd_pcm_open(struct snd_soc_component *component, struct snd_pcm_sub
+ 	int ret;
+ 	struct audio_pm_dma *pm_dma;
+ 	u32 size_inout;
++	u32 node_bytes[2] = {0, 0};
++	u32 nodes;
+ 
+ 	pm_dma = get_pm_dma();
+ 
+@@ -944,6 +977,7 @@ static int sprd_pcm_open(struct snd_soc_component *component, struct snd_pcm_sub
+ 		pr_err(" ioremap_nocache failed for rtd->dma_cfg_virt[0]");
+ 		goto err;
+ 	}
++	node_bytes[0] = size_inout;
+ 	memset_io(rtd->dma_cfg_virt[0], 0, size_inout);
+ 	size_inout = runtime->hw.periods_max *
+ 		sizeof(struct sprd_dma_cfg);
+@@ -971,7 +1005,30 @@ static int sprd_pcm_open(struct snd_soc_component *component, struct snd_pcm_sub
+ 		pr_err("ioremap_nocache failed for rtd->dma_cfg_virt[1]");
+ 		goto err;
+ 	}
+-	memset_io(rtd->dma_cfg_virt[0], 0, size_inout);
++	node_bytes[1] = size_inout;
++	/* [0], not [1], in the vendor code: the second list was never cleared. */
++	memset_io(rtd->dma_cfg_virt[1], 0, size_inout);
++
++	/*
++	 * Same short-allocation trap as the data buffer above, one level down.
++	 * These two mappings hold the DMA link list, one struct sprd_dma_cfg per
++	 * period, and the IRAM_NORMAL_C_LINKLIST_NODEn windows are 512 bytes --
++	 * three nodes -- where periods_max asks for a page's worth (30).
++	 * sprd_pcm_hw_params() builds one node per negotiated period and would
++	 * run straight off the end of the mapping.  Advertise the number of
++	 * periods the link list can really describe.
++	 */
++	nodes = (u32)(min(node_bytes[0], node_bytes[1]) /
++		      sizeof(struct sprd_dma_cfg));
++	if (!nodes) {
++		pr_err("ERR: DMA link list holds no node (%u/%u bytes)\n",
++		       node_bytes[0], node_bytes[1]);
++		ret = -ENOMEM;
++		goto err;
++	}
++	if (runtime->hw.periods_max > nodes)
++		runtime->hw.periods_max = nodes;
++
+ 	pr_info("rtd->dma_cfg_virt[0] =%#lx, rtd->dma_cfg_phy[0] =%#lx,",
+ 		(unsigned long)rtd->dma_cfg_virt[0],
+ 		(unsigned long)rtd->dma_cfg_phy[0]);
+@@ -990,6 +1047,30 @@ static int sprd_pcm_open(struct snd_soc_component *component, struct snd_pcm_sub
+ 		goto err;
+         }
+ 
++	/*
++	 * audio_mem_alloc() hands back whatever the region really holds rather
++	 * than what was asked for: normal capture comes out of the
++	 * IRAM_NORMAL_C_DATA window, which is 7680 bytes, not the 128K
++	 * sprd_pcm_preallocate_dma_ddr32_buffer() requests.  snd_pcm_hardware
++	 * still advertises the full 228K, and sprd_pcm_hw_params() below writes
++	 * the *negotiated* size into runtime->dma_bytes, so whenever a client
++	 * asks for more than the region holds, snd_pcm_hw_params() memsets
++	 * PAGE_ALIGN(dma_bytes) bytes into the short mapping and the kernel
++	 * takes a paging fault in __memset.  The Android HAL never asks for
++	 * more than fits, which is why this has never shown up before;
++	 * PipeWire opens normal capture with a 19200-byte buffer and hits it on
++	 * every boot.  Advertise what was actually allocated so ALSA can only
++	 * negotiate a buffer that fits.
++	 */
++	if (substream->dma_buffer.bytes) {
++		runtime->hw.buffer_bytes_max = min_t(size_t,
++			runtime->hw.buffer_bytes_max,
++			substream->dma_buffer.bytes);
++		runtime->hw.period_bytes_max = min_t(size_t,
++			runtime->hw.period_bytes_max,
++			runtime->hw.buffer_bytes_max);
++	}
++
+ 	ret = -ENOMEM;
+ 	rtd->dma_cfg_array = devm_kzalloc(dev, hw_chan * ((
+ 		runtime->hw.periods_max * sizeof(struct scatterlist))
+@@ -1667,6 +1748,10 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
+ 			goto hw_param_err;
+ 	}
+ 
++	ret = sprd_pcm_check_buffer_size(substream, totsize);
++	if (ret)
++		goto hw_param_err;
++
+ 	snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer);
+ 
+ 	runtime->dma_bytes = totsize;
+@@ -1765,6 +1850,9 @@ static int sprd_pcm_hw_params(struct snd_soc_component *component,
+ no_dma:
+ 	pr_info("no dma\n");
+ 	rtd->params = NULL;
++	ret = sprd_pcm_check_buffer_size(substream, totsize);
++	if (ret)
++		return ret;
+ 	snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer);
+ 	runtime->dma_bytes = totsize;
+ 

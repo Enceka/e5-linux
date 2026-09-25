@@ -17,6 +17,9 @@
 export PATH=/bin:/sbin HOME=/root TERM=vt100
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+# Level 7 while the initramfs runs; the real root drops it to 4
+# (etc/sysctl.d/10-e5-printk.conf): at 7 each info line costs ~10 ms of
+# synchronous serial console output in whoever printed it.
 echo 7 > /proc/sys/kernel/printk
 if ! mount -t devtmpfs -o mode=0755 devtmpfs /dev 2>/dev/null; then
     mount -t tmpfs -o mode=0755 tmpfs /dev

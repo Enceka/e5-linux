@@ -105,6 +105,8 @@ bash "$HERE/e5-chroot.sh" '
              e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do
         systemctl --root=/ enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done
+    # brings the bearer back after a CP reset (boot/init links it too)
+    systemctl --root=/ enable e5-bearer-watch.timer >/dev/null 2>&1 || echo "warn: e5-bearer-watch.timer enable failed"
     # The sound card: e5-audio loads the 24 vendor audio modules, boots the AGDSP
     # off l_agdsp_a and sets the speaker route before session PipeWire can
     # probe the card (the 2026-09-19 resets were exactly that probe landing on a

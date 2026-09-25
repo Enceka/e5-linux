@@ -375,11 +375,13 @@ if [ -n "$rootdir" ]; then
         # enable symlinks either.  Without it usb0 comes up bare, the host gets
         # no lease, and the only way in is the screen.
         # Timers go to timers.target, not multi-user.target.
-        if [ -f /newroot/etc/systemd/system/e5-hotspot-retry.timer ]; then
-            mkdir -p /newroot/etc/systemd/system/timers.target.wants
-            ln -sf /etc/systemd/system/e5-hotspot-retry.timer \
-                /newroot/etc/systemd/system/timers.target.wants/e5-hotspot-retry.timer
-        fi
+        for timer in e5-hotspot-retry.timer e5-bearer-watch.timer; do
+            if [ -f "/newroot/etc/systemd/system/$timer" ]; then
+                mkdir -p /newroot/etc/systemd/system/timers.target.wants
+                ln -sf "/etc/systemd/system/$timer" \
+                    "/newroot/etc/systemd/system/timers.target.wants/$timer"
+            fi
+        done
 
         # The serial console has to survive too -- it is the only way in when the
         # management LAN is down (docs/FINDINGS.md section 26).  A rootfs build

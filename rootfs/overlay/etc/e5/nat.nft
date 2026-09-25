@@ -12,3 +12,16 @@ table ip e5nat {
         ip saddr 192.168.77.0/24 oifname "sipa_eth*" masquerade
     }
 }
+
+# IPv6 is not NATed: hotspot clients get public addresses from the bearer's /64
+# (opt/e5/e5-ipv6-share), so this is the firewall a home router would have --
+# replies and the ICMPv6 that path MTU and diagnostics need come in, new
+# connections from the internet do not.
+table inet e5fw6 {
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        meta nfproto ipv6 iifname "sipa_eth*" ct state established,related accept
+        meta nfproto ipv6 iifname "sipa_eth*" icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request } accept
+        meta nfproto ipv6 iifname "sipa_eth*" counter drop
+    }
+}

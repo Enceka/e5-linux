@@ -19,6 +19,9 @@
 #     round tries again.
 #   * the bearer only makes sense once the CP is registered, so an unregistered
 #     modem is a failed round, not something to wait for in here.
+#
+# A CP that resets later is e5-bearer-watch.timer's business: it restarts this
+# unit when the context is gone.
 set -u
 
 CPD=${E5_CPD:-/usr/local/bin/unisoc-cpd}
@@ -48,4 +51,7 @@ if ! registered; then
 fi
 
 echo "registered; bringing the bearer up"
-cpd data up
+cpd data up || exit 1
+# IPv6: the uplink's link-local and RA, and the /64 on the hotspot (e5-ipv6-share)
+/opt/e5/e5-ipv6-share --wait
+exit 0

@@ -62,7 +62,7 @@ channels that survive a failed boot.
 | Rollback to Android when Linux never reaches userspace | ✅ verified — the device lands back on slot a |
 | Initramfs: 67 dependency-ordered modules, USB ECM + ACM console | ✅ |
 | **Linux boots on the device** | ✅ **67/67 modules load, nothing left deferred** |
-| USB gadget network (NCM, 192.168.77.1, DHCP via systemd-networkd) | ✅ verified live: host gets 192.168.77.x, ping 0% loss |
+| USB gadget network (NCM) | ✅ usb0 and the hotspot are one LAN, `br0` 192.168.9.1/24 (dnsmasq DHCP; the USB host always gets 192.168.9.2, with no default route); the initramfs rescue mode keeps 192.168.77.1 |
 | Battery charging under Linux | ✅ **verified — `battery/status = Charging`** |
 | DRM/KMS display (480x320 DSI panel, now `card1` -- panfrost takes `card0`) | ✅ phoc modesets it (active plane `320x480`, `allocated by = phoc.orig`) |
 | Debian 13 + Phosh root filesystem | ✅ SDDM autologins `phosh.desktop` |
@@ -73,9 +73,9 @@ channels that survive a failed boot.
 | Bluetooth | ⏳ **open** — the controller attaches and `hci0` comes up (`e5-bt-attach.service` holds `/dev/ttyBT0`), bluez reports `Powered: yes`, and scans have found devices (7 LE, 4 BR/EDR); but one attach can fail and never recover, and after repeated BT power cycles the chip stops answering the scan commands (`0x2041`/`0x2042 tx timeout`), so a scan can come up empty. Pairing/connecting untested (one settings-app attempt: `Page Timeout`). BD address is the chip's default, not the factory MAC -- docs/STATUS.md "open" list and docs/FINDINGS.md section 8.7 |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
 | Modem, data bearer | ✅ [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) owns the CP at boot (the Android `modem_control` runs in a chroot to start it); 5G SA registers and `e5-bearer-up` brings the bearer up on `sipa_eth0` — FINDINGS §25 |
-| Modem web page | ✅ `unisoc-cpd web` on `http://192.168.77.1:7887` (management LAN only, no authentication) |
+| Modem web page | ✅ `unisoc-cpd web` on `http://192.168.9.1:7887` (USB port only, no authentication) |
 | UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
-| Hotspot | ✅ `hostapd` on 5 GHz ch149 / 80 MHz, SSID `E5-Linux`, 192.168.9.1/24, NAT to the bearer with nftables |
+| Hotspot | ✅ `hostapd` on 5 GHz ch149 / 80 MHz, SSID `E5-Linux`, on `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) |
 | Audio | ✅ speaker through ALSA (UCM `HiFi`/`Speaker`) and PipeWire; `e5-audio.service` boots the AGDSP off `l_agdsp_a`; kernel `0010`-`0014`, FINDINGS §24.8. ⏳ no capture |
 | Idle load | ✅ load average ~0 at idle (it read 6+ from vendor threads in `D` and synchronous console output) — kernel `0015`, FINDINGS §29 |
 
@@ -231,9 +231,9 @@ goes over the management LAN:
 
 ```sh
 tar -C work -cf work/android-subset.tar android-subset
-( cd work && python3 -m http.server 8000 --bind 192.168.77.21 )   # your host's usb0 address
-# in the e5-linux shell (telnet 192.168.77.1, or the USB serial console), as root:
-cd /tmp && /usr/local/bin/busybox wget http://192.168.77.21:8000/android-subset.tar
+( cd work && python3 -m http.server 8000 --bind 192.168.9.2 )   # the USB host's fixed address
+# in the e5-linux shell (telnet 192.168.9.1, or the USB serial console), as root:
+cd /tmp && /usr/local/bin/busybox wget http://192.168.9.2:8000/android-subset.tar
 mkdir -p /opt/e5 && tar --no-same-owner -xf android-subset.tar -C /opt/e5
 mv /opt/e5/android-subset /opt/e5/android && systemctl start e5-vendor unisoc-cpd
 ```
@@ -304,16 +304,19 @@ boot/flash-from-linux.sh boot-linux-slotb.img
 
 | | |
 |---|---|
-| management LAN | USB NCM, the device is `192.168.77.1` and hands the host an address by DHCP |
-| shell | `telnet 192.168.77.1` (`root`/`root`), or the USB CDC-ACM serial console |
+| LAN | `br0` = the USB port (NCM) + the hotspot, the device is `192.168.9.1`; the USB host always gets `192.168.9.2` and no default route, hotspot clients get `.10`-`.200`; everyone gets a public IPv6 address from the bearer's /64 |
+| shell | `telnet 192.168.9.1` (`root`/`root`, USB port only), or the USB CDC-ACM serial console |
 | accounts | `e5`/`123456` (the phosh session autologins), `root`/`root` |
 | hotspot | SSID `E5-Linux`, WPA2 `12345678`, clients on 192.168.9.0/24 |
-| modem page | `http://192.168.77.1:7887` (`unisoc-cpd web`) |
-| UFI-TOOLS | `http://192.168.77.1:2333`, `admin`; CLI `ufi-tools status`, `ufi-tools set-token` |
+| modem page | `http://192.168.9.1:7887` (`unisoc-cpd web`, USB port only) |
+| UFI-TOOLS | `http://192.168.9.1:2333` (USB port only), `admin`; CLI `ufi-tools status`, `ufi-tools set-token` |
 | back to Android | `e5-next-boot android && systemctl reboot` |
 
 Change the passwords, the hotspot passphrase and the UFI-TOOLS token before the
-device leaves your desk.
+device leaves your desk.  Telnet, gotty, UFI-TOOLS and the modem page are dropped for
+frames arriving from the Wi-Fi side of the bridge and for anything from the uplink
+(`etc/e5/nat.nft`), so a hotspot client or the internet cannot reach them -- the USB
+cable is the management port.
 
 ### 7. Read the result
 

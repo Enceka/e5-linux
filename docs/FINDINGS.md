@@ -2891,7 +2891,8 @@ at least a session.
   Two LANs it is: usb0 192.168.77.1, wlan0 192.168.9.1.  The revert missed three
   bridge-only comments and the bounded `systemctl restart systemd-networkd/dnsmasq`
   step in `hotspot-start.sh`, and trimmed the dnsmasq/networkd comments; the history
-  cleanup of 2026-09-25 put all of that back to the pre-bridge state.
+  cleanup of 2026-09-25 put all of that back to the pre-bridge state.  (The bridge
+  came back on 2026-09-26 built the other way round -- section 31.)
 
 ## 29. "High load at boot": what the number was made of (2026-09-25)
 
@@ -3018,3 +3019,53 @@ Checked with a client simulated in a network namespace at `<prefix>::c1`: ping a
 725 KB HTTP download over IPv6 from that address -- the carrier delivers traffic for
 any address in the /64, not only the device's own.  A real Wi-Fi client has not been
 tried yet.
+
+## 31. One LAN after all: br0 for the USB port and the hotspot (2026-09-26)
+
+Two reasons to merge them: one subnet (a laptop on the cable and a phone on the
+Wi-Fi without routing between them), and IPv6 -- the bearer's /64 can only live on
+one link (section 30), so with two LANs the USB host had none.  The 2026-09-21
+attempt failed on two silent layers (28); this one avoids both:
+
+* **networkd builds nothing.**  `opt/e5/net-bridge.sh` (`e5-net-bridge.service`,
+  before `network.target`, dnsmasq, the hotspot and the management services) makes
+  `br0` with `ip`, gives it usb0's fixed MAC, 192.168.9.1/24 and -- as a second
+  address -- 192.168.77.1 (the initramfs's rescue subnet, so a host still holding
+  that lease keeps working), and enslaves usb0.  Both `.network` files are now
+  `Unmanaged=yes` (kept rather than deleted: an overlay file that disappears stays on
+  the device), and `systemd-networkd-wait-online` is a no-op, since it would only
+  wait out its two minutes for links nobody manages.
+* **hostapd gets br0 ready-made.**  `bridge=br0` in both configs; `hotspot-start.sh`
+  waits for `br0/brif/usb0`, takes wlan0 out of the bridge before the `__ap` type
+  change, and counts the hotspot as up only when `br0/brif/wlan0` exists.
+
+dnsmasq serves only br0: pool .10-.200, `dhcp-authoritative` (NAKs the old
+192.168.77.x lease at renewal), and the USB host -- the gadget's fixed host MAC
+`02:50:00:00:e5:02` -- always gets 192.168.9.2 with the router option empty, so a
+laptop keeps its own default route (verified: IPv4 default stays on the Mac's own
+interface, IPv6 via the device).  `e5-ipv6-share` puts the /64 on br0, so the RA
+reaches both ports.
+
+**The price of one L2: the management services see the hotspot.**  They already
+listened on every address (telnet `root/root` on `*:23`, UFI-TOOLS, gotty) -- and,
+once the uplink had a public IPv6 address, on the internet too.  Two tables in
+`etc/e5/nat.nft`:
+
+    table inet e5in       input from sipa_eth*: established/related and ICMP only
+    table bridge e5mgmt   input from the wlan0 port: tcp 23, 1146, 2333, 7887 dropped
+
+The bridge-family table is what tells the ports apart; the IP layer cannot.  Tested
+from a veth port in a namespace with the same rule: 23, 2333, 7887 blocked, DNS and
+forwarding to the internet unaffected.
+
+**Trap: never take usb0 down.**  To make the host renew its lease the first time,
+usb0 was set down and up on the device.  The NCM function lost its framing with the
+host -- every frame from then on `configfs-gadget gadget: Wrong NTH SIGN`, counters
+frozen, ARP incomplete -- and only a reboot brought it back (a re-plug would do too).
+Enslaving usb0 and moving addresses on and off it live are harmless; the serial
+console (ACM on the same gadget) survived and was the way back.  A second trap from
+the same day, already in 28: `net-bridge.sh` was created without the executable bit,
+and the first boot with it came up with no bridge (`status=203/EXEC`).
+
+Clean boot on br2: no failed unit, userspace 21.5 s (25.1 s before -- wait-online),
+br0 = usb0 + wlan0 with the public /64, the Mac at 192.168.9.2 with IPv6.

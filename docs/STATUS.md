@@ -37,7 +37,7 @@ FINDINGS.
   the data bearer over `cbnet`; MO SMS works too (FINDINGS 25.7).  Still open: the
   72 h soak.  On the Linux side it now owns the CP at boot too: `unisoc-cpd` and
   `e5-bearer-up` come up active (5G SA registered, bearer on `sipa_eth0`), and its web
-  page answers on `http://192.168.77.1:7887` (management LAN only; no auth).  The page
+  page answers on `http://192.168.9.1:7887` (USB port only; no auth).  The page
   is slow on first open: the daemon serves one request at a time (2-6 s each) and the
   page fires about seven at once.
 - **Bluetooth: the attach race and the dead scans (open, 2026-09-18).**
@@ -68,11 +68,12 @@ FINDINGS.
   measurement (FINDINGS 23) had everything stopped in 1.3 s and then ~32 s of NM
   waiting on WCN device teardown; NM is no longer installed, so measure again before
   believing either number.
-- **The hotspot needs one real client test.**  `hotspot-start.sh` is back to its
-  pre-bridge form and no longer makes the `wcnmodem` loop device (FINDINGS 29); wlan0
-  comes up with 192.168.9.1 and the bearer's public /64 (FINDINGS 30, verified only
-  with a namespace client).  Check that a phone gets a lease, a SLAAC address in the
-  prefix, and reaches an IPv6-only site.
+- **The hotspot needs one real client check over the bridge.**  usb0 and the AP are
+  one LAN since 2026-09-26 (`br0`, FINDINGS 31): a phone associated and got
+  192.168.9.41 plus a SLAAC address in the bearer's /64 during the live change, and
+  the USB host has IPv6 through it; still to confirm that a phone reaches an
+  IPv6-only site and that the management ports are closed from its side (tested
+  only from a namespace port).
 - **UFI-TOOLS shows no signal on 5G SA.**  `lte_rsrp` is empty and
   `network_signalbar` 0 while registered on NR SA: `modem.py` derives both from
   `AT+CESQ`'s LTE fields only.  Login is `admin` until changed (`ufi-tools set-token`
@@ -103,9 +104,6 @@ FINDINGS.
 - **The CP's 300 s dump wait after an assert** (FINDINGS 30): modem_control waits for
   a "dump complete" that only Android's CP log daemon sends.  Recovery itself is
   automatic now (`e5-bearer-watch.timer`); the five minutes offline are not.
-- **IPv6 for usb0**: the bearer's /64 goes to the hotspot only (one /64, one link);
-  the management LAN would need an NDP proxy or a second prefix the carrier does not
-  give.
 - **Suspend is unusable** while the modem data path refuses it
   (`sipa 25220000.sipa: thread prepare suspend err`), which is why the power key
   cannot mean "suspend".
@@ -125,9 +123,10 @@ FINDINGS.
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | audio | speaker plays through ALSA (`hw:N,3`, UCM verb HiFi / device Speaker) and PipeWire; AGDSP booted from `l_agdsp_a` by `e5-audio.service`; period events from an hrtimer; no capture |
-| baseband | `unisoc-cpd` (Rust) owns the CP on both sides (FINDINGS 25); on Linux it starts at boot with the bearer, web page on `192.168.77.1:7887` |
+| baseband | `unisoc-cpd` (Rust) owns the CP on both sides (FINDINGS 25); on Linux it starts at boot with the bearer, web page on `192.168.9.1:7887` |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs; MAC is random per boot |
-| hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (VHT80, centre 155), a client reported 80 MHz; IPv4 NAT + the bearer's public IPv6 /64 (SLAAC, stateful firewall); no AP+STA concurrency |
+| LAN | `br0` 192.168.9.1/24 = usb0 + the AP; IPv4 NAT + the bearer's public IPv6 /64 (SLAAC, stateful firewall); management ports only from the USB port |
+| hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (VHT80, centre 155), a client reported 80 MHz; no AP+STA concurrency |
 | bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |

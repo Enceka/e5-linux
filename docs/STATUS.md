@@ -1,89 +1,50 @@
 # Status
 
-_Last updated 2026-09-23._
+_Last updated 2026-09-25._
 
-Reasoning, evidence and dead ends live in `docs/FINDINGS.md`.  This file is only the
-work list.  Done work is removed from it once its result is in the table at the
-bottom.
+Reasoning, evidence and dead ends live in `docs/FINDINGS.md`; traps found the hard
+way are collected in its sections 24.8 and 28.  This file is only the work list.
+Done work is removed from it once its result is in the table at the bottom or in
+FINDINGS.
 
 ## Now (目前要做)
 
-- **Audio: the mu300-linux bring-up is ported, and this device turns out to carry
-  everything the F50 had to fake (2026-09-23, Android side).**  Measured on the
-  handset's own Android, in one session over adb: the sound stack runs **built-in**
-  (the whole card is up with zero audio modules in `/proc/modules`); the DT is
-  complete where the F50's was stripped -- `reserved-memory/audio-mem@af700000` and
-  `audiodsp-mem@afa00000` exist, and `audio-mem-mgr` carries the `memory-region`
-  phandles mu300 had to patch in; `audiocp_boot` is probed at
-  `/sys/devices/platform/audiocp_boot` with `ldinfo` reading exactly
-  `0xafa00000 / 0x600000`; and the AGDSP image is **on the device**: partition
-  `l_agdsp_a` (mmcblk0p26, 6 MiB, header `SharkL5_AUDCP_2023Y_VER_3029`) -- the
-  very partition the F50 lacks.  The port: `tools/vbc-profile` +
-  `rootfs/pull-audio-firmware.sh` (image + the native `/odm/etc/audio_params/sprd`
-  XMLs, converted to the three kernel-loadable profile blobs), `/opt/e5/e5-audio-dsp`
-  + `e5-audio.service` (modules -> card -> firmware write -> DSP start -> speaker
-  route, so PipeWire finds the card ready), audio module staging in
-  `rootfs/configure-rootfs.sh`, `alsa-utils` in the package set, and
-  `/opt/e5/e5-noirq-play` as the Android-mode (NO_PERIOD_WAKEUP) fallback player.
-  Not yet flashed or booted (the session was Android-side only); the first Linux
-  boot with `e5-audio.service` is the next gate, then whether the period interrupt
-  arrives with the DSP running (FINDINGS 24.6/24.7).
-
-
-- **G2: the daemon has taken the RIL's seat on the handset, and the hotspot
-  runs on our bearer (2026-09-20, Android side).**  What `unisoc-cpd` now does
-  on the device with `urild` stopped: holds both SIPC channels for the session
-  (`serve`), answers capability requests on a unix socket, decodes the URC
-  stream (50/50 lines decoded in one window), re-arms the SMS surface the RIL
-  leaves hostile (`CSCS=HEX`, `CNMI mt=0` — `docs/FINDINGS.md` §25.7), reads
-  incoming SMS by itself, and re-established the data bearer over the `cbnet`
-  APN.  Hotspot clients reached the internet through it after the policy
-  routing / tetherctrl / NAT recipe of FINDINGS §25.8.  Still open, in order:
-  **MO SMS** (`+CMS ERROR: 302` — IMS/NAS provisioning on the RIL's other
-  SIPC channels, W5), the 72 h soak, and the same takeover at boot on the
-  Linux side (slot b), where `unisoc-cpd.service` replaces `e5-atd`.
-- **Baseband: rewritten as a straight port of mu300-linux, aligned with upstream
-  `ccc9bb9` (2026-09-19).**
-  The Python `atd.py` + `cp-watchdog` pair is gone; what is in the tree now is the
-  upstream MU300 design with the E5's names, and its units are installed and
-  enabled again:
-  * `opt/e5/e5-atd` + `opt/e5/e5-at` -- the `mu300-atd`/`mu300-at` port.  A sh
-    daemon owns `/dev/stty_nr1` for the whole boot, serves `/run/e5-at/cmd` (fifo,
-    "SECONDS /answer-file AT+CMD") with an atomic answer file and a mkdir lock per
-    client, drains before each command, applies `stty` to the open descriptor, and
-    closes + reopens the device after two unanswered commands.  That is what makes
-    the SIPC channel's "one reader only" rule hold, and an AT command costs one
-    open per boot instead of one per call.
-  * `opt/e5/mobile-data` -- the `mu300` script ported: `at`/`up [APN]`/`down`/
-    `status`/`signal`/`at "CMD"`/`sim-reset`/`watch`, the bring-up lock in
-    `/run/e5-mobile-data-up.lock` (`up` -> `up_locked "$@"`), `tty_setup` (never
-    `stty -F` while the daemon owns the tty), the 30 s watchdog with its two-strike
-    rule, `radio_on` (CFUN -> SFUN=4 -> SFUN=2/4), and `down`'s "system is stopping"
-    exit with the short `E5_AT_LOCK_WAIT=5`.  AT goes through `e5-atd` when its
-    fifo exists and only opens the tty itself when the daemon is absent.
-    The five differences from upstream, all of them E5-shaped: the `E5_AT_*`
-    variable names (upstream hardcodes `/run/mu300-at`, `/dev/stty_nr1`), no
-    netifd/OpenWrt branch (this image is systemd-only), the APN read from
-    `/etc/e5/mobile-data.conf` when `up` is called without an argument, a
-    `/etc/resolv.conf` fallback where upstream only uses `resolvectl`, and the NAT
-    table named `e5_nat`.  `E5_AT_CLIENT` exists so `mobile-data` can be pointed at
-    a non-`/opt/e5` copy of `e5-at` (the offline self-test uses it).
-  * `opt/e5/android-run` + `e5-cp_diskserver.service` / `e5-refnotify.service` --
-    the two Android vendor daemons mu300 runs and this port did not, so modem NV
-    writes (fixed by Android's RIL) are persisted now.
-  * Units: `e5-atd`, `e5-mobile-data` (After/Wants `e5-atd`, `TimeoutStopSec=15`),
-    `e5-mobile-data-watch`, `e5-cp_diskserver` (`Before=e5-vendor.service` and no
-    start delay: `android-run` waits for the chroot itself), `e5-refnotify`, plus
-    `e5-vendor` -- enabled in `rootfs/configure-rootfs.sh` and
-    `rootfs/device-finalize.sh`.  They gate on `|/dev/modem` only: upstream also
-    writes `|/dev/pmsys`, a node this board does not have.
-  What the port dropped, on purpose: the CP watchdog, the `nr0` URC log, the
-  `/run/e5-atd.state` file, the SIM-storm cooldown and the `sim-reset` avoidance
-  of `SFUN=5/3`.  Those were our own answers to the `CP assert ... queue was full`
-  and the barred IoT card of 2026-09-18/19 (`docs/FINDINGS.md` 22) and the mu300
-  design has no place for them -- so those two problems are, as of now, unhandled.
-  **Not yet on the device:** nothing here has been booted, let alone soaked.
-  The AT layer is checked offline on a pseudo-terminal (`work/atd-selftest.py`).
+- **Audio: the speaker plays through plain ALSA and PipeWire (2026-09-25).**
+  FINDINGS 24.8 has the chain (kernel `0012`-`0014`, UCM route, profile selects,
+  WirePlumber rule).  What is left:
+  1. **The device runs an older overlay.**  The flashed image is
+     `work/boot-linux-slotb-audio3.img`, built before the WirePlumber rule, the
+     `e5-base-perms` manifest and the new `rootfs-fixups`.  Without the rule, ACP
+     probes all 19 front ends after every login and wireplumber sits at 100 % of a
+     core for minutes -- the "whole system is slow" of the first minutes of a
+     session.  Rebuild with `--overlay rootfs/overlay`, flash, check that
+     wireplumber is idle right after login and `wpctl status` shows one Speaker sink.
+  2. **The three rebuilt modules were installed on the device by hand** (the
+     originals are kept as `*.ko.orig` in `/usr/lib/modules/<rel>/audio/`):
+     `snd-soc-sprd-card` (0012), `sprd-dmaengine-pcm` (0013),
+     `snd-soc-sprd-codec-ump9620` (0014).  A fresh rootfs gets them only after
+     `kernel/build-linux.sh` (or `work/build-audio-modules.sh`) +
+     `boot/stage-modules.sh`, so that `configure-rootfs.sh` stages them.
+  3. **Capture does not work**: the capture DMA never moves (hw_ptr stays 0,
+     `arecord` EIO), on FE_NORMAL_AP01 and on the DSP capture FE alike.  The UCM
+     profile has no capture device until it does.
+  4. `VBC_*_DEV_CHANGE=TYPE_SPK` fails at boot (the DSP is not answering yet at
+     that point); Android plays with both at `TYPE_INIT`, so the route leaves them
+     alone.  Revisit only if a scene switch needs them.
+- **One `boot/flash-from-linux.sh` run rebooted straight into Android (2026-09-25).**
+  The image verified on `boot_b` and slot b was armed, yet after the reboot `misc`
+  held the slot-a block again and LK never tried slot b.  Two earlier runs the same
+  evening worked.  Unexplained; something on the Linux shutdown path may be writing
+  the slot-a block.  Recovery that works: from Android, write
+  `*.misc-slot-b-trial.bin` into `misc` and reset with sysrq (FINDINGS 24.5).
+- **G2: `unisoc-cpd` has taken the RIL's seat on the handset (2026-09-20, Android
+  side).**  It holds both SIPC channels, serves capabilities on a unix socket,
+  decodes the URC stream, re-arms the SMS surface, reads MT SMS and re-established
+  the data bearer over `cbnet`; MO SMS works too (FINDINGS 25.7).  Still open: the
+  72 h soak, and the same takeover at boot on the Linux side.  On the Linux boot of
+  2026-09-25 `unisoc-cpd.service` was stuck in `activating` with `e5-atd` and
+  `e5-mobile-data` inactive -- so the Linux side currently has no bearer.  Note that
+  the mu300-port `mobile-data` has no reconnect-storm guard (FINDINGS 28).
 - **Bluetooth: the attach race and the dead scans (open, 2026-09-18).**
   `docs/FINDINGS.md` section 8.7.  What works: the controller initialises, `hci0`
   comes up with the chip's own BD address, bluez reports `Powered: yes`, and scans
@@ -94,82 +55,35 @@ bottom.
      (`mtty_sdio_write sprdwcn_bus_push_list failed: -ENODEV`); btattach then held
      the tty with `hci0` at `00:00:00:00:00:00` and zero events, and
      `Restart=always` cannot help because the process never exits.  A self-healing
-     wrapper for that was written, found to have a fatal `exec wait` bug of its
-     own, fixed -- and then **discarded on request**; the tree carries the plain
-     `ExecStart=/usr/bin/btattach`, and the device still runs an image whose
-     wrapper is the buggy one.
+     wrapper was written and then discarded on request; the tree carries the plain
+     `ExecStart=/usr/bin/btattach`.
   2. **After repeated BT power cycles the chip stops answering new HCI commands.**
      `command 0x2041/0x2042 tx timeout` (LE scan parameters and scan enable),
      `hcitool inq` -> `Connection timed out`, `Discovering: no`: a scan finds
      nothing while the adapter still reads `UP RUNNING`, and the init sequence
      right after an attach *is* answered.  Wi-Fi on the same chip keeps working at
      the same moment.
-  The vendor BT configuration Android's HAL uses is **now in the image**:
-  `bt_configure_pskey.ini` and `bt_configure_rf.ini` were pulled out of
-  `/odm/firmware` into `rootfs/overlay/lib/firmware/` (the `_aa`/`.xpe` variants
-  are still on the device; `.gitignore` keeps vendor blobs out of git).  Nothing
-  in our kernel or userspace reads them yet, so the open question is who sends
-  them to the chip -- Android's BT HAL does.  The first thing to do is still the
-  clean-boot test (fresh boot, one attach, scan immediately, then scan again after
-  ten minutes idle) to decide whether the death is our attach sequence or the
-  chip's state.
-- **Wi-Fi hotspot: ch149 at 80 MHz is up (2026-09-18).**  The `HT_SCAN` stall was
-  never the width -- it was the regulatory domain, the same missing country as
-  `docs/FINDINGS.md` section 20.  With `country CN: DFS-FCC` the driver
-  advertises `5725-5850 @ 80 MHz`; `etc/hostapd/e5.conf` now runs channel 149,
-  VHT80 with centre 155, and hostapd logs `Set freq 5745 ... bandwidth=80 MHz,
-  cf1=5775` with the beacon's VHT Operation at `width=1, seg0=155`.  4/4 start
-  attempts reached `AP-ENABLED` (with/without a prior scan, with/without a
-  pre-set channel), so `hotspot-start.sh` no longer configures the channel.
-  Still open: confirm 80 MHz from a real client's link rate (the beacon's VHT
-  *Capabilities* IE says 20/40 because the driver's own `hw vht capab` has that
-  bit clear), the `#{ managed, AP } <= 1` limit means an AP drops the Wi-Fi
-  uplink, and guests still get out only through the (now watchdogged) modem.
-- **Shutdown takes ~32 s and it is all NetworkManager (deferred).**  Everything
-  else stops inside 1.3 s (`bluetooth.service` in 0.25 s); the journal is then
-  silent from NM's `modem-manager: ModemManager no longer available` at
-  14:57:01.108 to its own `exiting (success)` at 14:57:33.001, i.e. NM's shutdown
-  path waits on device teardown that does not complete here (the WLAN is on the
-  WCN chip, whose firmware does not answer a disconnect promptly).
-  `NetworkManager.service.d/20-e5-shutdown-timeout.conf` (`TimeoutStopSec=5`) is
-  in the tree and did **not** shorten the total in the one test since -- NM's
-  stop is issued late in the sequence, so the time is spent *before* it, not
-  inside it.  Measure again with the drop-in in a booted image before believing
-  anything here.
+  The vendor BT configuration Android's HAL uses is in the image
+  (`bt_configure_pskey.ini`, `bt_configure_rf.ini` in `rootfs/overlay/lib/firmware/`),
+  but nothing reads it yet -- Android's BT HAL is what sends it to the chip.  First
+  step is still the clean-boot test (fresh boot, one attach, scan immediately, then
+  again after ten minutes idle) to decide whether the death is our attach sequence
+  or the chip's state.
+- **Shutdown time is unmeasured since NetworkManager went (2026-09-20).**  The last
+  measurement (FINDINGS 23) had everything stopped in 1.3 s and then ~32 s of NM
+  waiting on WCN device teardown; NM is no longer installed, so measure again before
+  believing either number.
+- **The hotspot script changed in the history cleanup and needs one run on the device.**
+  `hotspot-start.sh` is back to its pre-bridge form (the bridge revert of 2026-09-21
+  had left the bounded networkd/dnsmasq restart out, FINDINGS 28); flash an image with
+  the current overlay and check that a client gets a lease.
 - **GPU: the two open ends left by panfrost.**  The backport itself is done
   (`kernel/patches/0005`, `MALI_MIDGARD=m`, `docs/FINDINGS.md` 20.7) and clients
-  now render on `Mali-G57 (Panfrost)`; what is left is (a) the scanout buffers are
-  still the vendor KMS driver's dumb buffers, which is why
-  `DUMB_CREATE_TIMES_LIMIT` sits at 64, and (b) the frequency is pinned at DVFS
-  index 3 (384 MHz) because devfreq is skipped on this board -- watch thermals
-  under real load.  PanVK stays out of reach: Mesa has no Valhall v9 backend.
-- **The 32 s shutdown is still unexplained, but is written up now.**
-  `docs/FINDINGS.md` section 23 has the identity strings and the measurement
-  (everything stops in 1.3 s, then NetworkManager sits on device teardown for the
-  rest); the `TimeoutStopSec=5` drop-in has not helped in its one test.
-
-### Traps found the hard way
-
-- **`systemctl restart sddm` takes the screen away and only a reboot gives it back.**
-  SDDM's default `DisplayServer` is x11; X is not installed on this image any more, so
-  the restart tries `/usr/bin/X` three times, fails, and exports `DISPLAY=:0` into the
-  session environment.  phosh then exits with `cannot open display: :0`, and
-  `mobi.phosh.Shell.service` hits "Start request repeated too quickly".  The
-  `DisplayServer=wayland` line in `rootfs/overlay/etc/sddm.conf.d/10-e5.conf` is the
-  fix; a plain reboot is the recovery.
-- **The power-key drop-in exists on the device and in the repo, but not in the image
-  the device is running.**  The flashed `boot_b` still carries the old
-  `/etc/systemd/logind.conf.d/20-e5-pwrkey.conf` (`HandlePowerKeyLongPress=ignore`), and
-  the overlay copies it back over `/etc` on every boot, so a reboot *before* the next
-  flash turns the long press back into a no-op (the short press keeps locking).  The
-  rebuilt `boot-linux-slotb.img` (sha256 `ee696331...`, kernel unchanged) has it baked;
-  flashing is the fix.
-- **The device's initramfs overlay is baked into the flashed image.**  Editing
-  `rootfs/overlay/...` changes nothing until the image is rebuilt and flashed, and
-  until then the *old* overlay is copied over `/etc` on every single boot.  The
-  device's `/etc/sddm.conf.d/10-e5.conf` still said `plasma-mobile.desktop` for
-  exactly this reason.  `/etc/sddm.conf` currently wins over `/etc/sddm.conf.d/`, which
-  is the only reason autologin kept working.
+  render on `Mali-G57 (Panfrost)`; what is left is (a) the scanout buffers are still
+  the vendor KMS driver's dumb buffers, which is why `DUMB_CREATE_TIMES_LIMIT` sits
+  at 64, and (b) the frequency is pinned at DVFS index 3 (384 MHz) because devfreq
+  is skipped on this board -- watch thermals under real load.  PanVK stays out of
+  reach: Mesa has no Valhall v9 backend.
 
 ## Next (后续要做)
 
@@ -180,317 +94,45 @@ bottom.
   saver on idle, because this gnome-settings-daemon ships no `gsd-screensaver` and the
   phosh session does not start one; `logind`'s `IdleAction=lock` would need an idle
   hint that phoc never sets (`docs/FINDINGS.md` section 18).
-
-- **Calls and SMS** need a RIL → the daemon is now that RIL (G2): MT **and**
-  MO SMS both work through `unisoc-cpd serve` (the MO blockade was a
-  malformed PDU of our own — first octet `0x11` promising an absent TP-VP;
-  FINDINGS §25.7), the control plane matches the Android oracle; what remains
-  for the desktop is a ModemManager/D-Bus face, and voice
-  (`voice.supported = false` until there is a UCM port — voice, unlike SMS,
-  really does ride IMS/VoLTE).
-- **IPv6** is live but unrouted: the carrier hands out `2408:893a:...` with an RA default
-  route and nothing uses it.
-- **Audio** is ported but unbooted: the bring-up (DSP firmware, route, profiles)
-  is in the tree as `e5-audio.service`, waiting for its first slot-b session; the
-  open question after that is the period interrupt (FINDINGS 24.6).
+- **Calls and SMS** need a RIL -> the daemon is now that RIL (G2): MT **and** MO SMS
+  both work through `unisoc-cpd serve` (the MO blockade was a malformed PDU of our
+  own -- first octet `0x11` promising an absent TP-VP; FINDINGS 25.7), the control
+  plane matches the Android oracle; what remains for the desktop is a
+  ModemManager/D-Bus face, and voice (`voice.supported = false` until there is a UCM
+  port -- voice, unlike SMS, really does ride IMS/VoLTE).
+- **IPv6** is live but unrouted: the carrier hands out `2408:893a:...` with an RA
+  default route and nothing uses it.
 - **Suspend is unusable** while the modem data path refuses it
-  (`sipa 25220000.sipa: thread prepare suspend err`), which is why the power key cannot
-  mean "suspend".
-- **The hotspot's own uplink:** with no AP+STA concurrency the only uplink an AP can
-  share is the modem, so it needs the CP problem above solved to be more than an
-  isolated LAN.
-- **Battery, charging and thermals** under the 5G link have only been observed in passing.
+  (`sipa 25220000.sipa: thread prepare suspend err`), which is why the power key
+  cannot mean "suspend".
+- **The hotspot's own uplink:** with no AP+STA concurrency (`#{ managed, AP } <= 1`)
+  the only uplink an AP can share is the modem.
+- **Battery, charging and thermals** under the 5G link have only been observed in
+  passing.
 
 ## Where things stand (短状态)
 
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `7cf0a57f...`): fbdev + ION + `kernel/patches/0001-0009`; slot-b trial boot |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); the audio modules carry `0010-0014`; slot-b boot |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
-| rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/` |
-| session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57** -- and clients on the same renderer through the Wayland platform |
+| rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
+| session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
-| baseband | `unisoc-cpd` (Rust) owns the CP: on the device it has taken both SIPC channels from `urild` for measured sessions (FINDINGS §25), serves capabilities over a socket, reads MT SMS, and re-establishes the bearer (`cbnet`); the Linux-side boot takeover and the 72 h soak are the remaining gates |
-| wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs out of the box; MAC is random per boot |
-| hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at **80 MHz VHT80 (centre 155)**; the old `HT_SCAN` stall was the missing `country CN`, not the width; no AP+STA concurrency |
+| audio | speaker plays through ALSA (`hw:N,3`, UCM verb HiFi / device Speaker) and PipeWire; AGDSP booted from `l_agdsp_a` by `e5-audio.service`; period events from an hrtimer; no capture |
+| baseband | `unisoc-cpd` (Rust) owns the CP on the Android side (FINDINGS 25); the Linux-side boot takeover is not working yet |
+| wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs; MAC is random per boot |
+| hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (VHT80, centre 155), a client reported 80 MHz; no AP+STA concurrency |
 | bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |
-| keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks and the lock screen blanks the panel, a tap wakes it; long press powers off) |
-| disk | 4.4 GiB used, 1.2 GiB free |
+| keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
+| disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
-
-## Committed on 2026-09-19
-
-- The baseband rewrite (`b36e86b`): `opt/e5/{e5-atd,e5-at,android-run}` are new,
-  `opt/e5/mobile-data` is rewritten, `opt/e5/{atd.py,cp-watchdog,e5-at.sh}` and
-  `etc/e5/cp-watchdog.conf` are deleted, five units are back and the two build
-  scripts enable them.  (The previous baseband bullet in this file is history.)
-- `opt/e5/e5-next-boot`, the `mu300-next-boot` port: `linux` records
-  `/etc/e5linux/default-boot=linux` and arms slot b, `android` records the other
-  choice and writes the recorded slot-a block back, `--rearm` is what
-  `/usr/local/sbin/e5-boot-ok` now execs (one implementation of "which slot comes
-  next"), and it acts only when the recorded default is linux, so a one-off trial
-  boot does not re-arm itself.  `status` prints the recorded default and the misc
-  block for both slots; the byte layout was re-checked against `dumps/misc-head.bin`
-  (slot a at byte 12, `9f` = prio 15/tries 9/successful 1) and the trial block
-  (slot b at byte 14, `2f` = prio 15/tries 2/successful 0).  The image ships
-  `default-boot=linux`, so a fresh install behaves as before and this is the scripted
-  way back to Android from a running Linux (`e5-next-boot android`, then reboot).
-- `opt/e5/rootfs-fixups` + `e5-fixups.service`, the `mu300-fixups` port: restores
-  ping's `cap_net_raw` (tar/docker export drops xattrs) and links
-  `e5-next-boot`/`mobile-data`/`e5-at` into `/usr/local/bin`, which is what makes
-  `sudo e5-next-boot android` work at all.  Enabled in both build scripts.
-- `tools/verify-device.py`: the read-only audit described below.
-- `boot/init`: the comment that still named the removed `e5-adbd.service` now points
-  at `docs/FINDINGS.md` 21.
-- `.gitignore` takes `out/` (the 8 GiB `rootfs.ext4`) and `.DS_Store`; the tracked
-  `rootfs/.DS_Store` is gone.
-
-### What the device is actually running (audit, 2026-09-19)
-
-`tools/verify-device.py` mounts `/data/e5linux/rootfs.ext4` read-only on the (rooted)
-Android side, compares it file by file with the tree, and reads the flashed image's own
-overlay list out of the initramfs.  On this unit:
-
-    boot image   device boot_b head56m == boot-linux-slotb.img (99d9d453...), so the
-                 image being audited is the one the device boots
-    overlay      70 files in the tree, 3 not in the image: tonight's e5-next-boot,
-                 rootfs-fixups and e5-fixups.service
-    rootfs       77 files checked, 4 wrong: those 3 plus usr/local/sbin/e5-boot-ok
-    leftovers    etc/e5/cp-watchdog.conf and e5-cp-watchdog.service -- the Python CP
-                 watchdog, deleted in b36e86b; the overlay only ever adds, so nothing
-                 on the device removes them
-    units        e5-hotspot, e5-regdb-load and e5-gadget-guard are enabled by the build
-                 scripts but neither linked nor pulled in on this device: this install
-                 predates that part of configure-rootfs.sh (its comment says the same).
-                 e5-telnetd is pulled in by the NetworkManager drop-in, and e5-atd,
-                 e5-mobile-data(+watch), e5-cp_diskserver, e5-refnotify, e5-vendor,
-                 e5-boot-ok and e5-zram all have their *.wants/ links.
-
-The device is on Android (slot a) as of this audit.
 
 ## Open questions
 
 - **`xdg-desktop-portal` has no backend in a fresh install.**  The Plasma half of the
-  session was dropped on 2026-09-19: `packages.list` no longer installs `plasma-mobile`,
-  `plasma-workspace`, `kwin-wayland`, `kwin-x11` or `xdg-desktop-portal-kde`, and the
-  five `home/e5/.config/autostart/*.desktop` stubs that suppressed KDE's own autostart
-  entries went with them (packages.list keeps the reasoning).  That leaves
-  `xdg-desktop-portal` with nothing to hand requests to, so the next thing to decide is
-  which backend the phosh session wants: `xdg-desktop-portal-gtk` (file chooser,
-  notifications) or `xdg-desktop-portal-wlr` (screencast -- phoc is wlroots-based).
-
-### 2026-09-18, late (this round)
-
-* **Empty-run verdict (done, and it answers the question):** Linux was booted and left
-  alone -- `e5-mobile-data` and its watcher stopped, no AT at all -- and at **uptime
-  17 minutes there was no CP assert** (`CP assert` hits = 0), where a session that polls
-  AT dies at ~9.5 minutes.  So the `MN_AL Task PS CP assert ... The queue was full` is
-  **our AT usage filling the CP's queue**, not the firmware: the fix is to pace AT the way
-  Android's RIL does, and to keep a "CP is dead -> reboot" watchdog as the fallback.
-  Services were re-enabled afterwards; the bearer came back as `10.133.137.8/8`.
-* **Hotspot: blocked by the regulatory domain, fixed in the image** (docs/FINDINGS.md
-  section 20).  `regulatory.db` + its signature are now in `rootfs/overlay/lib/firmware/`,
-  and the rebuilt image puts them in the initramfs before the WCN modules load.  **After a
-  reflash**: `iw reg get` should say `country CN`, then
-  `iw dev wlan0 set type __ap; ip link set wlan0 up; hostapd -B /etc/hostapd/e5.conf`
-  should reach `AP-ENABLED` (SSID `E5-Linux`, psk `12345678`, DHCP from
-  `etc/systemd/network/20-e5-wlan0.network` = 192.168.78.1/24, NAT out via the existing
-  `sipa_eth0` masquerade).
-
-### 2026-09-18, late night (the 80 MHz hotspot round, and the modem going out of service)
-
-* **Channel 149 at 80 MHz is done and verified end to end.**  The "40/80 hangs in
-  HT_SCAN" conclusion was wrong: with `country CN: DFS-FCC` (the regdb reflash of
-  section 20) the driver advertises `5725-5850 @ 80 MHz` and hostapd sets the AP up
-  itself (`Set freq 5745 ... bandwidth=80 MHz, cf1=5775`), beacon VHT Operation
-  `width=1, seg0=155`; 4/4 start orders reached `AP-ENABLED`.  A phone connected to
-  `E5-Linux` and **reported 80 MHz** (*user-verified*).  `etc/hostapd/e5.conf` is the
-  80 MHz profile and `hotspot-start.sh` no longer pre-sets the channel; it now fails
-  loudly (and retries once) when hostapd does not come up.  See FINDINGS 20.4/20.5.
-* **The overlay-restore trap bit us, and the fix is the flashed image.**  Pushing
-  `etc/hostapd/e5.conf`, `opt/e5/hotspot-start.sh` or `opt/e5/mobile-data` is undone by
-  the next boot (the initramfs overlay is copied over them; files that are *not* in the
-  baked overlay, like the new `atd.py`, survive).  That is why the hotspot came up
-  trying **2.4 GHz channel 6** after a reboot and why the watcher lost its fix.  The
-  image has now been rebuilt (`boot/build-boot-image.py`, busybox recovered from the
-  device's own `/usr/local/bin/busybox`) and written into a boot slot; the tree is the
-  single source of truth again.
-* **Both slots held Linux images -- Android's boot image was gone.**  `boot_a` sha was
-  byte-identical to the previous Linux image and `boot_b` to an older one, so every BCB
-  "switch to Android" landed in Linux (LK logged `ANDROID: Booting slot_a`).  Fixed:
-  `boot_b` now carries the new Linux image and `boot_a` the Android image the user
-  supplied (`/Volumes/Projects/e5/spd_dump-macos/b.img`, sha256 `3ff27449...`), so
-  Android is the fallback again and a switch back to Linux is one `dd` of `boot_b`
-  over `boot_a` (or arming slot b, tries=2).
-* **The modem went out of service at 23:07, on both systems.**  The URC log caught the
-  network throwing us off -- `+CGEV: NW PDN DEACT 1`, `+CGEV: NW DETACH`,
-  `+SPERROR: 14,27,"46001"` -- and after that neither Linux (`+CGATT: 0`,
-  `AT+CGATT=1 -> +CME ERROR: 0`, `AT+CGACT=1,1 -> +CME ERROR: 28`, `+COPS: 46001` but
-  no PS attach) nor **Android** can register: `mDataRegState=1(OUT_OF_SERVICE)`,
-  `mIsEmergencyOnly=true`, while `mCellInfo` still shows a healthy LTE band 1 cell
-  (rsrp -90, mRegistered=YES).  So the RF and the cell are fine and the network is
-  refusing service -- most likely the SIM was barred after the repeated abnormal
-  detaches.  Not a Linux-side bug; test the SIM in another phone / reseat it.
-* **Shutdown was slow because of `btattach`, not just NetworkManager.**
-  `e5-bt-attach.service` sat in `final-sigterm timed out` and then reported
-  "Processes still around after final SIGKILL"; it now has `KillSignal=SIGKILL` and
-  `TimeoutStopSec=2`, and a `system.conf.d` drop-in caps `DefaultTimeoutStopSec` at
-  5 s (`DefaultTimeoutStopUSec=5s` verified after a daemon-reload).  A watchdog reboot
-  must not wait on vendor teardown.
-* **`mobile-data` fixes from this round:** `radio_on()` no longer trusts `+CFUN` (a cold
-  CP can read 1 with the stack off -- the modem sat at `+CEREG: 2,0` until SFUN=2/4 were
-  sent), `wait_registered` accepts this modem's `+CEREG` stat 8 and is bounded,
-  `watch()` keeps separate interface and PDP-context counters (the one reset by the other
-  hid the 23:07 deactivation for half an hour), and `sim-reset` drops `SFUN=5/3`, which
-  leaves this modem's SIM undetected until a reboot.
-* **The reconnect storm barred the user's IoT SIM -- the guard is in now.**
-  Evidence: the network detached us at 23:07:12; after that
-  `e5-mobile-data.service` (`Restart=on-failure`, `RestartSec=30`) and
-  `e5-mobile-data-watch.service` (`Restart=always`, `RestartSec=15`) restarted the
-  bring-up over and over -- every attempt sending `AT+SFUN=2`/`AT+SFUN=4`, polling
-  `+CEREG` and trying `+CGACT`/`+CGCONTRDP` -- amplified by `sim-reset` (SFUN=5/3)
-  and by manual `AT+CGATT=1`/`AT+CGACT=1,1`/`CFUN` pokes.  The card (ICCID
-  **<iccid>**, China Unicom, an IoT/M2M SIM) stopped being accepted:
-  Android now shows the same emergency-only state with a healthy LTE band 1 cell
-  (rsrp -90) and `Uni-DNC-0: not allowed - PS is rejected`.  Fixes: `up()` records
-  failures in `/run/e5-mobile-data-fails` and refuses to try again after **5 in
-  30 min**; the watcher runs `up` in a subshell and backs off 60 s -> 30 min on
-  failure (a failing `up` used to `exit`, which took the watcher down and let
-  systemd restart it every 15 s); `e5-mobile-data.service` no longer has
-  `Restart=on-failure`; the watch unit's `RestartSec` is 60; `sim-reset` no longer
-  sends SFUN=5/3 (it left the SIM undetected until a reboot).  Lifting the bar is up
-  to the operator.
-
-
-* **wlan0 is currently NetworkManager-unmanaged**
-  (`/etc/NetworkManager/conf.d/20-e5-wlan0-unmanaged.conf` was added so hostapd can own
-  the interface) and `wpa_supplicant.service` is masked.  Remove both to go back to
-  station mode.
-
-
-### 2026-09-19, early morning (audio: the sound stack works, the AGDSP power domain does not)
-
-The audio modules were missing from the image entirely (`out_modules` had no
-`snd_soc_*`), which is why the port had no sound card.  With the vendor set added
-(`sound/soc/sprd/unisoc/*` + `drivers/unisoc_platform/sprd_audio/*`, 24 modules, the
-same set Android loads) the Linux side comes up with the full stack:
-
-* `/proc/asound/cards` -> `sprdphone-sc2730`, codec `ump9620`, and the AW87xxx
-  smart PA probing on i2c 6-0058 and parsing its profile
-  (`aw87xxx_fw_load_work: acf parse succeed`, products `aw87390`, profiles
-  Music/Receiver/Off) from `/vendor/firmware/aw87xxx_acf.bin` (now in
-  `rootfs/overlay/lib/firmware/`);
-* the speaker path controls were identified: `VBC_SYSTEM_DEV_CHANGE` /
-  `VBC_CUSTM_DEV_CHANGE` = `TYPE_SPK`, `Speaker Function` = 1, `Speaker Mute` = 0 and the
-  FE->BE DAPM switches `S_NORMAL_AP01_P_*` (the routing driver's
-  `sprd_pcm_routing_intercon[]`); without them a plain PCM open fails with
-  `FE_NORMAL_AP01: ASoC: no backend DAIs enabled`.
-
-**The blocker is `agdsp_pd.ko`**, the vendor AGDSP (audio DSP) power-domain module:
-
-* as shipped, loading it takes the board down within seconds -- no oops survives, the
-  reset comes from the PMIC watchdog (docs/FINDINGS.md 9);
-* with its SIPC kthread and its `pm_genpd_init()`/`of_genpd_add_provider_simple()`
-  skipped, the board survives but the sound card defers **forever**:
-  `vbc-rxpx-codec-sc27xx sound@0: asoc_sprd_card_parse_of: Parsing dai link 0
-  failed(-517)` (the codec and the VBC dai take that domain as their
-  `power-domains` provider);
-* with the genpd registered but `sprd_agdsp_pw_on/off` made no-ops, the same `-517`
-  loop still floods the console and the board resets again after a few minutes.
-
-So the AGDSP must be *powerable* for the card to bind, and powering it is what kills
-the board -- the same "bring up a DSP that our port never boots" class of problem as
-the modem CP.  The patch (three `if (0)` cuts: kthread, and the two power callbacks)
-is kept in `work/agdsp-patch/agdsp_pd.patch` and is applied in the vendor tree; the
-last known-good image is `work/boot-noaudio-stable.img` (78 modules, no audio,
-sddm masked).  Next ideas: give the codec its own power domain via DT, or find what the
-card's dai link 0 is actually waiting for (`/sys/firmware/devicetree/base/sound@0/`).
-
-### 2026-09-19, AGDSP hybrid genpd test
-
-The first Linux-style AGDSP port is now in the kernel tree. `agdsp_pd` no longer
-uses the legacy PSCP `smsg` kthread or PSCP shared-memory handshake. It keeps the
-PMU/mailbox wake path, reads the PMU state before sending the wake command, and
-leaves AP access and the DSP awake across runtime-PM idle instead of executing the
-vendor power-off sequence.
-
-The test image loaded all 91 modules. `audio_sipc` created the AGDSP ring, DSP
-commands received replies, UMP9620/VBC/TDM and AW87390 all probed, and the ASoC
-route setup completed without the earlier `-517` storm. Repeated logical
-`power_on`/`power_off` cycles did not reset the board.
-
-The test was then followed by an unexpected reboot after `switch-root`, despite
-no user action. The device automatically returned to Android slot A. The
-available `sysdumpdb` report is still the earlier `systemd-shutdow` fault
-(`device_shutdown -> _dev_info -> page fault`), while this boot's persistent log
-ends at `switch-root`; therefore the post-switch-root trigger is not yet proven
-to be the old shutdown callback or an AGDSP fault. The test image was
-`work/boot-linux-slotb-agdsp-test3.img`; initialization success is not yet a
-stability claim.
-
-The follow-up test disabled the CP watchdog reboot action (`ACTION=log`) and
-cleared `sysdumpdb`, pstore, last-kmsg and the boot persistent-log area first.
-It still returned to Android after `switch-root`. No new sysdump report survived,
-but that is not evidence against a kernel panic: this device's reset path clears
-the ramoops/sysdump area before the next boot. The fresh boot log ends at
-`switch-root`; audio initialization is proven, while the post-systemd panic
-needs live serial or vendor minidump capture.
-
-### 2026-09-23 (audio: the E5 ships the AGDSP image; the mu300-linux bring-up is ported)
-
-Everything below was measured on the device's own Android (slot a, `adb root`),
-no flashing.  It answers the question FINDINGS 24.6 was left with -- *"the AGDSP
-firmware is the suspect ... and it is not running here"* -- in the best possible way:
-
-* **The firmware is on the device.**  `/dev/block/by-name/` has `l_agdsp_a`/`l_agdsp_b`
-  (mmcblk0p26/p27); the image is 6 MiB, header `SharkL5_AUDCP_2023Y_VER_3029 /
-  AUDCP.SharkL6`, sha256 `6384966f...a6157a`.  `audiocp_boot/ldinfo` on the running
-  Android reads `0xafa00000 / 6291456` -- the image is *exactly* the reserved region,
-  so it is this SoC's own binary, not the donor hunting ground the F50 forced.
-* **The DT is complete.**  `reserved-memory/audio-mem@af700000` (3 MiB) and
-  `audiodsp-mem@afa00000` (6 MiB) exist, and `audio-mem-mgr` has the `memory-region`
-  phandles (218/219) -- the single property ZTE stripped from the F50, which is what
-  forced mu300's `of-reserved-mem-add` + `audio-mem-fixed-region` patches.  None of
-  that is needed here; the stock `audio_mem` module just works off the DT.
-* **Android runs the whole stack built-in.**  Card `sprdphone-sc2730` up, zero audio
-  modules in `/proc/modules`; `vbc-rxpx-codec-sc27xx` binds `sound@0`; 19 PCM devices
-  with `FE_ST_NORMAL_AP01` (00-00) as the media endpoint.  `audiocp_boot/status`
-  reads `core=7 sys=7` -- powered down while idle, which is normal (the domain is
-  only up while a PCM is open).
-* **The mixer vocabulary is captured** (340 controls, `/tmp/e5-mixer-idle.txt` shape:
-  both `VBC_*_DEV_CHANGE` already `TYPE_SPK`, `VBC DAC0 DG Set` 39/39, the profile
-  update/select controls present, `Speaker1 Function`/`AO Mixer`/`Virt Output`/
-  `agdsp_access_en` all there) -- the speaker route the old sessions derived by hand
-  is now written down as data in `e5-audio-dsp`'s ROUTES.
-* **The native parameter XMLs are on /odm** (`audio_structure` 0x43x0x2da, `dsp_vbc`
-  0x48x0x6c4, `cvs` 0x43x0x33c) and convert cleanly with the ported `vbc-profile`
-  (zero misplaced-field warnings, which is the converter's built-in format check).
-
-What is in the tree now: `tools/vbc-profile/vbc-profile.py`,
-`rootfs/pull-audio-firmware.sh` (already run once against the device: image + three
-profile blobs are in `rootfs/overlay/lib/firmware/`, gitignored as vendor blobs),
-`/opt/e5/e5-audio-dsp` + `e5-audio.service`, audio-module staging + service enable in
-`rootfs/configure-rootfs.sh`, `alsa-utils` in `packages.list`, and `/opt/e5/e5-noirq-play`
-(the NO_PERIOD_WAKEUP feeder Android's HAL uses, as the audibility fallback if the
-period interrupt stays missing even with the DSP running).
-
-Two corrections to the record:
-
-* **`agdsp_pd` in the kernel tree is the stock vendor driver** (smsg kthread, vendor
-  power_on/off).  The "hybrid" variant STATUS 2026-09-19 describes as "now in the
-  kernel tree" only ever lived in that session's test images.  That is fine for this
-  port on purpose: the stock driver is what Android runs successfully *with the DSP
-  booted*, and the boot order now guarantees the DSP is booted (the 2026-09-19 resets
-  were the stock handshake and pipewire's probe meeting a DSP with no firmware).
-* The old initramfs path for the audio modules stays retired.  Modules now load from
-  the root filesystem (`/usr/lib/modules/<rel>/audio`, modprobe + depmod) inside the
-  service, matching mu300-linux's architecture.
-
-Next gates, in order: build + flash a slot-b image with this rootfs; watch
-`e5-audio.service` bring the stack up (`e5-audio-dsp status`); then the real question
--- does `aplay` on hw:0,0 complete with the DSP running, i.e. do the AGCP/VBC
-completion interrupts finally reach the GIC (FINDINGS 24.6)?  If yes, PipeWire needs
-nothing else.  If no, `e5-noirq-play` is the audibility test, and the kthread ticker
-with try-lock is the kernel-side fallback.
-
+  session was dropped on 2026-09-19 (`packages.list` keeps the reasoning), which
+  leaves `xdg-desktop-portal` with nothing to hand requests to.  Decide which backend
+  the phosh session wants: `xdg-desktop-portal-gtk` (file chooser, notifications) or
+  `xdg-desktop-portal-wlr` (screencast -- phoc is wlroots-based).

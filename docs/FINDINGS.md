@@ -2400,6 +2400,9 @@ captured the last `dmesg` before a post-switch-root death.
 
 ### 24.6 What is still open
 
+_Resolved 2026-09-25 by the second bullet (an hrtimer ticker with the lock made
+irqsave) -- see 24.8.  The interrupt still does not arrive with the DSP running._
+
 * Route the completion interrupt to the AP: find who is supposed to write
   `REG_VBC_AUD_CHNL_INT_SEL` / `REG_VBC_AUD_INT_EN`, or whether the AGCP DMA line is
   simply not wired to the GIC on this part.  The AGDSP firmware is the suspect for
@@ -2456,6 +2459,91 @@ image was all along._
   PipeWire needs nothing else), or not (in which case `/opt/e5/e5-noirq-play` -- the
   `NO_PERIOD_WAKEUP` feeder the Android HAL uses, already in the image -- is the
   audibility test, and the kthread ticker the kernel-side fallback).
+
+### 24.8 The speaker plays (2026-09-25): what it took, and every trap on the way
+
+Confirmed by ear: stock `aplay` on `hw:0,3` and `pw-play` through PipeWire's
+"Speaker" sink.  Signal path: FE_FAST (hw:N,3) -> AGDSP FAST_P scene -> VBC DAC0 ->
+IIS0 -> UMP9620 DAC -> AO driver (AOL/AOR) -> aw87xxx (i2c 6-0058) -> speaker.
+
+**Card assembly.**  `sound@0` deferring forever looked like the hook parser's
+`Get gpio failed:-2` on `sprd,spk-ext-pa-gpio`.  It is not: `asoc_sprd_card_parse_of()`
+only propagates `-EPROBE_DEFER` from the hook, an `-ENOENT` just skips it.
+`dynamic_debug` on `soc-core.c` gave the real line -- `platform component (null) not
+found for link FE_NORMAL_AP01` -- and the missing platform was `/sprd-pcm-audio`,
+which had failed with `-ETIMEDOUT` ("deferred probe timeout, ignoring dependency").
+This kernel's `driver_deferred_probe_timeout` defaults to **0**, so a module device
+that probes before its genpd provider exists fails for good -- and 0010 v2 registers
+the agdsp provider only at mailbox setup.  A pure race, which is why the same image
+had a card in the morning and none in the evening.  `e5-audio-dsp` re-probes every
+unbound `agdsp-power-domain` consumer (their devlinks list them).  Do not "fix" it with
+`deferred_probe_timeout=` on the cmdline: `=30` killed the kernel before the initramfs.
+
+**The gpio still mattered -- for the amp.**  The dtb's `<0 1 1 0>` selects
+`hook_general_spk_for_aw87xxx`, which drives the amp over i2c only, but the parser
+looked the gpio up *first* and dropped the hook, so the aw87xxx sat in profile "Off"
+in every Linux test until then.  `kernel/patches/0012`.  Manual stand-in:
+`echo Music > /sys/bus/i2c/devices/6-0058/profile`.  `Speaker Mute=1` forces the hook
+to on=0 on this kernel (need_mute), so it must stay 0 even though Android's playing
+mixer reads 1.
+
+**Periods.**  Both `sprd_dma` lines stay at 0 even with the DSP booted, so
+`kernel/patches/0013` ticks `snd_pcm_period_elapsed()` from an hrtimer at the period
+rate and always programs the DMA without interrupts; `pm_splk_dma_prot` became
+irqsave (24.4's soft lockup), the tick is try-cancelled in trigger and cancelled
+synchronously in hw_free/close.  Module param `period_timer=0` restores the old path.
+
+**What made it audible, beyond a routed and powered DAPM graph** (diffing codec, VBC
+and aw87xxx registers *while playing* against Android found both):
+
+* The DSP profile selects.  Android plays with `Audio Structure Profile Select = 0`
+  and `DSP VBC Profile Select = 0x404B0000`.  The controls are declared
+  `max 0x0fffffff`, so amixer clamps 0x404B0000 to 0x0fffffff -- which the driver
+  then applies as dsp_case 0xffff.  The kernel `put()` does not range-check:
+  `/opt/e5/e5-ctl-raw` writes the element value directly.
+* `VBC_IIS_MST_WIDTH_SET` = `MST_WD_16BIT`.  The enum's items are `MST_WD_24BIT` /
+  `MST_WD_16BIT`, and tinymix prints them as `WD_16BIT`; a route written from the
+  tinymix dump silently matched nothing.
+* With both right, `ANA_CDC7` reads 0x000f (AO buffer DC calibration done), as on
+  Android.
+
+**Traps.**
+
+* `e5-audio-dsp start` did `set -- $(od ... ldinfo)` and then called
+  `do_profiles "${2:-}"` -- the MODE argument was the ldinfo size by then, so every
+  cold start selected garbage profiles.  Save positional arguments before reusing `$@`.
+* The "IMPD ENABLE" control oopses (strcmp NULL in the headset regulator lookup) if
+  written before the headset's codec-side probe fills its regulator table; with
+  `panic_on_oops` that is a panic.  An `alsactl` pass at 57 s did exactly that on two
+  boots in a row and LK fell back to slot a.  `kernel/patches/0014`.  Who ran that
+  alsactl was never found (not the shadowed alsa-restore unit, not udev's rule).
+* `alsa-restore.service` must be shadowed by a *regular file*: `boot/init` copies the
+  overlay with `find -type f`, so a `/dev/null` symlink never arrives.  The store at
+  shutdown is what keeps recreating `asound.state`.
+* PipeWire's ACP builds a pro-audio profile by opening, configuring and preparing
+  every PCM.  On this card that is 19 DSP scenes, most failing with "no backend DAIs
+  enabled" (840 failed PREPAREs in 15 s), and it kept wireplumber at 100 % of a core
+  for minutes after every login.  PipeWire 1.4.2 has no switch for it; a WirePlumber
+  rule turns ACP off for the card and creates only the hw:N,3 node.  UCM still owns
+  the route (`e5-audio-dsp routes` = `alsaucm set _verb HiFi set _enadev Speaker`).
+  The ALSA card *driver* name is the card name cut to 15 characters,
+  `sprdphone-sc273`, which is what the UCM directory has to be called; UCM also needs
+  `alsa-ucm-conf` for `ucm2/ucm.conf`.
+* Raw ioctl players: a hw_params mask must be *set* exclusively -- OR-ing a bit into
+  the all-ones `any()` mask pins nothing, access falls to MMAP_INTERLEAVED and every
+  WRITEI returns EINVAL.  Period 1024 is refused; 960 (20 ms) works.  Capture on
+  FE_NORMAL_AP01 is IRAM-backed and capped at 3840 frames / 3 periods.
+* Capture does not work yet: the capture DMA never moves (hw_ptr stays 0, arecord
+  EIO), on NORMAL_AP01 and on the DSP capture FE alike -- a separate problem.
+* Rebuilding modules on the Mac: a single-target `make` runs modpost with vmlinux's
+  exports only (sibling exports are "undefined") and rewrites `Module.symvers` as
+  vmlinux + those targets.  `work/build-audio-modules.sh` builds the set together
+  with `KBUILD_MODPOST_WARN=1`, ships only modules whose imports all resolved, and
+  restores the full `Module.symvers`.  Host tools need `C_INCLUDE_PATH=work/hostinc`
+  (elf.h) and Homebrew LLVM first in PATH.
+* A panicked Linux leaves the rootfs journal dirty: mounting `rootfs.ext4` read-only
+  from Android needs `-o ro,noload`, and SELinux must be permissive for the loop
+  read (`shell_data_file`); set it back to enforcing afterwards.
 
 ## 25. The first on-device takeover: `unisoc-cpd` as the only reader of the AT channel (G2)
 
@@ -2731,3 +2819,72 @@ With the password reset, the ownership fixed and the no-display-manager change r
 SDDM autologins into phosh and touch, the physical keys and phosh-osk-stub (the on-screen
 keyboard) all work.  The X11 greeter works too, since X is installed -- anyone who wants
 a login screen only has to clear Autologin/User.
+
+## 28. Traps from the work log
+
+Moved here from `docs/STATUS.md` when its dated sections were cleared; each one cost
+at least a session.
+
+* **The initramfs overlay is baked into the flashed image and wins on every boot.**
+  `boot/init` copies `e5-overlay/` over the root filesystem each time, so a file pushed
+  onto the device by hand is reverted by the next reboot if the *flashed* image carries
+  an older copy (files the image does not carry at all survive).  That is how the
+  hotspot came back on 2.4 GHz channel 6, how the device's `sddm.conf.d` kept naming
+  `plasma-mobile.desktop`, and how a power-key drop-in "disappeared".  Edit
+  `rootfs/overlay/`, rebuild with `boot/build-boot-image.py --overlay rootfs/overlay`,
+  flash.  The copy is `find -type f`: symlinks in the overlay are dropped, so a
+  `/dev/null` mask has to be a regular shadow unit instead.
+* **`systemctl restart sddm` takes the screen away until a reboot.**  SDDM's default
+  `DisplayServer` is x11; with no `/usr/bin/X` it retries three times, fails, and
+  exports `DISPLAY=:0` into the session, so phosh exits with `cannot open display: :0`
+  and `mobi.phosh.Shell.service` hits "Start request repeated too quickly".
+  `DisplayServer=wayland` in `etc/sddm.conf.d/10-e5.conf` is the fix; a reboot is the
+  recovery.
+* **Both boot slots once held Linux images.**  `boot_a` had been overwritten with a
+  Linux image, so every "back to Android" landed in Linux again (LK still logs
+  `ANDROID: Booting slot_a`).  Before arming slot b, check that `boot_a` hashes to the
+  stock Android image.
+* **A reconnect storm got the IoT SIM barred (2026-09-18).**  After a network-side
+  detach (`+CGEV: NW DETACH`, `+SPERROR: 14,27`), `e5-mobile-data`
+  (`Restart=on-failure`) and its watcher (`Restart=always`, 15 s) retried the bring-up
+  continuously -- `SFUN=2/4`, `CEREG` polls, `CGACT` -- amplified by `sim-reset`
+  (`SFUN=5/3`) and manual pokes.  The card was then refused on Android too
+  (emergency only, healthy LTE cell, `PS is rejected`).  A guard was written that night
+  (5 failures in 30 min, watcher backoff 60 s -> 30 min, no `Restart=` on the data
+  unit, no `SFUN=5/3` in `sim-reset`, which left the SIM undetected until a reboot) --
+  and the 2026-09-19 straight port of mu300's `mobile-data` dropped it on purpose.
+  **The current tree has no storm guard**: `e5-mobile-data.service` is
+  `Restart=on-failure` and `sim-reset` sends `SFUN=5/3` again.  `unisoc-cpd`
+  (section 25) is meant to own the bearer instead.  Lifting a bar is the operator's
+  call.
+* **`btattach` holds up shutdown.**  It ignores SIGTERM and outlived the final
+  SIGKILL; `e5-bt-attach.service` has `KillSignal=SIGKILL` + `TimeoutStopSec=2`, and a
+  `system.conf.d` drop-in caps `DefaultTimeoutStopSec` at 5 s so a watchdog reboot
+  never waits on vendor teardown.
+* **From Android, arm slot b and reset with sysrq** (24.5): a clean `adb reboot` lets
+  Android's init rewrite the A/B metadata back to slot a.
+* **ADB on the Linux side was tried and taken back out (2026-09-18).**  What the
+  attempt established: configfs accepts a new function (`functions/ffs.adb` and its
+  link into `configs/c.1/`) while the gadget is bound, but a FunctionFS function cannot
+  be *bound* until a daemon holds its `ep0` -- adding `ffs.adb` to the boot-time gadget
+  makes the composite bind fail and the board loses USB entirely, network and console
+  alike.  The working order is add function, mount FunctionFS, start `adbd`, and only
+  then (re)bind; and an explicit `echo '' > UDC` + rebind twice left the gadget
+  half-configured (ACM back, NCM gone) until a power cycle, which is why
+  `e5-gadget-guard` rebinds only an *empty* UDC.  Telnet on the management LAN and the
+  serial console are the ways in instead (section 26).  Two side lessons from the same
+  day: an overlay script's mode is the mode git records (`git add --chmod=+x`, or
+  `status=203/EXEC`), and `After=network.target` on the hotspot plus
+  `Before=network.target` on the unit it wanted made a `Transaction order is cyclic`.
+* **One bridge for the USB LAN and the hotspot cost a day and was reverted
+  (2026-09-21).**  br0 on 192.168.9.0/24 with usb0 and the AP as ports is right on paper,
+  but it stacked two layers that fail silently on this SoC: systemd-networkd's rtnl
+  requests time out against the sprd pseudo-interfaces, leaving br0 an empty shell (no
+  ports, no address, no DHCP); and hostapd's `bridge=br0` places the AP port only if
+  the bridge already exists -- otherwise the AP serves clients that never get a lease.
+  An interface hostapd owns cannot be enslaved afterwards (silently refused), and `iw`
+  cannot change the type of an enslaved interface ("Interface wlan0 wasn't started").
+  Two LANs it is: usb0 192.168.77.1, wlan0 192.168.9.1.  The revert missed three
+  bridge-only comments and the bounded `systemctl restart systemd-networkd/dnsmasq`
+  step in `hotspot-start.sh`, and trimmed the dnsmasq/networkd comments; the history
+  cleanup of 2026-09-25 put all of that back to the pre-bridge state.

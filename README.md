@@ -72,7 +72,7 @@ channels that survive a failed boot.
 | Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
 | Bluetooth | ⏳ **open** — the controller attaches and `hci0` comes up (`e5-bt-attach.service` holds `/dev/ttyBT0`), bluez reports `Powered: yes`, and scans have found devices (7 LE, 4 BR/EDR); but one attach can fail and never recover, and after repeated BT power cycles the chip stops answering the scan commands (`0x2041`/`0x2042 tx timeout`), so a scan can come up empty. Pairing/connecting untested (one settings-app attempt: `Page Timeout`). BD address is the chip's default, not the factory MAC -- docs/STATUS.md "open" list and docs/FINDINGS.md section 8.7 |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
-| Modem, data bearer | ✅ [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) owns the CP at boot (the Android `modem_control` runs in a chroot to start it); 5G SA registers and `e5-bearer-up` brings the bearer up on `sipa_eth0` — FINDINGS §25 |
+| Modem, data bearer | ✅ [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) owns the CP at boot (the Android `modem_control` runs in a chroot to start it); 5G SA registers and `e5-bearer-up` brings the bearer up on `sipa_eth0`; `e5-bearer-watch.timer` brings it back after a CP reset — FINDINGS §25, §30 |
 | Modem web page | ✅ `unisoc-cpd web` on `http://192.168.9.1:7887` (USB port only, no authentication) |
 | UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
 | Hotspot | ✅ `hostapd` on 5 GHz ch149 / 80 MHz, SSID `E5-Linux`, on `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) |
@@ -187,7 +187,7 @@ rootfs/stage-unisoc-cpd.sh       # builds, copies, applies the Linux-side edits
 ```
 
 The script is the only way that copy should change: it turns off the profile's
-Android-only NAT, binds the web page to the management LAN and records the commit in
+Android-only NAT, binds the web page to the LAN (`192.168.9.1`, reachable from the USB port only) and records the commit in
 `etc/unisoc-cpd/VERSION`.
 
 ### 3. Root filesystem (fresh install)
@@ -227,7 +227,7 @@ session never asks).
 The modem is the one piece that is **not** in the image.  The Android vendor subset
 is proprietary and is neither committed nor packed; install it once the system is up
 (it survives, the loop file is writable).  Userdata is not mounted under Linux, so it
-goes over the management LAN:
+goes over the USB LAN:
 
 ```sh
 tar -C work -cf work/android-subset.tar android-subset
@@ -292,7 +292,7 @@ panics. To boot the Linux image already in
 boot/android-boot-linux.sh boot-linux-slotb.img
 ```
 
-Every later image can be flashed from the running e5-linux over the management LAN,
+Every later image can be flashed from the running e5-linux over the USB LAN,
 with no Android round trip: it serves the image over HTTP, writes and verifies
 `boot_b`, arms slot b and reboots.
 

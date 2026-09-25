@@ -11,24 +11,18 @@ FINDINGS.
 
 - **Audio: the speaker plays through plain ALSA and PipeWire (2026-09-25).**
   FINDINGS 24.8 has the chain (kernel `0012`-`0014`, UCM route, profile selects,
-  WirePlumber rule).  What is left:
-  1. **The device runs an older overlay.**  The flashed image is
-     `work/boot-linux-slotb-audio3.img`, built before the WirePlumber rule, the
-     `e5-base-perms` manifest and the new `rootfs-fixups`.  Without the rule, ACP
-     probes all 19 front ends after every login and wireplumber sits at 100 % of a
-     core for minutes -- the "whole system is slow" of the first minutes of a
-     session.  Rebuild with `--overlay rootfs/overlay`, flash, check that
-     wireplumber is idle right after login and `wpctl status` shows one Speaker sink.
-  2. **The three rebuilt modules were installed on the device by hand** (the
-     originals are kept as `*.ko.orig` in `/usr/lib/modules/<rel>/audio/`):
+  WirePlumber rule).  The flashed image (`work/boot-linux-slotb-load2.img`) carries
+  the current overlay; `wpctl status` shows one Speaker sink.  What is left:
+  1. **Four rebuilt audio modules were installed on the device by hand** (originals
+     as `*.ko.orig` in `/usr/lib/modules/<rel>/audio/`, and `/root/agdsp_pd.ko.bak`):
      `snd-soc-sprd-card` (0012), `sprd-dmaengine-pcm` (0013),
-     `snd-soc-sprd-codec-ump9620` (0014).  A fresh rootfs gets them only after
-     `kernel/build-linux.sh` (or `work/build-audio-modules.sh`) +
-     `boot/stage-modules.sh`, so that `configure-rootfs.sh` stages them.
-  3. **Capture does not work**: the capture DMA never moves (hw_ptr stays 0,
+     `snd-soc-sprd-codec-ump9620` (0014), `agdsp_pd` (0010 without its retry).  A
+     fresh rootfs gets them from `out_linux` via `configure-rootfs.sh`, which now
+     holds the current build.
+  2. **Capture does not work**: the capture DMA never moves (hw_ptr stays 0,
      `arecord` EIO), on FE_NORMAL_AP01 and on the DSP capture FE alike.  The UCM
      profile has no capture device until it does.
-  4. `VBC_*_DEV_CHANGE=TYPE_SPK` fails at boot (the DSP is not answering yet at
+  3. `VBC_*_DEV_CHANGE=TYPE_SPK` fails at boot (the DSP is not answering yet at
      that point); Android plays with both at `TYPE_INIT`, so the route leaves them
      alone.  Revisit only if a scene switch needs them.
 - **One `boot/flash-from-linux.sh` run rebooted straight into Android (2026-09-25).**
@@ -41,10 +35,11 @@ FINDINGS.
   side).**  It holds both SIPC channels, serves capabilities on a unix socket,
   decodes the URC stream, re-arms the SMS surface, reads MT SMS and re-established
   the data bearer over `cbnet`; MO SMS works too (FINDINGS 25.7).  Still open: the
-  72 h soak, and the same takeover at boot on the Linux side.  On the Linux boot of
-  2026-09-25 `unisoc-cpd.service` was stuck in `activating` with `e5-atd` and
-  `e5-mobile-data` inactive -- so the Linux side currently has no bearer.  Note that
-  the mu300-port `mobile-data` has no reconnect-storm guard (FINDINGS 28).
+  72 h soak.  On the Linux side it now owns the CP at boot too: `unisoc-cpd` and
+  `e5-bearer-up` come up active (5G SA registered, bearer on `sipa_eth0`), and its web
+  page answers on `http://192.168.77.1:7887` (management LAN only; no auth).  The page
+  is slow on first open: the daemon serves one request at a time (2-6 s each) and the
+  page fires about seven at once.
 - **Bluetooth: the attach race and the dead scans (open, 2026-09-18).**
   `docs/FINDINGS.md` section 8.7.  What works: the controller initialises, `hci0`
   comes up with the chip's own BD address, bluez reports `Powered: yes`, and scans
@@ -73,10 +68,13 @@ FINDINGS.
   measurement (FINDINGS 23) had everything stopped in 1.3 s and then ~32 s of NM
   waiting on WCN device teardown; NM is no longer installed, so measure again before
   believing either number.
-- **The hotspot script changed in the history cleanup and needs one run on the device.**
-  `hotspot-start.sh` is back to its pre-bridge form (the bridge revert of 2026-09-21
-  had left the bounded networkd/dnsmasq restart out, FINDINGS 28); flash an image with
-  the current overlay and check that a client gets a lease.
+- **The hotspot needs one client test.**  `hotspot-start.sh` is back to its pre-bridge
+  form and no longer makes the `wcnmodem` loop device (FINDINGS 29); on load2 wlan0
+  comes up with 192.168.9.1.  Check that a client associates and gets a lease.
+- **UFI-TOOLS shows no signal on 5G SA.**  `lte_rsrp` is empty and
+  `network_signalbar` 0 while registered on NR SA: `modem.py` derives both from
+  `AT+CESQ`'s LTE fields only.  Login is `admin` until changed (`ufi-tools set-token`
+  or the web UI; it survives reboots now).
 - **GPU: the two open ends left by panfrost.**  The backport itself is done
   (`kernel/patches/0005`, `MALI_MIDGARD=m`, `docs/FINDINGS.md` 20.7) and clients
   render on `Mali-G57 (Panfrost)`; what is left is (a) the scanout buffers are still
@@ -115,13 +113,13 @@ FINDINGS.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); the audio modules carry `0010-0014`; slot-b boot |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0015`; slot-b boot; console level 4 on the real root (FINDINGS 29) |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | audio | speaker plays through ALSA (`hw:N,3`, UCM verb HiFi / device Speaker) and PipeWire; AGDSP booted from `l_agdsp_a` by `e5-audio.service`; period events from an hrtimer; no capture |
-| baseband | `unisoc-cpd` (Rust) owns the CP on the Android side (FINDINGS 25); the Linux-side boot takeover is not working yet |
+| baseband | `unisoc-cpd` (Rust) owns the CP on both sides (FINDINGS 25); on Linux it starts at boot with the bearer, web page on `192.168.77.1:7887` |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs; MAC is random per boot |
 | hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (VHT80, centre 155), a client reported 80 MHz; no AP+STA concurrency |
 | bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |

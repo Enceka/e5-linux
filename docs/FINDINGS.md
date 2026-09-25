@@ -572,6 +572,8 @@ with **no** `no find wcnmodem.bin` line anywhere, and
 
 for the GNSS half.  So the real requirement is the one section 8.1 already states --
 `wcnmodem.bin` present in `/lib/firmware` -- and the loop device was never necessary.
+(Worse than unnecessary, as it turned out: a read-write loop over the file makes
+`request_firmware()` fail with `ETXTBSY`; section 29.)
 The chip comes up because the initramfs overlay materialises the firmware before the
 module pass.
 
@@ -2018,9 +2020,10 @@ Four things, in the order they were discovered:
    in the world domain (`country 00`).  With a valid database `iw reg set CN` finally takes
    effect -- `country CN: DFS-FCC` with real rules -- and before that it silently did
    nothing, which is why every channel read `NO-IR`.
-3. **The DT's `wcnmodem` partition** is still faked with a loop device over
-   `/lib/firmware/wcnmodem.bin`; the service gates on that file rather than on the node the
-   script creates.
+3. **The DT's `wcnmodem` partition** was still faked with a loop device over
+   `/lib/firmware/wcnmodem.bin` here.  It was never needed (8.3) and was later found to
+   break the firmware load outright (`ETXTBSY`, section 29); it is gone.  The service
+   gates on the firmware file.
 4. `wlan0` must be free: `wpa_supplicant.service` stopped and masked, and the interface
    marked unmanaged in NetworkManager.
 
@@ -2832,7 +2835,8 @@ at least a session.
   hotspot came back on 2.4 GHz channel 6, how the device's `sddm.conf.d` kept naming
   `plasma-mobile.desktop`, and how a power-key drop-in "disappeared".  Edit
   `rootfs/overlay/`, rebuild with `boot/build-boot-image.py --overlay rootfs/overlay`,
-  flash.  The copy is `find -type f`: symlinks in the overlay are dropped, so a
+  flash.  (`/var/lib/*` is the exception since 2026-09-25: it is state, so the overlay
+  only seeds it when the file is missing -- UFI-TOOLS' token lives there.)  The copy is `find -type f`: symlinks in the overlay are dropped, so a
   `/dev/null` mask has to be a regular shadow unit instead.
 * **`systemctl restart sddm` takes the screen away until a reboot.**  SDDM's default
   `DisplayServer` is x11; with no `/usr/bin/X` it retries three times, fails, and
@@ -2888,3 +2892,72 @@ at least a session.
   bridge-only comments and the bounded `systemctl restart systemd-networkd/dnsmasq`
   step in `hotspot-start.sh`, and trimmed the dnsmasq/networkd comments; the history
   cleanup of 2026-09-25 put all of that back to the pre-bridge state.
+
+## 29. "High load at boot": what the number was made of (2026-09-25)
+
+The load average read 8.8 one minute after boot and never went below 6, which looked
+like a busy system and matched the session feeling sluggish.  It was three separate
+things, and only one of them was CPU.
+
+**The floor of 6 was accounting.**  A five-second `/proc/stat` delta was 99.4 % idle
+and `/proc/pressure/cpu` read 0.06 %, while six vendor kernel threads sat permanently
+in `D` (uninterruptible sleep), each of which counts in the load average:
+
+| thread | wait | module |
+|---|---|---|
+| `sdiohal_tx_thread`, `sdiohal_rx_thread` | `wait_for_completion()` | `wcn_bsp` |
+| `pub_int_handle_thread` | `wait_for_completion()` | `wcn_bsp` |
+| `62110080.time_sync_ch` | `TASK_UNINTERRUPTIBLE` + `schedule()` | `sprd_time_sync_ch` |
+| `slog-0-0` | `msleep(2000)` until `log_transport`, which nothing on Linux sets | `slog_bridge` |
+| `agdsp_access` | `msleep(200)` in a retry loop | `agdsp_pd` |
+
+`kernel/patches/0015` puts the first five to sleep the way idle kernel threads should
+(interruptible completions -- kernel threads ignore every signal, so nothing else
+changes -- `TASK_IDLE`, `msleep_interruptible()`).  The sixth was ours: 0010 had
+taught `agdsp_access_init_thread()` to retry `smsg_ch_open()` on `-ENODEV`, on the
+theory that the audio SIPC target did not exist *yet*.  It never exists:
+`agdsp_pd_probe()` initialises `dst = 0, channel = 0` and never reads either from the
+DT, and SIPC target 0 is the AP itself.  The vendor code logs one `Failed to open
+channel 0,dst=0,rval=-19` and lets the thread end; audio works without it (it did all
+along, with the thread spinning).  The retry is gone from 0010.
+
+**The console cost real time.**  The bootloader's command line is Android's
+(`console=ttyS1,115200n8`, `initcall_debug=1`, `rcupdate.rcu_expedited=1`, ...), our
+`console=`/`loglevel=` do not survive into it, and `boot/init` set the console level
+to 7.  printk writes to the console synchronously in whoever printed:
+
+    console level 7:  10.3 ms per info line (200 lines to /dev/kmsg, timed)
+    console level 4:  ~0
+
+and `sprd_drm` prints three info lines on every atomic commit (3371 of the 7282 lines
+in the first nine minutes), so each phoc screen update stalled ~30 ms in the kernel;
+the Wi-Fi driver logs per ARP/DNS packet.  `etc/sysctl.d/10-e5-printk.conf` sets
+`kernel.printk = 4 4 1 7` once the real root is up (the initramfs keeps 7, where the
+serial console is the only witness).  The ring buffer, the journal and pstore's panic
+dump keep every level.  `rcu_expedited` stayed 1 for the life of the system -- every
+`synchronize_rcu()` an IPI to all eight cores -- and `etc/tmpfiles.d/e5-rcu.conf`
+turns it off once userspace is up.
+
+**The worst boots also lost Wi-Fi, and that was the loop device.**  `hotspot-start.sh`
+still attached `/lib/firmware/wcnmodem.bin` to a read-write loop device for the DT's
+`/dev/block/by-name/wcnmodem`, although 8.3 had already shown the loader is the real
+path.  The driver's partition reader is compiled out altogether
+(`FIRMWARE_PARTITION_DEBUG_EN` is never defined, so `btwf_load_firmware_data()` returns
+NULL), and a read-write loop over the file makes `request_firmware()` fail with
+`ETXTBSY`:
+
+    loading /lib/firmware/wcnmodem.bin failed with error -26
+    marlin_download_from_partition buff is NULL
+    marlin download timeout ... sprd-wlan: failed to power on WCN!
+
+After one failure `is_btwf_in_sysfs` is set for the rest of the boot (the same sticky
+flag as GNSS in 8.3), so a WCN power-on that landed after the `losetup` -- usually
+Bluetooth's -- cost Wi-Fi until the next reboot, with hostapd retrying into its start
+timeout and dragging `user@1000` and networkd-wait-online down with it.  Two boots out
+of three that day did it.  The loop device is gone.
+
+Measured on the image with all of it (load2):
+
+    before:  load 8.8 at 1 min, 6.2 at 10 min; userspace 42.0 s; 6 threads in D
+    after:   load 3.5 at 1 min, 0.64 at 4 min; userspace 25.1 s; none in D;
+             no failed units, hotspot up, zero WCN download failures

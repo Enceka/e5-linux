@@ -2961,3 +2961,60 @@ Measured on the image with all of it (load2):
     before:  load 8.8 at 1 min, 6.2 at 10 min; userspace 42.0 s; 6 threads in D
     after:   load 3.5 at 1 min, 0.64 at 4 min; userspace 25.1 s; none in D;
              no failed units, hotspot up, zero WCN download failures
+
+## 30. A CP reset nobody recovered from, and IPv6 for the hotspot (2026-09-26)
+
+**The CP asserts, and the device stays offline.**  At 00:24:11 the modem firmware
+asserted on its own -- `/var/log/e5-android-log.txt` (modem_control's log through
+`logdw.py`):
+
+    Modem Assert: LASM Task  PS CP assert in file PS/sdi/common/msg/sdi_msg_iram.c
+    line 98 exp=MM Task 's Q full info=[], [dfs=5]
+
+One assert in that log, which spans every boot since 22:32 the day before; what
+filled the MM task's queue is not known (the unisoc-cpd page and UFI-TOOLS were both
+polling at the time -- correlation, not a cause).  What followed is ours:
+
+1. `modem_control` waits for "dump complete" before it resets the CP, which on
+   Android the CP log daemon sends.  Nothing on Linux does, so every assert costs its
+   full 300 s timeout (00:24:11 -> 00:29:11 `Modem Reset`).
+2. The CP comes back at `+CFUN: 0` with no context.  Android's RIL turns the radio
+   on after a reset; `e5-bearer-up` did one pass at boot and was done, so the device
+   stayed offline with a stale IPv4 address on `sipa_eth0`.
+3. `unisoc-cpd data up` flushes `sipa_eth0` before it adds the IPv4 address, which
+   also removes the link-local.  With no link-local the kernel sends no router
+   solicitation, so after any re-bring-up IPv6 was gone until the next boot.
+
+`e5-bearer-watch.timer` now looks once a minute -- one `AT+CGACT?`, the CP is
+sensitive to AT volume (25.3) -- and restarts `e5-bearer-up` when context 1 is not
+active; the retrying stays in that unit.  Tested by dropping the context by hand
+(`AT+CGACT=0,1`): bearer, new IPv4 address and new IPv6 prefix back within a
+minute.  The 300 s dump wait is still there.
+
+**IPv6 pass-through.**  The context is `IPV4V6` (`AT+CGDCONT`), and the network side
+is the 3GPP arrangement: `+CGPADDR` carries only an interface identifier (upper 64
+bits zero), and the RA on `sipa_eth0` has the prefix **autonomous but not on-link**
+-- no `/64 dev sipa_eth0` route, the interface is NOARP ("Device does not do
+neighbour discovery"), and the whole /64 is routed to the UE.  So it can be moved to
+one downstream link without any NDP proxy (a /64 can only be on one link; the
+hotspot gets it, usb0 does not).  `opt/e5/e5-ipv6-share`:
+
+* `accept_ra=2` on the uplink: with `net.ipv6.conf.all.forwarding=1` the kernel
+  ignores RAs on `accept_ra=1` interfaces, and turning forwarding on at runtime also
+  purges the RA-learned default router (the carrier's unsolicited RAs are hours
+  apart, so the script re-solicits by re-adding the link-local when there is no
+  default route);
+* the uplink link-local from the `+CGPADDR` interface identifier;
+* `<prefix>::1/64` on wlan0, dropping the prefix of an earlier bearer.
+
+dnsmasq advertises it (`constructor:wlan0,ra-stateless`), RDNSS pointing at the
+global `::1` (`option6:dns-server,[::]` -- without it dnsmasq advertised its
+link-local); decoded from a solicitation on wlan0: `prefix/64 L=1 A=1 valid 3600`,
+`MTU 1500`, `RDNSS <prefix>::1`.  `table inet e5fw6` is a home-router firewall:
+replies and the ICMPv6 PMTU/diagnostics need come in, new inbound connections from
+`sipa_eth*` are dropped.
+
+Checked with a client simulated in a network namespace at `<prefix>::c1`: ping and a
+725 KB HTTP download over IPv6 from that address -- the carrier delivers traffic for
+any address in the /64, not only the device's own.  A real Wi-Fi client has not been
+tried yet.

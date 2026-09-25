@@ -1,0 +1,53 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] ASoC: sprd: register the aw87xxx speaker hook without a gpio
+
+The E5's stock dtb selects hook 1 (hook_general_spk_for_aw87xxx) with
+sprd,spk-ext-pa-info = <0 1 1 0> and has no sprd,spk-ext-pa-gpio at all:
+that hook drives the amp over i2c through aw87xxx_set_profile() and never
+touches a gpio.  The parser looked the gpio up before checking which hook
+it had, got -ENOENT ("Get gpio failed:-2!"), and dropped the hook -- so
+the Speaker DAPM event never switched the aw87xxx out of its "Off"
+profile and playback was silent.
+
+Match the aw87xxx hook first and skip the gpio lookup for it.
+
+---
+diff --git a/sound/soc/sprd/unisoc/machine/sprd-asoc-card-utils-hook.c b/sound/soc/sprd/unisoc/machine/sprd-asoc-card-utils-hook.c
+index ba07f36ac..5f6edb347 100755
+--- a/sound/soc/sprd/unisoc/machine/sprd-asoc-card-utils-hook.c
++++ b/sound/soc/sprd/unisoc/machine/sprd-asoc-card-utils-hook.c
+@@ -326,6 +326,21 @@ static int sprd_asoc_card_parse_hook(struct device *dev,
+ 			continue;
+ 		}
+ 
++		/*
++		 * The aw87xxx hook drives the amp over i2c (aw87xxx_set_profile)
++		 * and never touches a gpio, and this board's dtb carries no
++		 * "sprd,spk-ext-pa-gpio" at all.  Looking the gpio up first
++		 * failed with -ENOENT and dropped the hook, so the amp was never
++		 * switched out of its "Off" profile when the speaker powered up.
++		 */
++		if (!strcmp(ext_hook_arr[hook_sel].name,
++			    "hook_general_spk_for_aw87xxx")) {
++			hook_spk_priv.gpio[ext_ctrl_type] = -1;
++			pr_info("ext_ctrl_type %d hook_sel %d priv_data %d: aw87xxx over i2c, no gpio\n",
++				ext_ctrl_type, hook_sel, priv_data);
++			continue;
++		}
++
+ 		ret = of_get_named_gpio_flags(np, prop_pa_gpio, i, NULL);
+ 		if (ret < 0) {
+ 			dev_err(dev, "Get gpio failed:%d!\n", ret);
+@@ -336,12 +351,6 @@ static int sprd_asoc_card_parse_hook(struct device *dev,
+ 
+ 		pr_info("ext_ctrl_type %d hook_sel %d priv_data %d gpio %d",
+ 			ext_ctrl_type, hook_sel, priv_data, ret);
+-		if (!strcmp(ext_hook_arr[hook_sel].name,
+-			    "hook_general_spk_for_aw87xxx"))
+-		{
+-			pr_info("Gpio[%d] will be requested by sipa driver owi,\n",hook_spk_priv.gpio[ext_ctrl_type]);
+-			continue;
+-		}
+ 		gpio_flag = GPIOF_DIR_OUT;
+ 		gpio_flag |= ext_hook_arr[hook_sel].en_level ?
+ 			GPIOF_INIT_HIGH : GPIOF_INIT_LOW;

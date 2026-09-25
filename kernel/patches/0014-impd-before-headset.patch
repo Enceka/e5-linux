@@ -1,0 +1,65 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] ASoC: ump9620: IMPD ENABLE must not oops before the headset is up
+
+sprd_hdst is published by the headset platform probe, but its regulator
+table is only filled in by the later codec-side probe.  A write to the
+"IMPD ENABLE" control in between -- alsactl restore did it at boot -- runs
+the impedance measurement, whose regulator lookup strcmp()s a NULL name:
+NULL dereference, panic (panic_on_oops), and a reboot loop that ended in
+the slot-a fallback twice.
+
+impd_get_impd_val() now returns 0 until the table is complete, and the
+control only measures when it is switched on, returning 1 on a change.
+
+---
+diff --git a/sound/soc/sprd/unisoc/codec/ump9620/codec/sprd-codec.c b/sound/soc/sprd/unisoc/codec/ump9620/codec/sprd-codec.c
+index 114763b..774c293 100644
+--- a/sound/soc/sprd/unisoc/codec/ump9620/codec/sprd-codec.c
++++ b/sound/soc/sprd/unisoc/codec/ump9620/codec/sprd-codec.c
+@@ -4334,13 +4334,19 @@ static int sprd_hf_impd_cal_put(struct snd_kcontrol *kcontrol,
+ 	struct snd_soc_component *codec = snd_soc_kcontrol_component(kcontrol);
+ 	struct sprd_codec_priv *sprd_codec = snd_soc_component_get_drvdata(codec);
+ 
+-	sprd_codec->impd_en = !!ucontrol->value.integer.value[0];
++	bool en = !!ucontrol->value.integer.value[0];
++
++	if (en == sprd_codec->impd_en)
++		return 0;
++	sprd_codec->impd_en = en;
+ 	sp_asoc_pr_info("%s impd_en %d\n", __func__,
+ 			sprd_codec->impd_en);
+ 
+-	impd_get_impd_val();
++	/* measure on enable only; switching it off needs no measurement */
++	if (en)
++		impd_get_impd_val();
+ 
+-	return 0;
++	return 1;
+ }
+ 
+ static int sprd_delay_time_get(struct snd_kcontrol *kcontrol,
+diff --git a/sound/soc/sprd/unisoc/codec/ump9620/codec/sprd-headset-ump9620.c b/sound/soc/sprd/unisoc/codec/ump9620/codec/sprd-headset-ump9620.c
+index b9052b6..e747e8f 100644
+--- a/sound/soc/sprd/unisoc/codec/ump9620/codec/sprd-headset-ump9620.c
++++ b/sound/soc/sprd/unisoc/codec/ump9620/codec/sprd-headset-ump9620.c
+@@ -1419,6 +1419,19 @@ u32 impd_get_impd_val(void)
+ {
+    struct sprd_headset *hdst = sprd_hdst;
+ 
++   /*
++    * The "IMPD ENABLE" mixer control lands here, so any ALSA client can
++    * call it at any time.  sprd_hdst is published by the platform probe,
++    * but the regulator table is only filled in by the later codec-side
++    * probe (sprd_headset_power_init); in between, the regulator lookup
++    * strcmp()s a NULL name and the kernel dies -- that is what alsactl
++    * restore hit on every boot that lost the race.
++    */
++   if (!hdst || !hdst->power_manager.power[HDST_REGULATOR_COUNT - 1].name) {
++	   pr_warn("%s: headset not ready, no impedance measurement\n", __func__);
++	   return 0;
++   }
++
+    return sprd_headset_get_impd_val(hdst, false);
+ }
+ 

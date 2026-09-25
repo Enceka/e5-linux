@@ -31,21 +31,22 @@ import sys
 import time
 import wave
 
-SNDRV_PCM_IOCTL_PVERSION = 0x8004_1600
-SNDRV_PCM_IOCTL_HW_PARAMS = 0xC260_1611  # _IOWR('A', 0x11, 608 bytes)
-SNDRV_PCM_IOCTL_HW_FREE = 0x4161_1612
-SNDRV_PCM_IOCTL_SW_PARAMS = 0xC068_1613  # _IOWR('A', 0x13, sw_params = 104 on LP64)
-SNDRV_PCM_IOCTL_PREPARE = 0x4161_1640
-SNDRV_PCM_IOCTL_DROP = 0x4161_1643
-SNDRV_PCM_IOCTL_WRITEI_FRAMES = 0x4010_6150  # _IOW('A', 0x50, xferi = 16 on LP64)
+SNDRV_PCM_IOCTL_PVERSION = 0x8004_4100
+SNDRV_PCM_IOCTL_HW_PARAMS = 0xC260_4111  # _IOWR('A', 0x11, 608 bytes)
+SNDRV_PCM_IOCTL_HW_FREE = 0x0000_4112
+SNDRV_PCM_IOCTL_SW_PARAMS = 0xC088_4113  # _IOWR('A', 0x13, sw_params = 104 on LP64)
+SNDRV_PCM_IOCTL_PREPARE = 0x0000_4140
+SNDRV_PCM_IOCTL_DROP = 0x0000_4143
+SNDRV_PCM_IOCTL_WRITEI_FRAMES = 0x4018_4150
+SNDRV_PCM_IOCTL_HWSYNC = 0x0000_4122  # _IOW('A', 0x50, xferi = 16 on LP64)
 
 SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP = 1 << 2
 
 # mask params
 HW_PARAM_ACCESS, HW_PARAM_FORMAT, HW_PARAM_SUBFORMAT = 0, 1, 2
-# interval params (the intervals array starts at param 16)
-HW_PARAM_CHANNELS, HW_PARAM_RATE = 18, 19
-HW_PARAM_PERIOD_SIZE, HW_PARAM_BUFFER_SIZE = 21, 24
+# interval params (the intervals array covers kernel params 8..19)
+HW_PARAM_CHANNELS, HW_PARAM_RATE = 10, 11
+HW_PARAM_PERIOD_SIZE, HW_PARAM_BUFFER_SIZE = 13, 17
 
 ACCESS_RW_INTERLEAVED = 3
 FORMAT_S16_LE = 2
@@ -56,7 +57,12 @@ class Mask(ctypes.Structure):
     _fields_ = [("bits", ctypes.c_uint32 * 8)]
 
     def set(self, index):
-        self.bits[index >> 5] |= 1 << (index & 31)
+        # exclusive: the masks start all-ones (hw_params_any), so OR-ing a bit
+        # in pins nothing -- the kernel then picks the lowest access bit,
+        # MMAP_INTERLEAVED, and every WRITEI_FRAMES fails with EINVAL
+        for word in range(8):
+            self.bits[word] = 0
+        self.bits[index >> 5] = 1 << (index & 31)
 
 
 class Interval(ctypes.Structure):
@@ -81,16 +87,20 @@ class HwParams(ctypes.Structure):
 
 
 class SwParams(ctypes.Structure):
+    # the 5.15 unisoc tree keeps sleep_min and xfer_align: sizeof = 136
     _fields_ = [("tstamp_mode", ctypes.c_int),
-                 ("period_step", ctypes.c_uint32), ("avail_min", ctypes.c_uint32),
-                 ("start_threshold", ctypes.c_uint32), ("stop_threshold", ctypes.c_uint32),
-                 ("silence_threshold", ctypes.c_uint32), ("silence_size", ctypes.c_uint32),
+                 ("period_step", ctypes.c_uint32), ("sleep_min", ctypes.c_uint32),
+                 ("avail_min", ctypes.c_ulong), ("xfer_align", ctypes.c_ulong),
+                 ("start_threshold", ctypes.c_ulong), ("stop_threshold", ctypes.c_ulong),
+                 ("silence_threshold", ctypes.c_ulong), ("silence_size", ctypes.c_ulong),
                  ("boundary", ctypes.c_ulong), ("proto", ctypes.c_uint32),
                  ("tstamp_type", ctypes.c_uint32), ("reserved", ctypes.c_ubyte * 56)]
 
 
 class Xferi(ctypes.Structure):
-    _fields_ = [("buf", ctypes.c_void_p), ("size", ctypes.c_ulong)]
+    # snd_xferi: result first, then buf, then frames: sizeof = 24
+    _fields_ = [("result", ctypes.c_long),
+                ("buf", ctypes.c_void_p), ("frames", ctypes.c_ulong)]
 
 
 def ioctl_checked(fd, req, arg, what):
@@ -108,14 +118,23 @@ def play_file(fd, path, period_frames):
 
         hw = HwParams()
         ctypes.memset(ctypes.byref(hw), 0, ctypes.sizeof(hw))
+        # snd_pcm_hw_params_any(): every mask full and every interval open
+        # before pinning the few we care about.  A zeroed interval reads as
+        # "fixed at 0" and the kernel's refine rejects it with EINVAL.
+        for m in hw.masks:
+            for word in range(8):
+                m.bits[word] = 0xFFFFFFFF
+        for iv in hw.intervals:
+            iv.min, iv.max, iv.flags = 0, 0xFFFFFFFF, 0
+        hw.info = 0xFFFFFFFF
         hw.flags = SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP
         hw.masks[HW_PARAM_ACCESS].set(ACCESS_RW_INTERLEAVED)
         hw.masks[HW_PARAM_FORMAT].set(FORMAT_S16_LE)
         hw.masks[HW_PARAM_SUBFORMAT].set(SUBFORMAT_STD)
-        hw.intervals[HW_PARAM_CHANNELS - 16].set(channels)
-        hw.intervals[HW_PARAM_RATE - 16].set(rate)
-        hw.intervals[HW_PARAM_PERIOD_SIZE - 16].set(period_frames)
-        hw.intervals[HW_PARAM_BUFFER_SIZE - 16].set(period_frames * 4)
+        hw.intervals[HW_PARAM_CHANNELS - 8].set(channels)
+        hw.intervals[HW_PARAM_RATE - 8].set(rate)
+        hw.intervals[HW_PARAM_PERIOD_SIZE - 8].set(period_frames)
+        hw.intervals[HW_PARAM_BUFFER_SIZE - 8].set(period_frames * 4)
         hw.rmask = 0xFFFFFFFF
         ioctl_checked(fd, SNDRV_PCM_IOCTL_HW_PARAMS, hw, "hw_params")
 
@@ -145,12 +164,23 @@ def play_file(fd, path, period_frames):
             now = time.clock_gettime(time.CLOCK_MONOTONIC)
             if next_deadline > now:
                 time.sleep(next_deadline - now)
-            xfer = Xferi(ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p),
+            xfer = Xferi(0, ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p),
                         len(data) // (channels * 2))
-            try:
-                fcntl.ioctl(fd, SNDRV_PCM_IOCTL_WRITEI_FRAMES, xfer, True)
-            except OSError as e:
-                sys.exit(f"write: {e}")
+            # With no period interrupts nothing pushes hw_ptr from the
+            # kernel side: pull it from the DMA hardware via HWSYNC,
+            # then write; retry while the buffer is full.
+            while True:
+                try:
+                    fcntl.ioctl(fd, SNDRV_PCM_IOCTL_HWSYNC, 0)
+                except OSError:
+                    pass
+                try:
+                    fcntl.ioctl(fd, SNDRV_PCM_IOCTL_WRITEI_FRAMES, xfer, True)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.005)
+                except OSError as e:
+                    sys.exit(f"write: {e}")
 
         # DRAIN would wait for a period event that never comes in this mode;
         # let the buffer play out, then DROP.
@@ -165,13 +195,14 @@ def main():
     ap.add_argument("-c", "--card", type=int, default=0)
     ap.add_argument("-d", "--device", type=int, default=0,
                     help="PCM device (default 0 = FE_ST_NORMAL_AP01)")
-    ap.add_argument("-p", "--period", type=int, default=1024,
-                    help="period size in frames (default 1024)")
+    ap.add_argument("-p", "--period", type=int, default=960,
+                    help="period size in frames (default 960 = 20 ms at 48 kHz, "
+                         "what Android uses; 1024 is refused by hw_params)")
     args = ap.parse_args()
 
     dev = f"/dev/snd/pcmC{args.card}D{args.device}p"
     try:
-        fd = os.open(dev, os.O_RDWR)
+        fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK)
     except OSError as e:
         sys.exit(f"{dev}: {e}")
     try:

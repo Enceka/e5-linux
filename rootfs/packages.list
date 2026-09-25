@@ -128,7 +128,11 @@ lsof
 # (docs/FINDINGS.md section 24).  alsa-utils is what drives the mixer (amixer) and
 # what the DSP-liveness probes play through (aplay); PipeWire then finds hw:0
 # answering normally and WirePlumber publishes it as the default sink.
+# alsa-ucm-conf carries ucm2/ucm.conf, the lookup the card's own profile
+# (overlay usr/share/alsa/ucm2/conf.d/sprdphone-sc273/) hangs off: without it
+# WirePlumber probes all 19 front ends and alsaucm finds nothing.
 alsa-utils
+alsa-ucm-conf
 pipewire
 wireplumber
 # PulseAudio/ALSA compatibility for desktop apps (the Android HAL's paths do not

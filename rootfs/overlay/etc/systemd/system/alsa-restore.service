@@ -1,0 +1,11 @@
+# Shadows the alsa-utils unit: no alsactl restore at boot and, more importantly,
+# no alsactl store at shutdown -- that store is what recreated
+# /var/lib/alsa/asound.state for the next boot's restore to trip over.  See
+# /etc/udev/rules.d/90-alsa-restore.rules for why, and /opt/e5/e5-audio-dsp for
+# what sets the mixer instead.  (A regular file: the boot overlay drops symlinks.)
+[Unit]
+Description=ALSA state restore/store (disabled on the E5)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true

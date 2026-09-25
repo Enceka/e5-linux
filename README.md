@@ -7,9 +7,9 @@ MU300: a custom kernel from the device's own GPL kernel tree plus an initramfs
 that brings up a USB gadget and switches into a full Linux root filesystem,
 installed **next to Android** on slot b, without rewriting the partition table.
 
-The kernel source is [`kernel_sprd_ums9158`](https://github.com/Enceka/kernel_sprd_ums9158)
-(Google android13-5.15 GKI + the Unisoc UMS9621 platform, with the E5 device
-support in it), rebuilt as a general-purpose Linux kernel by
+The kernel source is [`kernel_sprd_ums9158`](https://github.com/Enceka/kernel_sprd_ums9158),
+branch `linux-staging` (Google android13-5.15 GKI + the Unisoc UMS9621 platform, with
+the E5 device support in it, plus this project's patches), rebuilt as a general-purpose Linux kernel by
 `kernel/build-linux.sh` on top of the device's own `e5_rongyue_defconfig`.
 
 > **Warning.** This writes to `boot_b` and to 32 bytes of `misc`. It relies on
@@ -22,15 +22,19 @@ support in it), rebuilt as a general-purpose Linux kernel by
 > The driver does not share a name with the hardware it drives, and while it is
 > missing the charger also blocks USB entirely — `fw_devlink` inspects the USB
 > controller's devicetree suppliers before its probe function runs, and the
-> charger is one of them (`docs/FINDINGS.md` section 7.2). A real session also has
-> to be kept alive: `boot/init` reboots back to Android after ten minutes unless you
-> create `/run/stay`, and a session currently dies on its own after roughly five
-> minutes in a silent reset (`docs/FINDINGS.md` section 9). Do not leave a Linux
-> session unattended — the modem is not brought up and nothing is watching the PM.
+> charger is one of them (`docs/FINDINGS.md` section 7.2).
+>
+> **Which system boots.** Once a root filesystem is installed, Linux is the
+> persistent default (`/etc/e5linux/default-boot` says `linux`, and `e5-boot-ok`
+> re-arms slot b after every successful boot); `e5-next-boot android` from a
+> Linux shell goes back to Android.  A boot that never reaches userspace still
+> falls back to slot a on its own.  Without a root filesystem the initramfs stays
+> up standalone and reboots to Android after ten minutes unless `/run/stay`
+> exists.
 
 ## Why this is not a copy of mu300-linux
 
-Four things are materially different on the E5, and each one changed the design:
+Three things are materially different on the E5, and each one changed the design:
 
 | | MU300 (UMS9620) | Rongyue E5 (UMS9621) |
 |---|---|---|
@@ -68,17 +72,22 @@ channels that survive a failed boot.
 | Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
 | Bluetooth | ⏳ **open** — the controller attaches and `hci0` comes up (`e5-bt-attach.service` holds `/dev/ttyBT0`), bluez reports `Powered: yes`, and scans have found devices (7 LE, 4 BR/EDR); but one attach can fail and never recover, and after repeated BT power cycles the chip stops answering the scan commands (`0x2041`/`0x2042 tx timeout`), so a scan can come up empty. Pairing/connecting untested (one settings-app attempt: `Page Timeout`). BD address is the chip's default, not the factory MAC -- docs/STATUS.md "open" list and docs/FINDINGS.md section 8.7 |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
-| Modem / audio | modem: `unisoc-cpd` owns the CP (FINDINGS §25). audio: ⏳ the mu300-linux DSP bring-up is ported (`e5-audio.service` boots the AGDSP off this device's own `l_agdsp_a` partition, sets the speaker route, loads the VBC profiles; PipeWire/WirePlumber are in the image) — awaiting its first slot-b boot; the open question is the period interrupt (FINDINGS §24.6-24.7) |
+| Modem, data bearer | ✅ [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) owns the CP at boot (the Android `modem_control` runs in a chroot to start it); 5G SA registers and `e5-bearer-up` brings the bearer up on `sipa_eth0` — FINDINGS §25 |
+| Modem web page | ✅ `unisoc-cpd web` on `http://192.168.77.1:7887` (management LAN only, no authentication) |
+| UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
+| Hotspot | ✅ `hostapd` on 5 GHz ch149 / 80 MHz, SSID `E5-Linux`, 192.168.9.1/24, NAT to the bearer with nftables |
+| Audio | ✅ speaker through ALSA (UCM `HiFi`/`Speaker`) and PipeWire; `e5-audio.service` boots the AGDSP off `l_agdsp_a`; kernel `0010`-`0014`, FINDINGS §24.8. ⏳ no capture |
+| Idle load | ✅ load average ~0 at idle (it read 6+ from vendor threads in `D` and synchronous console output) — kernel `0015`, FINDINGS §29 |
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `kernel/` | `e5-linux.fragment` (Linux additions on top of the device defconfig), `build-linux.sh` |
-| `boot/` | `init` (initramfs), `build-boot-image.py`, `module-order.stock`, `module-order.extra`, `stage-modules.sh`, `flash-trial.sh`, `android-boot-linux.sh`, `flash-from-linux.sh` |
-| `rootfs/` | `build-rootfs-container.sh` (the build host, a Debian arm64 container), `install-rootfs.sh` (push + publish on the device), `packages.list`, `configure-rootfs.sh`, `build-rootfs.sh`, `e5-chroot.sh`, `fetch-debian-rootfs.py`, `install-packages.sh`, `overlay/`, `extract-android-vendor.sh` |
-| `tools/` | `collect-logs.sh` and device helpers |
-| `docs/` | `FINDINGS.md` |
+| `kernel/` | `build-linux.sh`, `e5-linux.fragment` (Linux additions on top of the device defconfig), `patches/0001-0015` (applied by `build-linux.sh`) |
+| `boot/` | `init` (initramfs), `build-boot-image.py`, `stage-modules.sh` + `module-order.{stock,extra}`, `flash-trial.sh` / `android-boot-linux.sh` (from Android), `flash-from-linux.sh` (from a running e5-linux) |
+| `rootfs/` | `build-rootfs-container.sh` (+ `rootfs-in-container.sh`, the build in a Debian arm64 container), `install-rootfs.sh`, `packages.list`, `configure-rootfs.sh`, `fetch-debian-rootfs.py`, `install-packages.sh`, `pull-wcn-firmware.sh` / `pull-audio-firmware.sh` / `extract-android-vendor.sh` (blobs from your device), `stage-unisoc-cpd.sh`, `overlay/`; the `device-*.sh` and `build-rootfs.sh`/`e5-chroot.sh` paths are the older on-device and qemu builds |
+| `tools/` | `collect-logs.sh`, `e5-telnet.py`, `e5-serial.py`, screenshot/key/touch helpers |
+| `docs/` | `FINDINGS.md` (measurements, dead ends), `STATUS.md` (the work list) |
 
 **Not included**: stock firmware, Android vendor binaries, device dumps. The
 scripts read those from *your* device.
@@ -93,6 +102,8 @@ scripts read those from *your* device.
   `coreutils` + `gnu-sed` for kbuild's scripts, `llvm` for `llvm-objdump`/`llvm-nm`/
   `llvm-objcopy`, and a directory with `elf.h` for `scripts/mod` (`work/hostinc/`
   in this tree).
+* Optional: a Rust toolchain with the `aarch64-unknown-linux-musl` target, only to
+  rebuild `unisoc-cpd` (the overlay already carries a static binary).
 * Docker, for the root filesystem: `rootfs/build-rootfs-container.sh` runs the
   install inside `debian:trixie` on arm64, where the packages install at native
   speed.  `rootfs/e5-chroot.sh` is the unprivileged qemu path for a Linux host and
@@ -119,14 +130,18 @@ adb pull /data/local/tmp/misc.bin dumps/misc-head.bin
 ### 1. Kernel
 
 ```sh
-git clone https://github.com/Enceka/kernel_sprd_ums9158
-KERNEL_TREE=$PWD/kernel_sprd_ums9158 kernel/build-linux.sh
+git clone -b linux-staging https://github.com/Enceka/kernel_sprd_ums9158   # inside this checkout
+kernel/build-linux.sh
 ```
 
-This merges `kernel/e5-linux.fragment` into
-`arch/arm64/configs/e5_rongyue_defconfig` (the E5's own defconfig), fails loudly
-if a symbol the initramfs depends on did not survive, and builds
-`Image` + modules + DTBs into `out_linux/`.
+`linux-staging` is the branch with the e5-linux changes committed on top of the
+device tree (`main` is the vendor tree as published).  `KERNEL_TREE` defaults to
+`./kernel_sprd_ums9158` and `O` to `./out_linux`.  The script then checks
+`kernel/patches/*.patch` against the tree -- on `linux-staging` every one reports
+"already applied"; on a tree without them it applies them -- freezes the release string in `.scmversion` so a patched tree does not
+become `-dirty`, merges `kernel/e5-linux.fragment` into
+`arch/arm64/configs/e5_rongyue_defconfig`, fails loudly if a symbol the initramfs
+depends on did not survive, and builds `Image` + modules + DTBs.
 
 ### 2. Modules and initramfs
 
@@ -140,9 +155,40 @@ alphabetically; see `docs/FINDINGS.md` §3 for why that is not a nitpick.
 A static arm64 busybox is needed for the initramfs:
 
 ```sh
+mkdir -p work/busybox/ext && cd work/busybox
 curl -O http://ports.ubuntu.com/ubuntu-ports/pool/main/b/busybox/busybox-static_1.36.1-6ubuntu3.1_arm64.deb
-ar x busybox-static_*.deb && tar --zstd -xf data.tar.zst ./usr/bin/busybox
+ar x busybox-static_*.deb && tar --zstd -xf data.tar.zst -C ext ./usr/bin/busybox
+cd -    # -> work/busybox/ext/usr/bin/busybox
 ```
+
+### 2a. Firmware and blobs from your device
+
+The overlay's `lib/firmware/` carries only the regulatory database; the WCN
+(Wi-Fi/BT) firmware, the AGDSP image and the audio parameters are vendor blobs and
+are pulled off *your* device, with it in Android (adb + su):
+
+```sh
+rootfs/pull-wcn-firmware.sh      # wcnmodem.bin, gnssmodem.bin, wifi_board_config*.ini, MACs
+rootfs/pull-audio-firmware.sh    # l_agdsp_a.img, audio_structure, dsp_vbc, cvs, aw87xxx_acf.bin
+rootfs/extract-android-vendor.sh # -> work/android-subset/ (modem_control and its runtime)
+```
+
+The first two land in `rootfs/overlay/` and travel inside the boot image; the
+vendor subset is installed on the root filesystem separately (step 3).
+
+### 2b. unisoc-cpd (optional)
+
+The overlay carries a built `unisoc-cpd` (`usr/local/bin/`, `etc/unisoc-cpd/`, the
+units).  To update it from a checkout of its own repository:
+
+```sh
+git clone https://github.com/Enceka/unisoc-cpd
+rootfs/stage-unisoc-cpd.sh       # builds, copies, applies the Linux-side edits
+```
+
+The script is the only way that copy should change: it turns off the profile's
+Android-only NAT, binds the web page to the management LAN and records the commit in
+`etc/unisoc-cpd/VERSION`.
 
 ### 3. Root filesystem (fresh install)
 
@@ -157,8 +203,9 @@ rootfs/install-rootfs.sh out/rootfs.ext4    # push in 1 GiB chunks, verify, publ
 `build-rootfs-container.sh` installs `rootfs/packages.list` (phosh -- the only session
 since 2026-09-19, Plasma Mobile and its X11 are no longer in the list --,
 `hostapd`/`iw` for the hotspot, `nftables` for NAT, pipewire, ...)
-into a Debian trixie arm64 tree, copies `rootfs/overlay/` over it, creates the `e5`
-user, enables the units and packs the result.  The image is **8 GiB by default**
+into a Debian trixie arm64 tree, copies `rootfs/overlay/` over it, stages the audio
+modules from `out_linux/` (so build the kernel first), creates the `e5` user, enables
+the units and packs the result.  The image is **8 GiB by default**
 (`E5_IMG_MIB=N` overrides it): the loop file is the only writable filesystem on the
 device, and one packed to exactly its own size leaves no room for the first
 `apt install`.
@@ -178,20 +225,25 @@ creates are `e5`/`123456` and `root`/`root` (autologin is on, so the touchscreen
 session never asks).
 
 The modem is the one piece that is **not** in the image.  The Android vendor subset
-is proprietary and is neither committed nor packed; extract it from your own device
-and copy it into the rootfs once the system is up (it survives, the loop file is
-writable):
+is proprietary and is neither committed nor packed; install it once the system is up
+(it survives, the loop file is writable).  Userdata is not mounted under Linux, so it
+goes over the management LAN:
 
 ```sh
-rootfs/extract-android-vendor.sh                          # -> work/android-subset/
-adb push work/android-subset /data/local/tmp/
-# in the e5-linux shell (telnet 192.168.77.1, or the USB serial console):
-cp -a /data/local/tmp/android-subset /opt/e5/android && systemctl restart e5-vendor
+tar -C work -cf work/android-subset.tar android-subset
+( cd work && python3 -m http.server 8000 --bind 192.168.77.21 )   # your host's usb0 address
+# in the e5-linux shell (telnet 192.168.77.1, or the USB serial console), as root:
+cd /tmp && /usr/local/bin/busybox wget http://192.168.77.21:8000/android-subset.tar
+mkdir -p /opt/e5 && tar --no-same-owner -xf android-subset.tar -C /opt/e5
+mv /opt/e5/android-subset /opt/e5/android && systemctl start e5-vendor unisoc-cpd
 ```
 
-Until that is done `e5-vendor.service` is skipped (`ConditionPathExists=`) and the
-device comes up as a Linux system with no baseband, no `/dev/stty_nr1` and an
-`e5-atd` that keeps retrying.
+`--no-same-owner` matters: bionic refuses a `__properties__` tree that is not
+root-owned.  Do not "fix" ownership later with `chown -R` while `e5-vendor` runs --
+the chroot has `/dev`, `/proc` and `/sys` bind-mounted, and the recursion rewrites
+the live device nodes (FINDINGS §28).  Until the subset is there `e5-vendor.service`
+is skipped (`ConditionPathExists=`), `/dev/stty_nr1` returns `ENODEV` and
+`unisoc-cpd` keeps restarting.
 
 ### 4. Boot image
 
@@ -209,11 +261,16 @@ It writes `boot-linux-slotb.img`, a `.json` manifest and a
 **`--overlay` is not optional.**  Without it the initramfs carries no
 `e5-overlay/` at all: no `wcnmodem.bin`, no systemd units, no `/etc/environment` --
 the device boots, but as a bare system with no Wi-Fi firmware and no services.
+And since `boot/init` copies the overlay over the root filesystem on every boot, the
+image's copy wins over anything edited on the device by hand (except `/var/lib`,
+which is only seeded) -- change `rootfs/overlay/` and rebuild instead.
 The builder packs the overlay with `a+r` (and `a+rx` for executables) rather than
 whatever mode the checkout happens to have; a 0600 `phoc.ini` from a build host
 with a strict umask once cost the `e5` user its entire session.
 
-### 5. Trial boot
+### 5. Flash
+
+The first time, from rooted Android:
 
 ```sh
 boot/flash-trial.sh boot-linux-slotb.img
@@ -229,20 +286,43 @@ With no root filesystem installed yet, the device comes up as a standalone Linux
 telnet `192.168.77.1` (or the USB CDC-ACM console) — and reboots back to Android
 after ten minutes (the safety timer, which a real session stops), or if the kernel
 panics. To boot the Linux image already in
-`boot_b` again without reflashing:
+`boot_b` again from Android without reflashing:
 
 ```sh
 boot/android-boot-linux.sh boot-linux-slotb.img
 ```
 
-### 6. Read the result
+Every later image can be flashed from the running e5-linux over the management LAN,
+with no Android round trip: it serves the image over HTTP, writes and verifies
+`boot_b`, arms slot b and reboots.
+
+```sh
+boot/flash-from-linux.sh boot-linux-slotb.img
+```
+
+### 6. Using it
+
+| | |
+|---|---|
+| management LAN | USB NCM, the device is `192.168.77.1` and hands the host an address by DHCP |
+| shell | `telnet 192.168.77.1` (`root`/`root`), or the USB CDC-ACM serial console |
+| accounts | `e5`/`123456` (the phosh session autologins), `root`/`root` |
+| hotspot | SSID `E5-Linux`, WPA2 `12345678`, clients on 192.168.9.0/24 |
+| modem page | `http://192.168.77.1:7887` (`unisoc-cpd web`) |
+| UFI-TOOLS | `http://192.168.77.1:2333`, `admin`; CLI `ufi-tools status`, `ufi-tools set-token` |
+| back to Android | `e5-next-boot android && systemctl reboot` |
+
+Change the passwords, the hotspot passphrase and the UFI-TOOLS token before the
+device leaves your desk.
+
+### 7. Read the result
 
 ```sh
 tools/collect-logs.sh logs
 ```
 
-Pulls `/sys/fs/pstore/*`, the 4 MiB persistent log inside `boot_b` and the
-bootloader log. `E5-LINUX: stage=…` lines in the pstore console are the
+After a boot that fell back to Android, this pulls `/sys/fs/pstore/*`, the 4 MiB
+persistent log inside `boot_b` and the bootloader log. `E5-LINUX: stage=…` lines in the pstore console are the
 initramfs reporting progress.
 
 ## Credits and licenses

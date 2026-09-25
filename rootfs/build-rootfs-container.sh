@@ -25,7 +25,15 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
 
+# The tree itself lives in a named Docker volume mounted over work/rootfs-build,
+# not on the macOS bind mount: that one does not store file groups (measured:
+# unix_chkpwd root:shadow came back root:root), so every dpkg-installed file with
+# a non-root group -- dbus-daemon-launch-helper root:messagebus, unix_chkpwd,
+# /etc/shadow -- lost it.  The volume is Linux ext4 inside the Docker VM, keeps
+# everything, and persists between runs so the stages stay re-runnable.
+# (It shadows any old host-side tree in work/rootfs-build: the first run after
+# this change fetches and installs from scratch.)
 exec docker run --rm --privileged \
     -e E5_IMG_MIB="${E5_IMG_MIB:-8192}" \
-    -v "$TOP":/w -w /w debian:trixie \
+    -v "$TOP":/w -v e5-rootfs-build:/w/work/rootfs-build -w /w debian:trixie \
     bash /w/rootfs/rootfs-in-container.sh "$@"

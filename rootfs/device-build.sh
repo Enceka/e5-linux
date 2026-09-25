@@ -66,9 +66,26 @@ echo "=== ownership ==="
 # The tree was packed on the build host by a non-root user, and mkfs.ext4 -d
 # preserves those uid/gid numbers verbatim: a base system whose /bin/sh is
 # owned by uid 1000 only works by luck.  On the device the chroot runs as real
-# root, so fix every uid inside the root filesystem at once (-xdev keeps the
-# bind-mounted /proc /sys /dev out).
-chroot "$ROOT" /bin/sh -c 'find / -xdev -exec chown root:root {} +' 2>&1 | tail -3 || true
-echo "owner fixed: $(find "$ROOT" -maxdepth 1 | wc -l) top-level entries"
+# root, so give the build user's files to root (-xdev keeps the bind-mounted
+# /proc /sys /dev out).
+#
+# Only the build user's: a blanket chown root:root also wiped every legitimate
+# group (shadow, utmp, messagebus, ...) of what dpkg just installed as real root,
+# and chown clears set-id bits -- su and passwd lost setuid, unix_chkpwd lost
+# setgid shadow and the phosh lock screen accepted no password.  The base
+# image's own ownership comes back from the list fetch-debian-rootfs.py took
+# from its tar headers (e5-base-perms, run again at every boot by rootfs-fixups).
+B=$(stat -c %u "$ROOT/etc/debian_version")
+BG=$(stat -c %g "$ROOT/etc/debian_version")
+if [ "$B" != 0 ]; then
+    chroot "$ROOT" /bin/sh -c "find / -xdev -uid $B -exec chown -h root {} +" 2>&1 | tail -3 || true
+fi
+if [ "$BG" != 0 ]; then
+    chroot "$ROOT" /bin/sh -c "find / -xdev -gid $BG -exec chgrp -h root {} +" 2>&1 | tail -3 || true
+fi
+echo "owner fixed: build uid $B gid $BG handed to root"
+if [ -f "$ROOT/var/lib/e5linux/base-perms" ] && [ -f /data/local/tmp/overlay/opt/e5/e5-base-perms ]; then
+    sh /data/local/tmp/overlay/opt/e5/e5-base-perms "$ROOT"
+fi
 
 echo "DEVICE-BUILD-DONE"

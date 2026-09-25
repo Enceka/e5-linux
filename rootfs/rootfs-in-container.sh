@@ -129,6 +129,9 @@ if want pack; then
     mkdir -p "$M"
     mount -o loop "$OUT" "$M"
     cp -a "$ROOT/." "$M/"
+    # the image is real ext4: put back the base image's own ownership and
+    # set-id bits (see fetch-debian-rootfs.py) in case the tree lost them
+    [ -f "$M/var/lib/e5linux/base-perms" ] && sh /w/rootfs/overlay/opt/e5/e5-base-perms "$M"
     sync
     umount "$M"
     tune2fs -m 1 "$OUT" >/dev/null

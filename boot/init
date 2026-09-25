@@ -68,6 +68,24 @@ persist() {
         echo "--- udc"; ls /sys/class/udc 2>&1
         echo "--- deferred"; cat /sys/kernel/debug/devices_deferred 2>&1
         echo "--- block"; ls /dev/mmcblk0p* 2>&1 | tr '\n' ' '
+        # pstore records from the PREVIOUS boot (panic/oops tail survive the warm
+        # reset that panic=10 performs).  This persist runs right before
+        # switch-root, so on the second try of an armed trial it carries the
+        # first boot's panic out to Android.  .enc.z records are deflate; the
+        # raw bytes are dumped between markers and inflated on the host.
+        echo; echo "--- pstore"
+        mkdir -p /sys/fs/pstore 2>/dev/null
+        mount -t pstore pstore /sys/fs/pstore 2>/dev/null
+        for f in /sys/fs/pstore/*; do
+            [ -f "$f" ] || continue
+            echo "== pstore file $f"
+            case "$f" in
+                *.enc.z) echo "PSTORE-ZBEGIN $f"; cat "$f"; echo "PSTORE-ZEND $f" ;;
+                *) head -c 262144 "$f" ;;
+            esac
+            echo
+        done
+        umount /sys/fs/pstore 2>/dev/null
         echo; echo "--- dmesg"; dmesg | tail -c 2000000
         echo "E5-PERSIST-END"
     } > /run/persist.txt 2>&1

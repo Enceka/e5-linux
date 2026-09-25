@@ -9,8 +9,9 @@ UFI-TOOLS/
 # unisoc-cpd is an independent repository of its own
 # (https://github.com/Enceka/unisoc-cpd), developed outside this tree with its
 # own findings log; a checkout may sit here untracked, but nothing in this
-# repo depends on it being present.
-unisoc-cpd/
+# repo depends on it being present.  Anchored: the overlay's etc/unisoc-cpd/
+# is tracked (rootfs/stage-unisoc-cpd.sh writes it).
+/unisoc-cpd/
 
 # build trees / outputs
 out_linux/

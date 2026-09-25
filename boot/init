@@ -349,7 +349,8 @@ if [ -n "$rootdir" ]; then
         # it packs), and a device whose rootfs predates this needs them too.
         for unit in e5-bt-attach.service ufi-tools.service dnsmasq.service \
                      e5-vendor.service e5-cp_diskserver.service e5-refnotify.service \
-                     unisoc-cpd.service e5-bearer-up.service e5-regdb-load.service \
+                     unisoc-cpd.service unisoc-cpd-web.service e5-bearer-up.service \
+                     e5-regdb-load.service \
                      e5-hotspot.service e5-telnetd.service e5-gadget-guard.service \
                      e5-fixups.service e5-nat.service; do
             if [ -f "/newroot/etc/systemd/system/$unit" ]; then

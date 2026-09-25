@@ -101,7 +101,7 @@ bash "$HERE/e5-chroot.sh" '
     # it restores the cap_net_raw on ping and links e5-next-boot/mobile-data/e5-at into
     # /usr/local/bin, which is what makes `sudo e5-next-boot android` work.
     for s in e5-vendor e5-cp_diskserver e5-refnotify \
-             unisoc-cpd e5-bearer-up \
+             unisoc-cpd unisoc-cpd-web e5-bearer-up \
              e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do
         systemctl --root=/ enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done

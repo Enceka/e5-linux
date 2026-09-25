@@ -20,20 +20,22 @@ unisoc-cpd                     one binary, one profile
 ├── src/at.rs                  AT codec, URC demux, serialisation, pacing, timeouts
 ├── src/urc.rs                 URC decoding: the control plane's unsolicited half
 ├── src/unisoc_at.rs           the CP generation's own AT extensions (band/cell/5G/IMS)
+├── src/nat.rs                 the host side of the bearer: rule/plan building, read-back checks
 ├── src/capability/            link, sim, cfun, register, signal, operator,
 │                              band, nr, ims, sms, ussd, call, data, nv, diag, serve
 ├── src/telemetry.rs           per-run JSON: asserts, URC gaps, mailbox deltas, counters
 ├── src/profile_check.rs       the A12 gate, as a command
 ├── platform/profiles/e5.toml      the only file that knows about the E5
 ├── platform/profiles/mu300.toml   second platform, same core (stub, unverified)
-└── docs/BASEBAND-CONTRACTS.md     W0: the channel/command/timing contract (§9: G2)
+├── docs/BASEBAND-CONTRACTS.md     W0: the channel/command/timing contract (§9: G2)
+└── docs/FINDINGS.md               what the sessions taught, one numbered lesson each
 ```
 
 ## Build
 
 ```sh
 cargo build --release          # host
-cargo test                     # 104 tests, no device needed
+cargo test                     # 172 tests, no device needed
 ```
 
 The tests run against a fake CP on a **pty**, which is the only honest stand-in
@@ -67,8 +69,11 @@ unisoc-cpd --profile e5 --mode native link --seconds 259200  # the 72 h soak (A1
 unisoc-cpd --profile e5 --mode native sim
 unisoc-cpd --profile e5 --mode native band status
 unisoc-cpd --profile e5 --mode native band lock nr 78
+unisoc-cpd --profile e5 --mode native data up                 # bearer; also installs the host side when [data.nat].enabled
+unisoc-cpd --profile e5 --mode native data nat status         # routes, forward pairs, masquerade — measured, not assumed
 unisoc-cpd --profile e5 --mode vendor register               # vendor baseline
 unisoc-cpd --profile e5 --mode native nv list                # read-only
+unisoc-cpd --socket /run/unisoc-cpd/cmd.sock web 0.0.0.0:7887  # W7: the browser face
 ```
 
 `--mode vendor` runs the command the profile names for that capability and
@@ -158,17 +163,20 @@ systemctl stop e5-mobile-data-watch e5-mobile-data e5-atd
 
 | | |
 |---|---|
-| core (channel/at/telemetry/profile/CLI) | implemented, 104 tests green |
-| capabilities | `link`, `sim`, `register`, `signal`, `operator`, `cfun`, `band`, `nr`, `ims`, `sms`, `ussd`, `call`, `data`, `nv`, `diag`, `serve` |
+| core (channel/at/telemetry/profile/CLI) | implemented, 172 tests green |
+| capabilities | `link`, `sim`, `register`, `signal`, `operator`, `cfun`, `band`, `nr`, `ims`, `sms`, `ussd`, `call`, `data`, `nv`, `diag`, `serve`, `web` |
 | URC decoding (contracts §9.2) | implemented and tested; `+ECIND:`/`+CMT:`/`+CDS:` deliberately kept raw rather than half-decoded |
-| G2 control plane (`serve`) | code and offline tests in place: resident ownership, URC events, capabilities over a socket, idle probes, `state` with `last_ok_age_s`. **Not yet on the device** — it has not been the owner of `/dev/stty_nr1` |
+| G2 control plane (`serve`) | implemented and tested offline, and **resident on the handset** (Android side, since 2026-09-20): with the vendor RIL stopped, the daemon held both channels for hours of use — URC stream decoded 50/50, socket clients (`sim`, `band`, `web`) answered through it, 0 CP asserts, `state` reports `last_ok_age_s`. Still to prove: taking ownership **at boot** on the Linux side (systemd), and the 72 h soak |
 | W0 contracts | `docs/BASEBAND-CONTRACTS.md`, with the generation's AT extensions researched and unit-tested |
 | A12 `profile-check` | pass (two profiles, no platform names in the core) |
 | aarch64 build | static `aarch64-unknown-linux-musl`, built by `tools/build-aarch64.sh` |
 | on-device, read-only | verified on the handset: `diag spools` (8 nodes, all `char`), `diag mailbox`, `diag asserts` (0 CP asserts), `nv list` (7 partitions). Each run's summary shows `at.commands: 0` and `channels.cmd.opens: 0` — the AT channel is deliberately not touched while the vendor RIL owns it |
-| on-device, AT | **measured on the Android side** (2026-09-20): after `stop vendor.ril-daemon` the daemon was the only reader of both channels — `link`, `sim`, `band`, `serve` + socket clients all passed with 0 CP asserts and 50/50 URC lines decoded; the transfer rule and the stack cold-cycle requirement are in FINDINGS §25. **Not yet at boot on the Linux side**, not soaked, no profile is `verified` |
+| on-device, AT | **measured on the Android side** (2026-09-20): after `stop vendor.ril-daemon` the daemon was the only reader of both channels — `link`, `sim`, `band`, `serve` + socket clients all passed with 0 CP asserts and 50/50 URC lines decoded; the transfer rule and the stack cold-cycle requirement are in FINDINGS §1–§2. **Not yet at boot on the Linux side**, not soaked, no profile is `verified` |
+| signal measurement | `+CSQ` and `+CESQ` both decoded, including the NR SA extension fields (SS-RSRP/RSRQ/SINR); RSSI is the CSQ index mapped to dBm (`-113 + 2·n`), and index 99 is reported as unknown rather than turned into a number |
 | log/dump spool drains, `stime_ch` | not implemented (W1, still open) |
-| voice | `voice.supported = false`: no UCM/voice route on this platform yet |
+| voice | no audio route yet (`voice.supported = false`); the signaling half is measured — `ims status` reads `+CIREG` (the IMS-registration gate), `call` dials/answers/hangs up signal-only; **first MT VoLTE call answered under the daemon** (FINDINGS §14) |
+| W7 web UI | `web` serves the daemon over HTTP: inbox + delete, SMS send, dial/answer/hangup, live URC stream, incoming-call banner, and a panel each for the advanced info, APN, signal metrics, network, band/cell locks, IMEI and the raw AT console — a socket client, never a channel owner (`units/unisoc-cpd-web.service`). The page is Material You, single-file and offline: no build step, no stylesheet or font from a network it may be the only way to reach |
+| host side of the bearer (`data nat`) | implemented and **measured on the Android side** (2026-09-21, RIL stopped): `on` installs 8/8 steps, a second `on` leaves one of each rule, `status` reads `nat: complete`, and `ping 223.5.5.5` answers 2/2 where neither routing table had a default route before (contracts §10). The Linux side's own `nat.nft` is untouched |
 
 ## Licence
 

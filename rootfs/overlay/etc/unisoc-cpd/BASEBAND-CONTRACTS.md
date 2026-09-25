@@ -109,14 +109,15 @@ way it is:
 | SIM | `AT+CPIN?` → `+CPIN: READY` | `AT+CPIN="<pin>"` to unlock |
 | SIM identity | `AT+CIMI`, `AT+CCID` | read-only; **no IMEI path exists in this program** |
 | radio | `AT+CFUN?` → `+CFUN: 1` | a cold CP can read `1` with the stack still down |
-| stack on | `AT+SFUN=2`, `AT+SFUN=4` | the vendor-specific "really turn the stack on"; **after a RIL shutdown parks the radio at `+CFUN: 0`, this pair alone sets `+CFUN: 1` but does not register — the cold cycle `AT+CFUN=0` then `SFUN=2/4` is what does (measured, FINDINGS §25.3)** |
+| stack on | `AT+SFUN=2`, `AT+SFUN=4` | the vendor-specific "really turn the stack on"; **after a RIL shutdown parks the radio at `+CFUN: 0`, this pair alone sets `+CFUN: 1` but does not register — the cold cycle `AT+CFUN=0` then `SFUN=2/4` is what does (measured, FINDINGS §2)** |
 | stack cycle | `AT+SFUN=5`, `AT+SFUN=3` | **avoid**: leaves this modem's SIM undetected until reboot |
 | registration | `AT+CEREG?`, `AT+CREG?`, `AT+CGATT?` | AcT is the 5th field: 11 = NR SA, 13 = EN-DC |
 | signal | `AT+CSQ`, `AT+CESQ` | `+CESQ: rxlev,ber,rscp,ecno,rsrq,rsrp,ssrsrq,ssrsrp,sssinr`; index→dBm is `idx-140` for RSRP, and **255 means "not reported", not `idx 255` (measured: an unregistered CP answers 255 in every field)** |
 | operator | `AT+COPS?`, `AT+COPS=?`, `AT+COPS=0` | a full scan takes tens of seconds |
 | SMS | `AT+CMGF=1`, `AT+CMGL="ALL"`, `AT+CMGR=<i>`, `AT+CMGD=<i>`, `AT+CMGS="<n>"` | `+CMGS` answers with a bare `>` continuation prompt |
 | USSD | `AT+CUSD=1,"<code>",15` | `+CUSD: 0,"...",15` |
-| voice | `ATD<n>;`, `ATA`, `ATH`, `AT+CLCC`, `AT+VTS="<d>"` | CS only |
+| voice | `ATD<n>;`, `ATA`, `ATH`, `AT+CLCC`, `AT+VTS="<d>"` | CS only — and **NR SA has no CS domain**: on this network a call is VoLTE (IMS) or nothing, so the dial is expected to ride IMS once `+CIREG` reports registered (researched; §4.2) |
+| IMS registration | `AT+CIREG?` | `+CIREG: <n>,<reg_state>`; 1 = IMS registered — the gate a VoLTE dial waits for (researched) |
 | PDP | `AT+CGDCONT=1,"IPV4V6","<apn>"`, `AT+CGACT=1,1`, `AT+CGCONTRDP=1`, `AT+CGDATA="M-ETHER",1` | `+CGCONTRDP` fields: `cid,bearer,apn,"addr.mask",gw,dns1,dns2` |
 
 Measured bearer, for reference:
@@ -149,6 +150,7 @@ them has been sent to a handset yet.
 | cell lock | `AT+SPFORCEFRQ=<12\|16>,6,<freq>,<pci>` | 12 = LTE, 16 = NR |
 | cell unlock / read | `AT+SPFORCEFRQ=<12\|16>,4` / `,3` | `+SPFORCEFRQ: <rat>,3,<freq1>,<pci1>,…` |
 | 5G SA / NSA | `AT+SP5GRAN?` / `AT+SP5GRAN=<0\|1>` | 1 = SA allowed, 0 = NSA only |
+| VoLTE dial | `ATD<n>;` while IMS registered | expected Unisoc shape: the same dial, the CP picks IMS by voice domain; if refused, the alternate to try is `AT+CDV=<n>` (unconfirmed for this generation) |
 | 5G registration | `AT+C5GREG?` | `+C5GREG: <n>,<stat>,…` |
 | VoLTE | `AT+CAVIMS?` / `AT+CAVIMS=<0\|1>` | 1 = enabled |
 | VoNR | `AT+SP5GCMDS="get nr synch_param",42` / `"set nr param",45,<s>` | quoted vendor sub-command |
@@ -328,7 +330,7 @@ slot a, with the daemon as the only reader of both channels after
 `stop vendor.ril-daemon` — ownership, `link`, `sim`, `band`, `serve` + socket
 clients, and URC decoding all measured working; the ownership *transfer*
 procedure picked up one rule and the stack bring-up one requirement
-(FINDINGS §25).  Still open: the same on the Linux side, where the daemon has
+(FINDINGS §1–§2).  Still open: the same on the Linux side, where the daemon has
 not yet been the owner at boot.
 
 ### 9.1 Ownership over a boot, not over a command
@@ -348,7 +350,7 @@ holds across the whole measurement window instead of across one command.
 `AT`, counted under `at.probes`, never under `at.commands`) runs whenever
 nothing else has touched the CP for `at.idle_probe_seconds`, and `state`
 reports `last_ok_age_s`, the number a watchdog keys on, because an open
-channel and an answering CP are two different facts (FINDINGS §22).
+channel and an answering CP are two different facts (FINDINGS §12).
 
 ### 9.2 The unsolicited stream, decoded
 
@@ -446,3 +448,62 @@ Two details that are easy to get wrong and are pinned by tests:
 * a live socket is refused before the channel is touched, so an owner that is
   already serving never even sees the next daemon reach for its lock; a stale
   socket file (SIGTERM does not unwind, so it is normal) is removed.
+
+## 10. The host side of the bearer (NAT)
+
+A PDP context that is up is not the same thing as a network that works, and on
+this platform the difference is three separate pieces.  All three measured on
+the unit (2026-09-21, Android side, RIL stopped):
+
+* **The host's own route.**  The bearer can carry an address with no default
+  route anywhere.  `ip rule` 10000 sends unmarked traffic to `legacy_system`,
+  while a bearer's default route goes into `main` -- measured before the fix:
+  `ip route show default` empty *and* `ip route show table legacy_system`
+  empty, on `sipa_eth0` with a live address.  An address on the bearer is
+  therefore never evidence of data, which is why `data nat status` reports the
+  two tables separately.
+* **The clients' way through.**  Tethering's chain carries a catch-all `DROP`,
+  and netd inserts an `ACCEPT` pair only for uplinks its own stack brought up.
+  Ours is not one of them: 2670 client packets died at that `DROP` in one
+  session (FINDINGS 25.8).
+* **Masquerade.**  Client packets leave with a private source address the
+  carrier has never heard of.
+
+`data nat on|off|status|plan` owns those three, and `data up`/`data down` run
+them automatically while `[data.nat].enabled` is true.  `plan` prints what `on`
+would run and changes nothing -- a firewall is a bad place to find out what a
+command does.
+
+| step | command | why a second run is a no-op |
+| --- | --- | --- |
+| forwarding | `sysctl -w net.ipv4.ip_forward=1` | it assigns |
+| host egress | `ip route replace default dev <bearer> metric 100` | it replaces |
+| policy table | `ip route replace default dev <bearer> table <route_table>` | it replaces |
+| on-link, both ends | `ip route replace <subnet> dev <if> table <route_table>` | it replaces |
+| clients out | `iptables -t nat -A POSTROUTING -o <bearer> -j MASQUERADE` | `-C` asks first |
+| client pair | `iptables -I <forward_chain> 1 -i <lan> -o <bearer> -j ACCEPT`, both directions | `-C` asks first |
+
+The table, the chain and the LAN interfaces are profile keys (`[data.nat]`),
+because they are platform names: `profile-check` scans `src/` for exactly this
+vocabulary, so the core can build these commands without ever naming one.  The
+**subnets are deliberately not** profile keys -- they are read off the
+interfaces when the plan is built (`ip addr show dev <if>`), because what a
+platform handed out is a fact about a running system, and a copy of it in a file
+ages into a route for the wrong network.
+
+Three things the action deliberately does not do:
+
+* it does not put `ip_forward` back to 0 on `off`: this process did not decide
+  it should be 1, and something else on the host may be forwarding too;
+* it does not delete the bearer's main default route on `off` -- that route
+  belongs to the bearer (`data down` removes it), and `data nat off` against a
+  live bearer would otherwise take the host's own egress with it;
+* it does not touch name resolution.  The resolvers the modem hands out travel
+  in `+CGCONTRDP` and are reported (`data status`, and the web UI's advanced
+  panel), but the resolver itself belongs to the platform's network daemon, and
+  editing it from here would be a second, silent network stack.
+
+Verified on the unit: `data nat on` -> 8 of 8 steps, `data nat status` ->
+`nat: complete`, a second `on` leaves exactly one of each rule, and
+`ping -c 2 223.5.5.5` answers 2/2 where before the action neither table had a
+default route.

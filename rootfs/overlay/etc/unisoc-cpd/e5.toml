@@ -1,3 +1,7 @@
+# Staged by e5-linux rootfs/stage-unisoc-cpd.sh from unisoc-cpd's
+# platform/profiles/e5.toml; edit it there, not here.  Linux-side change:
+# [data.nat] enabled = false.
+
 # Rongyue E5 -- Unisoc UMS9621 (qogirn6lite), Android 13 on slot a.
 #
 # Every value here was read off the device (see docs/BASEBAND-CONTRACTS.md):
@@ -79,7 +83,7 @@ diag_node = "/dev/sdiag_nr"
 # individually provisioned here).
 imei_items = [
   { index = 0, id = "5e81" },
-  { index = 1, id = "5e82" },
+  { index = 1, id = "5e82", channel = "/dev/stty_nr4" },
   { index = 2, id = "5e90" },
 ]
 
@@ -90,10 +94,29 @@ imei_items = [
 # zero-based slot, {imei} the 15-digit value.  (Not found in the researched
 # AT surface; it came from the factory path, which is the better provenance.)
 write_command = 'AT+SPIMEI={index},"{imei}"'
+# The per-slot AT read, used when a diag identity item reads nothing.  The
+# command is the vendor RIL's own (impl-ril/ril_misc.c requestDeviceIdentify):
+# a plain AT+CGSN, sent on the slot's *own* channel -- the channels are dealt
+# out per card (impl-ril/common/atchannel.h: URC first, then two command
+# channels, and the block repeats per SIM), which is why item 1 names its
+# channel below.  `AT+SPACTCARD=<n>;AT+CGSN` was also measured and is refused
+# by this CP (CME 65536014); see the probes note.
+read_command = 'AT+CGSN'
 # Read-form probes.  SPACTCARD is this surface's per-slot router: a command
 # prefixed AT+SPACTCARD=<phoneId>; executes against that card's context --
 # but measured on the unit it only ever serves the ACTIVE card, so per-slot
 # AT reads are not a way to see a second slot's identity (diag items are).
+#
+# Re-measured 2026-09-21 (Android side, vendor RIL stopped) while looking for a
+# per-slot IMEI read: `AT+CGSN` and `AT+SPIMEI?` both answer with the *primary*
+# card's IMEI (same 15 digits), and every per-slot form is refused --
+# `AT+SPACTCARD=<n>;AT+CGSN` and `AT+SPIMEICHECK?` with CME 65536014 ("not
+# supported"), `AT+SPIMEI=<n>` with 21, `AT+CGSN=1|2|3` and the bare `AT+SPIMEI`
+# with 65536014, `AT+SPCARDINFO=<n>` with 50.  `AT+SPIMEICHECK` alone answers
+# `+SPIMEICHECK: 0`, which is a status flag, not an identity.  So on this
+# firmware there is no AT path to the second slot's IMEI, and the diag items are
+# the only one -- and 5e82/5e90 read all zeros on this unit, i.e. no second
+# identity is provisioned at all.
 probes = [
   "AT+SPIMEI?",
   "AT+EGMR?",
@@ -111,9 +134,46 @@ cid = 1
 apn_source = "/etc/e5/mobile-data.conf"
 vendor_script = "/opt/e5/mobile-data"
 
+# The Android side's network stack has its own opinion about which uplinks
+# exist, and a bearer this daemon brings up is a stranger to it.  Measured on
+# the unit (FINDINGS 25.8, re-checked 2026-09-21):
+#
+#   * `ip rule` 10000 sends unmarked traffic to `legacy_system`, while the
+#     default route sits in `main` -- so the host itself has an address and no
+#     way out;
+#   * the tether chain ends in a catch-all DROP, and netd only inserts ACCEPT
+#     pairs for uplinks its own stack brought up: 2670 client packets died
+#     there in one session;
+#   * and nothing masquerades clients arriving on a bearer the platform never
+#     handed out.
+#
+# All three names are platform names, which is why they are here and not in the
+# core: `profile-check` scans `src/` for exactly this vocabulary.
+[data.nat]
+# e5-linux: off on the Linux side -- e5-nat.service masquerades with
+# nftables; the chain/table below are Android's iptables names.
+enabled = false
+forward_chain = "tetherctrl_FORWARD"
+route_table = "legacy_system"
+# The hotspot's LAN.  Its subnet is read off the interface when the plan is
+# built rather than written here, because what the platform handed out is the
+# fact and a copy of it ages into a route for the wrong network.  The USB side
+# (`sipa_usb0`) carries no IPv4 address on this unit, so it is not a client LAN
+# until the platform gives it one.
+clients = ["wlan0"]
+
 [voice]
-# No UCM port yet, so there is no in-call audio path to route.
+# No UCM port yet, so there is no in-call audio path to route.  The mixer hook
+# the vendor RIL itself uses is measured and named here
+# (impl-ril/ril_call.c speaker_mute: alsa_amixer cset -c phone …), but this
+# image ships no mixer tool at all -- measured 2026-09-21, no amixer /
+# alsa_amixer / tinymixer under /system or /vendor -- so `voice` reports the
+# switch as unavailable until the rootfs carries alsa-utils.  Card 0 is
+# sprdphone-sc2730; the RIL's `-c phone` alias does not resolve on this image.
 supported = false
+card = "0"
+control = "Speaker Playback Switch"
+tool = "amixer"
 mixer = []
 
 [telemetry]

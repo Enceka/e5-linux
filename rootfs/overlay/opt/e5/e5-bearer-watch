@@ -1,0 +1,30 @@
+#!/bin/sh
+# One look at the bearer, from e5-bearer-watch.timer (once a minute).
+#
+# e5-bearer-up brings the radio and the bearer up once and then stays done, but
+# the CP can reset underneath it: on 2026-09-26 it asserted ("MM Task 's Q
+# full"), modem_control waited out its 300 s dump timeout and reset it, and the
+# CP came back at +CFUN: 0 with no context -- Android's RIL turns the radio back
+# on after a reset, nothing here did, and the device stayed offline.
+#
+# One AT command a minute (the CP is sensitive to AT volume, FINDINGS 25.3):
+# context 1 active and sipa_eth0 holding an IPv4 address means the bearer is
+# there, and then only the IPv6 pass-through is re-checked (no AT at all once it
+# is set up).  Anything else restarts e5-bearer-up, which is where the actual
+# recovery, and its once-a-minute retry, already live.
+set -u
+UP=${E5_V6_UP:-sipa_eth0}
+
+state=$(systemctl show -p SubState --value e5-bearer-up.service)
+case "$state" in
+    running|auto-restart|start*) exit 0 ;;   # a bring-up is already under way
+esac
+
+ctx=$(timeout 30 /opt/e5/e5-at "AT+CGACT?" 2>&1)
+if printf '%s\n' "$ctx" | grep -qE '^\+CGACT: ?1,1' &&
+   ip -4 addr show dev "$UP" 2>/dev/null | grep -q inet; then
+    exec /opt/e5/e5-ipv6-share
+fi
+
+echo "bearer: context 1 is not up ($(printf '%s' "$ctx" | tr '\n' ' ' | cut -c1-120)); restarting e5-bearer-up"
+systemctl restart --no-block e5-bearer-up.service

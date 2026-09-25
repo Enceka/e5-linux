@@ -1,0 +1,11 @@
+[Unit]
+Description=e5-linux: look at the data bearer once a minute
+
+[Timer]
+# Leave the boot-time bring-up alone: it takes a minute or two to register.
+OnBootSec=3min
+OnUnitInactiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=e5-linux: check the data bearer, bring it back after a CP reset
+After=e5-bearer-up.service unisoc-cpd.service
+ConditionPathExists=/dev/stty_nr1
+
+[Service]
+Type=oneshot
+ExecStart=/opt/e5/e5-bearer-watch
+Nice=5

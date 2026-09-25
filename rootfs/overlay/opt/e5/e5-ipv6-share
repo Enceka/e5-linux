@@ -1,0 +1,88 @@
+#!/bin/sh
+# Pass the bearer's public IPv6 /64 through to the hotspot's clients.
+#
+#     e5-ipv6-share [--wait]     (idempotent; e5-bearer-up and e5-bearer-watch run it)
+#
+# What the carrier gives: an IPV4V6 context whose +CGPADDR carries only an
+# interface identifier (the upper 64 bits are zero), and a router advertisement
+# on sipa_eth0 whose prefix is autonomous but *not* on-link -- sipa_eth0 is a
+# NOARP point-to-point pipe, the whole /64 is routed to the UE (3GPP 29.061),
+# and nothing is ever neighbour-solicited on it.  So the /64 is free to live on
+# one downstream link: this puts <prefix>::1/64 on the LAN interface, and
+# dnsmasq (constructor:wlan0) advertises whatever prefix wlan0 holds, so clients
+# build SLAAC addresses in it and the kernel forwards (net.ipv6.conf.all.forwarding,
+# etc/sysctl.d/10-e5-forward.conf).  It is Android's tethering scheme too.
+#
+# Two things have to be restored on the uplink first:
+#   * forwarding makes the kernel ignore RAs on an interface with accept_ra=1,
+#     so sipa_eth0 needs accept_ra=2 -- or its default route and address expire;
+#   * `unisoc-cpd data up` flushes the interface before it adds the IPv4
+#     address, which takes the link-local with it.  With no link-local the
+#     kernel never sends a router solicitation, no RA arrives and IPv6 is gone
+#     until the next boot.  The link-local is rebuilt from the interface
+#     identifier the network assigned (+CGPADDR), which is what the RS has to
+#     come from.
+#
+# A /64 can only be on one link, so one LAN gets it: wlan0 (E5_V6_LAN).
+set -u
+UP=${E5_V6_UP:-sipa_eth0}
+LAN=${E5_V6_LAN:-wlan0}
+WAIT=0; [ "${1:-}" = --wait ] && WAIT=15
+
+[ -d "/sys/class/net/$UP" ] || { echo "ipv6-share: no $UP" >&2; exit 0; }
+sysctl -qw "net.ipv6.conf.$UP.accept_ra=2" "net.ipv6.conf.$UP.autoconf=1"
+[ -d "/sys/class/net/$LAN" ] && sysctl -qw "net.ipv6.conf.$LAN.accept_ra=0"
+
+if ! ip -6 addr show dev "$UP" scope link | grep -q inet6; then
+    iid=$(timeout 30 /opt/e5/e5-at "AT+CGPADDR=1" 2>/dev/null | python3 -c '
+import sys
+for line in sys.stdin:
+    if line.startswith("+CGPADDR:"):
+        for f in line.split(":", 1)[1].strip().split(","):
+            o = f.strip().strip("\"").split(".")
+            if len(o) == 16 and all(x.isdigit() for x in o) and any(int(x) for x in o[8:]):
+                b = [int(x) for x in o[8:]]
+                print(":".join("%x" % (b[i] << 8 | b[i + 1]) for i in range(0, 8, 2)))
+                sys.exit()')
+    if [ -z "$iid" ]; then
+        iid=$(od -An -N8 -tx2 /dev/urandom | awk '{printf "%s:%s:%s:%s", $1, $2, $3, $4}')
+        echo "ipv6-share: no interface identifier from +CGPADDR, using a random one"
+    fi
+    ip -6 addr add "fe80::$iid/64" dev "$UP" && echo "ipv6-share: $UP link-local fe80::$iid"
+elif ! ip -6 route show default dev "$UP" | grep -q .; then
+    # A link-local but no default router: turning forwarding on purges the
+    # RA-learned router, and the carrier's unsolicited RAs are hours apart.
+    # Re-adding the link-local makes the kernel solicit again (after DAD).
+    ll=$(ip -6 -o addr show dev "$UP" scope link | awk '{print $4; exit}')
+    ip -6 addr del "$ll" dev "$UP" && ip -6 addr add "$ll" dev "$UP" &&
+        echo "ipv6-share: $UP had no IPv6 default route, soliciting again"
+fi
+
+# The /64 from the uplink's SLAAC address (the RA answers the solicitation the
+# new link-local sends, usually within a second or two).
+pfx=
+i=0
+while :; do
+    pfx=$(ip -6 -o addr show dev "$UP" scope global | awk '{print $4; exit}' | python3 -c '
+import ipaddress, sys
+a = sys.stdin.read().strip().split("/")[0]
+if a:
+    print(ipaddress.ip_interface(a + "/64").network.network_address)')
+    [ -n "$pfx" ] || [ "$i" -ge "$WAIT" ] && break
+    i=$((i + 1)); sleep 1
+done
+if [ -z "$pfx" ]; then
+    echo "ipv6-share: no global IPv6 on $UP (no RA yet)" >&2
+    exit 0
+fi
+[ -d "/sys/class/net/$LAN" ] || { echo "ipv6-share: no $LAN yet" >&2; exit 0; }
+
+want="${pfx%::}::1/64"
+# drop prefixes of an earlier bearer, so clients stop being told about them
+ip -6 -o addr show dev "$LAN" scope global | awk '{print $4}' | while read -r a; do
+    [ "$a" = "$want" ] || { ip -6 addr del "$a" dev "$LAN" && echo "ipv6-share: $LAN dropped $a"; }
+done
+if ! ip -6 -o addr show dev "$LAN" scope global | grep -q " ${want%/64}/64 "; then
+    ip -6 addr add "$want" dev "$LAN" && echo "ipv6-share: $LAN $want (prefix from $UP)"
+fi
+exit 0

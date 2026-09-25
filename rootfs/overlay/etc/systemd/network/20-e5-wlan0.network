@@ -6,3 +6,6 @@ Address=192.168.9.1/24
 # DHCP and DNS for the hotspot come from dnsmasq (etc/dnsmasq.d/e5-hotspot.conf): networkd
 # can hand out addresses but cannot answer the DNS queries it would advertise.
 DHCPServer=no
+# dnsmasq sends the router advertisements here (the bearer's /64, opt/e5/e5-ipv6-share);
+# the AP itself must not listen to any.
+IPv6AcceptRA=no

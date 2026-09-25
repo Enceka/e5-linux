@@ -16,7 +16,7 @@ else
     LIB=$(dirname "$SELF")
 fi
 
-if [ -n "$PYTHONPATH" ]; then
+if [ -n "${PYTHONPATH:-}" ]; then
     PYTHONPATH="$LIB:$PYTHONPATH"
 else
     PYTHONPATH="$LIB"

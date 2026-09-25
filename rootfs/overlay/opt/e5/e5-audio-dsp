@@ -6,7 +6,7 @@
 #   e5-audio-dsp status    what is loaded, whether the DSP wakes and answers
 #   e5-audio-dsp load      modprobe the 24 vendor audio modules, bind the card
 #   e5-audio-dsp start     load, write the AGDSP image, start the DSP, routes+profiles
-#   e5-audio-dsp routes    just the mixer route for the speaker (see set_routes)
+#   e5-audio-dsp routes    apply the card's UCM speaker route (see set_routes)
 #   e5-audio-dsp profiles [MODE]  load the DSP parameter blobs and select a mode
 #   e5-audio-dsp stop      stop the DSP (the modules stay loaded)
 #
@@ -87,6 +87,28 @@ load_all() {
     bind_card
 }
 
+# Every consumer of the AGDSP power domain can lose a race at boot: agdsp_pd
+# only registers its genpd provider once the mailbox is set up, and this
+# kernel's driver_deferred_probe_timeout is 0 (dd.c), so a device that probes
+# before the provider exists gets "deferred probe timeout, ignoring dependency"
+# -> -ETIMEDOUT, a hard failure that is never retried.  When it hits
+# sprd-pcm-audio (the PCM platform of every FE link), the card defers forever on
+# "platform component (null) not found for link FE_NORMAL_AP01" -- the "Get gpio
+# failed:-2" lines next to it are harmless (the hook error is only fatal for
+# -EPROBE_DEFER).  Re-probe whatever is still unbound; binding a supplier
+# retries the deferred card on its own.  Returns 0 if it poked anything.
+bind_pd_consumers() {
+    poked=1
+    for l in /sys/class/devlink/*agdsp-power-domain--platform:*; do
+        [ -e "$l" ] || continue
+        dev=${l##*--platform:}
+        [ -e "/sys/bus/platform/devices/$dev/driver" ] && continue
+        echo "$dev" > /sys/bus/platform/drivers_probe 2>/dev/null
+        [ -e "/sys/bus/platform/devices/$dev/driver" ] && { echo "re-probed $dev" >&2; poked=0; }
+    done
+    return $poked
+}
+
 # The card's probe runs before its components exist and is not retried -- it
 # returns 0 even when snd_soc_register_card deferred (mu300-linux found the same
 # behaviour), so bind it again by hand once everything is up.  On this board the
@@ -95,6 +117,8 @@ load_all() {
 bind_card() {
     drv=/sys/bus/platform/drivers/vbc-rxpx-codec-sc27xx
     [ -d "$drv" ] || return 0
+    grep -q sprdphone /proc/asound/cards 2>/dev/null && return 0
+    bind_pd_consumers && sleep 3
     grep -q sprdphone /proc/asound/cards 2>/dev/null && return 0
     echo sound@0 > "$drv/unbind" 2>/dev/null
     sleep 2
@@ -151,29 +175,21 @@ dsp_alive() {
 
 # The card registers with every route switched off, so opening a PCM fails with
 # "FE_NORMAL_AP01: ASoC: no backend DAIs enabled" and aplay reports "Unable to
-# install hw params" -- which reads like a broken driver and is not one.
-# Android's HAL sets these from its own configuration (the idle mixer state was
-# captured from the device's Android: both DEV_CHANGE controls already sit at
-# TYPE_SPK there, VBC DAC0 DG at 39,39); nothing inherits that here, so set the
-# speaker path explicitly.  Every name below exists on this card (verified in
-# the 340-control tinymix dump taken on Android).
-ROUTES=${E5_AUDIO_ROUTES:-"VBC_CUSTM_DEV_CHANGE=TYPE_SPK|VBC_SYSTEM_DEV_CHANGE=TYPE_SPK|Speaker Function=1|Speaker1 Function=1|Speaker Mute=0|agdsp_access_en=1|S_NORMAL_AP01_P_CODEC SWITCH=1|VBC DAC0 DG Set=39,39|AO Mixer AOL Switch=1|AO Mixer AOR Switch=1|Virt Output Switch=1"}
+# install hw params" -- which reads like a broken driver and is not one.  The
+# route is the card's ALSA UCM profile (/usr/share/alsa/ucm2/conf.d/
+# sprdphone-sc273/, verb HiFi, device Speaker): the same file WirePlumber
+# applies when a session opens the card, so there is one description of the
+# mixer and this only primes it for clients that do not speak UCM (aplay).
 set_routes() {
-    command -v amixer >/dev/null 2>&1 || { echo "no amixer; install alsa-utils" >&2; return 1; }
+    command -v alsaucm >/dev/null 2>&1 || { echo "no alsaucm; install alsa-utils" >&2; return 1; }
     card=$(awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null)
     [ -n "$card" ] || { echo "no sprdphone card" >&2; return 1; }
-    n=0
-    old=$IFS; IFS='|'
-    for s in $ROUTES; do
-        IFS=$old
-        name=${s%%=*}
-        val=${s#*=}
-        amixer -c "$card" cset name="$name" "$val" >/dev/null 2>&1 && n=$((n + 1)) ||
-            echo "  route failed: $name=$val" >&2
-        IFS='|'
-    done
-    IFS=$old
-    echo "audio routes: $n set on card $card"
+    if alsaucm -c "hw:$card" set _verb HiFi set _enadev Speaker; then
+        echo "audio route: UCM HiFi/Speaker on card $card"
+    else
+        echo "  UCM HiFi/Speaker failed on card $card (alsa-ucm-conf installed?)" >&2
+        return 1
+    fi
 }
 
 # The DSP parameter blobs.  The kernel fetches them itself
@@ -207,10 +223,21 @@ do_profiles() {
         esac
         amixer -c "$card" cset name="$u" 1 >/dev/null 2>&1 && n=$((n + 1))
     done
-    for s in 'Audio Structure Profile Select' 'DSP VBC Profile Select'; do
-        amixer -c "$card" cset name="$s" "$sel" >/dev/null 2>&1
-    done
-    echo "profiles: $n loaded, mode $mode selected (value $sel)"
+    # With no MODE given, use what Android holds while playing media:
+    # Audio Structure 0 and DSP VBC 0x404B0000 (offset 64 of the blob's 72
+    # modes).  The selects are declared with max 0x0fffffff, so amixer would
+    # clamp 0x404B0000 to 0x0fffffff -- which the driver then applies as
+    # dsp_case 0xffff; e5-ctl-raw writes around the clamp.
+    if [ -n "${1:-${E5_AUDIO_MODE:-}}" ]; then
+        as_sel=$sel; dsp_sel=$sel
+    else
+        as_sel=${E5_AS_SELECT:-0}; dsp_sel=${E5_DSP_SELECT:-0x404B0000}
+    fi
+    /opt/e5/e5-ctl-raw 'Audio Structure Profile Select' "$as_sel" "$card" >/dev/null 2>&1 ||
+        echo "  could not set Audio Structure Profile Select" >&2
+    /opt/e5/e5-ctl-raw 'DSP VBC Profile Select' "$dsp_sel" "$card" >/dev/null 2>&1 ||
+        echo "  could not set DSP VBC Profile Select" >&2
+    echo "profiles: $n loaded, selects $as_sel / $dsp_sel"
 }
 
 resolve_fw() {
@@ -228,6 +255,19 @@ resolve_fw() {
     return 1
 }
 
+# The codec/tdm platform devices wait (fw_devlink) on the aw87xxx PA
+# component, whose i2c probe lands right at the 20s deferred_probe_timeout
+# -- sometimes 70ms too late.  Then the codec never binds and no card ever
+# registers.  Re-binding by hand and re-triggering the card driver probe
+# assembles the graph with the PA already present (verified on the device).
+rescue_card() {
+    echo "card missing; re-probing AGDSP power-domain consumers (deferred-probe race)" >&2
+    bind_pd_consumers
+    modprobe snd_soc_sprd_card 2>/dev/null
+    sleep 3
+    grep -q sprdphone /proc/asound/cards 2>/dev/null
+}
+
 case "${1:-status}" in
 load)
     load_all || exit 1
@@ -239,13 +279,15 @@ load)
     ;;
 
 start)
+    # the profile MODE argument, saved now: the ldinfo read below reuses $1/$2
+    prof_mode=${2:-}
     # card first, always: see the comment block at the top
     load_all || exit 1
     [ -d "$BOOT" ] || { echo "no $BOOT -- sprd_audcp_boot did not probe" >&2; exit 1; }
-    grep -q sprdphone /proc/asound/cards 2>/dev/null ||
-        { echo "the sound card is not registered; starting the DSP now would reboot the device" >&2; exit 1; }
+    grep -q sprdphone /proc/asound/cards 2>/dev/null || rescue_card ||
+        { echo "no sound card even after the rescue; not touching the DSP (see dmesg)" >&2; exit 1; }
     resolve_fw || { echo "no AGDSP image: stage $FW (rootfs/pull-audio-firmware.sh) or keep $PART_BYNAME readable" >&2; exit 1; }
-    dsp_running && { echo "the DSP is already running"; do_profiles "${2:-}"; set_routes; exit 0; }
+    dsp_running && { echo "the DSP is already running"; do_profiles "$prof_mode"; set_routes; exit 0; }
     # ldinfo is a struct too: char name[32]; u32 load_phy_addr; u32 size.  The
     # size is what agdsp_store() clamps every write to, so a bigger image would
     # be truncated silently -- refuse instead.
@@ -260,7 +302,7 @@ start)
     # one write, not a loop: the driver tracks its own offset across writes
     if dd if="$FW" of="$BOOT/agdsp" bs=4096 2>/dev/null; then
         echo 1 > "$BOOT/start" 2>/dev/null
-        do_profiles "${2:-}"
+        do_profiles "$prof_mode"
         set_routes
         dsp_wakes; w=$?
         case $w in

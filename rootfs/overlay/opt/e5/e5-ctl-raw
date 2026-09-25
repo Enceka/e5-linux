@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Write one INTEGER control by name, without amixer's clamp to the declared max.
+
+    e5-ctl-raw 'DSP VBC Profile Select' 0x404B0000 [card]
+
+The vbc profile selects are declared with max 0x0fffffff, but the value is
+(mode_offset << 24) | (param_id << 16) | dsp_case and Android writes e.g.
+0x404B0000; amixer clamps that to 0x0fffffff, which the kernel then applies as
+dsp_case 0xffff.  The kernel put() does not range-check, so go around amixer.
+"""
+import ctypes, fcntl, os, sys
+
+
+class ElemId(ctypes.Structure):
+    _fields_ = [("numid", ctypes.c_uint), ("iface", ctypes.c_int),
+                ("device", ctypes.c_uint), ("subdevice", ctypes.c_uint),
+                ("name", ctypes.c_char * 44), ("index", ctypes.c_uint)]
+
+
+class ElemValue(ctypes.Structure):
+    _fields_ = [("id", ElemId), ("indirect", ctypes.c_uint), ("pad", ctypes.c_uint),
+                ("value", ctypes.c_long * 128),
+                ("tstamp", ctypes.c_long * 2), ("reserved", ctypes.c_ubyte * 112)]
+
+
+assert ctypes.sizeof(ElemValue) == 1224
+READ, WRITE = 0xC4C8_5512, 0xC4C8_5513  # _IOWR('U', 0x12/0x13, 1224)
+IFACE_MIXER = 2
+
+name, val = sys.argv[1], int(sys.argv[2], 0)
+card = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+fd = os.open(f"/dev/snd/controlC{card}", os.O_RDWR)
+v = ElemValue()
+v.id.iface, v.id.name = IFACE_MIXER, name.encode()
+v.value[0] = val
+fcntl.ioctl(fd, WRITE, v, True)
+r = ElemValue()
+r.id.iface, r.id.name = IFACE_MIXER, name.encode()
+fcntl.ioctl(fd, READ, r, True)
+print(f"{name}: wrote {val:#x}, reads {r.value[0] & 0xffffffff:#x}")

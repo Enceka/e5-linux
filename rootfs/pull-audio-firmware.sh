@@ -40,6 +40,8 @@ echo "== AGDSP image (l_agdsp_a, 6 MiB) =="
 IMG="$STAGE/l_agdsp_a.img"
 dev 'dd if=/dev/block/by-name/l_agdsp_a of=/data/local/tmp/l_agdsp_a.img' >/dev/null
 adb pull /data/local/tmp/l_agdsp_a.img "$IMG" >/dev/null
+dev "cp /vendor/firmware/aw87xxx_acf.bin /data/local/tmp/aw87xxx_acf.bin" >/dev/null
+adb pull /data/local/tmp/aw87xxx_acf.bin "$STAGE/aw87xxx_acf.bin" >/dev/null
 dev 'rm -f /data/local/tmp/l_agdsp_a.img' >/dev/null
 sz=$(wc -c < "$IMG")
 [ "$sz" -ge 6291456 ] || { echo "l_agdsp_a pulled short: $sz bytes" >&2; exit 1; }
@@ -65,5 +67,8 @@ echo "== install into the rootfs overlay =="
 mkdir -p "$OVL/lib/firmware"
 cp "$IMG" "$OVL/lib/firmware/l_agdsp_a.img"
 cp "$STAGE/audio_structure" "$STAGE/dsp_vbc" "$STAGE/cvs" "$OVL/lib/firmware/"
-ls -la "$OVL/lib/firmware" | grep -E 'l_agdsp|audio_structure|dsp_vbc|cvs'
+# the aw87xxx smart-amp profile the Awinic i2c driver requests by that
+# exact name at amp power-up (Android carries it in /vendor/firmware)
+cp "$STAGE/aw87xxx_acf.bin" "$OVL/lib/firmware/aw87xxx_acf.bin"
+ls -la "$OVL/lib/firmware" | grep -E 'l_agdsp|audio_structure|dsp_vbc|cvs|aw87xxx'
 echo "PULL-AUDIO-DONE"

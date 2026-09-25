@@ -249,9 +249,9 @@ persist
 if [ -n "$udc" ]; then
     # ADB is *not* added here on purpose: FunctionFS cannot be bound without a daemon
     # already holding ep0 (the composite bind fails and the board loses USB entirely, no
-    # network and no console).  The service that did it in that order (e5-adbd.service)
-    # was taken back out of the tree again -- docs/FINDINGS.md 21 has the measurements and
-    # what replaced it as the way in (telnet on the management LAN).
+    # network and no console).  The ADB experiment was taken back out of the tree;
+    # docs/FINDINGS.md 28 has what it established, and telnet on the management LAN is
+    # the way in.
     echo "$udc" > "$g/UDC"
     log "stage=usb-bind-done rc=$?"
 fi

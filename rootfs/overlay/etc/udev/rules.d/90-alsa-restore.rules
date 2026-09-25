@@ -1,0 +1,9 @@
+# Shadows /usr/lib/udev/rules.d/90-alsa-restore.rules: no alsactl restore on the E5.
+#
+# The sprdphone card's mixer is not state that can be replayed blindly.  A saved
+# asound.state writes IMPD ENABLE=1 into a codec that is still probing
+# (sprd_hf_impd_cal_put -> strcmp oops -> reboot loop), and the SYS_IIS* / scene
+# controls it replays fail or drive unbalanced regulator disables.  The route is
+# set explicitly by /opt/e5/e5-audio-dsp instead.  A regular file, not a
+# /dev/null symlink: boot/init copies the overlay with find -type f, which
+# skips symlinks.

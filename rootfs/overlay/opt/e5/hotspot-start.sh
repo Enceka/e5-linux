@@ -9,15 +9,13 @@
 # forever (that was never about the width -- see etc/hostapd/e5.conf).
 set -u
 CONF=${1:-/etc/hostapd/e5.conf}
-FW=/lib/firmware/wcnmodem.bin
-if [ ! -e /dev/block/by-name/wcnmodem ] && [ -f "$FW" ]; then
-    # The initramfs makes /dev/block/by-name; on the real root it does not exist,
-    # and "ln -sfn" then fails silently -- the driver finds no firmware node, the
-    # WCN chip refuses to power on, and the hotspot fails for the whole boot.
-    mkdir -p /dev/block/by-name
-    LO=$(losetup -f --show "$FW" 2>/dev/null)
-    [ -n "$LO" ] && ln -sfn "$LO" /dev/block/by-name/wcnmodem
-fi
+# No loop device over /lib/firmware/wcnmodem.bin for the DT's
+# /dev/block/by-name/wcnmodem.  The driver's partition reader is compiled out
+# (FIRMWARE_PARTITION_DEBUG_EN is never defined), so request_firmware() is its
+# only source -- and a read-write loop over the file makes that fail with
+# ETXTBSY (-26).  After one failure the driver never asks the loader again, so
+# a WCN power-on that landed after the losetup (Bluetooth's, usually) cost
+# Wi-Fi for the whole boot: "buff is NULL", "marlin download timeout".
 mkdir -p /etc/systemd/network/20-e5-wlan0.network.d
 {
     echo "[Network]"

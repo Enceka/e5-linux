@@ -1,0 +1,120 @@
+diff --git a/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c b/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
+index 4507e7ca4..fb846804a 100644
+--- a/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
++++ b/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
+@@ -119,9 +119,37 @@ static struct agdsp_access *g_agdsp_access;
+ static struct mbox_chan *g_agdsp_mboxchan;
+ static int msg_index;
+ 
++/*
++ * e5-linux: the genpd provider is registered here rather than at probe
++ * time.  agdsp_pd must load before audio_sipc (it exports this very
++ * function), but its provider registration is what un-defers the audio
++ * consumers, whose attach powers the domain on -- and sprd_agdsp_pw_on()
++ * needs the mailbox channel this call brings.  Registering at probe meant
++ * power_on running with no channel: the vendor code then dereferenced
++ * the NULL channel and Oopsed, and merely guarding that sent no wake
++ * mail, so the PMU polling loop ground through its full 5 s timeout
++ * (TRY_CNT_MAX * udelay(5)) and tripped the module-load watchdog panic
++ * ("snd_soc_sprd_vbc_v4.ko loads too long time").  Consumers that try
++ * to attach before this point keep waiting: of_genpd_get_from_provider()
++ * answers -ENOENT, genpd_dev_pm_attach() turns it into -EPROBE_DEFER,
++ * and the next driver registration in the module sequence re-triggers
++ * them.
++ */
++static struct device_node *g_agdsp_node;
++static int g_agdsp_provider_added;
++
+ void agdsp_set_mboxchan(struct mbox_chan *mboxchan)
+ {
+ 	g_agdsp_mboxchan = mboxchan;
++
++	if (!g_agdsp_provider_added && g_agdsp_node && g_agdsp_access) {
++		int ret = of_genpd_add_provider_simple(g_agdsp_node,
++						       &g_agdsp_access->pd);
++
++		pr_info("%s,of_genpd_add_provider_simple ret = %d\n",
++			__func__, ret);
++		g_agdsp_provider_added = (ret == 0);
++	}
+ }
+ EXPORT_SYMBOL(agdsp_set_mboxchan);
+ 
+@@ -264,12 +292,27 @@ static int sprd_agdsp_pw_on(struct generic_pm_domain *domain)
+ 		 * 100 is an invalid command
+ 		 */
+ 		pr_dbg("sprd_agdsp_pw_on ap_enable_cnt==0");
+-		msg_val[msg_index] = 100;
+-		ret = mbox_send_message(g_agdsp_mboxchan, (void *)&msg_val[msg_index]);
+-		if (ret < 0) {
+-			pr_err("%s, mbox send message error! ret=%d\n", __func__, ret);
++		/*
++		 * e5-linux: loaded as a module, agdsp_pd necessarily comes up
++		 * before audio_sipc (it exports agdsp_set_mboxchan, so the symbol
++		 * order is fixed), but its genpd registration immediately re-probes
++		 * the deferred audio consumers and powers the domain on -- long
++		 * before audio_sipc's probe hands over the mailbox channel.  The
++		 * wake mail is meaningless without DSP firmware anyway; send it
++		 * only when the channel exists instead of dereferencing NULL and
++		 * taking the whole board down with an Oops.
++		 */
++		if (g_agdsp_mboxchan) {
++			msg_val[msg_index] = 100;
++			ret = mbox_send_message(g_agdsp_mboxchan, (void *)&msg_val[msg_index]);
++			if (ret < 0) {
++				pr_err("%s, mbox send message error! ret=%d\n", __func__, ret);
++			}
++			mbox_chan_txdone(g_agdsp_mboxchan, 0);
++		} else {
++			pr_err("%s: no mbox channel yet (audio_sipc not probed); power on without the wake mail\n",
++				__func__);
+ 		}
+-		mbox_chan_txdone(g_agdsp_mboxchan, 0);
+ 		msg_index++;
+ 		if (msg_index >= MBOX_TX_QUEUE_LEN)
+ 			msg_index = 0;
+@@ -391,13 +434,25 @@ static int agdsp_access_init_thread(void *data)
+ 	pr_info("agdsp access thread entry.\n");
+ 
+ 	/* since the channel open may hang, we call it in the sblock thread */
+-	rval = smsg_ch_open(dsp_ac->dst, dsp_ac->channel, -1);
+-	if (rval != 0) {
+-		pr_info("Failed to open channel %d,dst=%d,rval=%d\n",
+-			dsp_ac->channel, dsp_ac->dst, rval);
+-		/* assign NULL to thread poniter as failed to open channel */
+-		dsp_ac->thread = NULL;
+-		return rval;
++	for (;;) {
++		rval = smsg_ch_open(dsp_ac->dst, dsp_ac->channel, -1);
++		if (rval == 0)
++			break;
++		/*
++		 * e5-linux: -ENODEV means the audio sipc target does not exist
++		 * yet.  audio_sipc, whose probe creates it, can only load after
++		 * this module (agdsp_set_mboxchan is exported here), so dying on
++		 * -ENODEV leaves the DSP access handshake without its thread
++		 * forever.  Retry until the target shows up (or we are stopped).
++		 */
++		if (rval != -ENODEV || kthread_should_stop()) {
++			pr_info("Failed to open channel %d,dst=%d,rval=%d\n",
++				dsp_ac->channel, dsp_ac->dst, rval);
++			/* assign NULL to thread poniter as failed to open channel */
++			dsp_ac->thread = NULL;
++			return rval;
++		}
++		msleep(200);
+ 	}
+ 
+ 	pr_info("agdsp_access_init_thread, while\n");
+@@ -599,8 +654,9 @@ static int agdsp_access_initialize(struct platform_device *pdev,
+ 	dsp_ac->pd.power_on = sprd_agdsp_pw_on;
+ 	ret = pm_genpd_init(&dsp_ac->pd, NULL, true);
+ 	pr_info("%s,pm_genpd_init ret = %d\n", __func__, ret);
+-	ret = of_genpd_add_provider_simple(node, &dsp_ac->pd);
+-	pr_info("%s,of_genpd_add_provider_simple ret = %d\n", __func__, ret);
++	/* e5-linux: provider registration moved to agdsp_set_mboxchan() --
++	 * see the comment there.  Keep the node for it. */
++	g_agdsp_node = of_node_get(node);
+ 
+ 	return 0;
+ error:

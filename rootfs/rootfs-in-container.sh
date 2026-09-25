@@ -17,7 +17,11 @@ if want deps; then
     export DEBIAN_FRONTEND=noninteractive
     echo "=== container deps ==="
     apt-get update -q
-    apt-get install -y -q --no-install-recommends e2fsprogs python3 ca-certificates
+    # kmod: configure-rootfs.sh builds modules.dep for the staged audio modules
+    # with depmod when present; without it the gen-modules-dep.py fallback wants
+    # nm (binutils), which a fresh trixie container also lacks -- a full rebuild
+    # in a pristine container died at "no nm found".
+    apt-get install -y -q --no-install-recommends e2fsprogs python3 ca-certificates kmod
 fi
 
 if want fetch; then

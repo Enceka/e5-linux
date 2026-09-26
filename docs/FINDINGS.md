@@ -1955,6 +1955,11 @@ the device (grim captures; the "logical" column is exactly the capture size):
   for the in-system text size that was found comfortable.
 * `sm.puri.phoc scale-to-fit = true` makes phoc scale down windows that are larger than
   the output, which is what keeps apps written for >=360 px usable.
+* **2026-09-26: back to scale 1**, at the owner's request after using 0.9: with the text
+  scaled up in Settings (text-scaling-factor 1.25) too many buttons ended up off the
+  screen, and the panel's own resolution is the one without resampling.  The output
+  can be changed live (`wlr-randr --output DSI-1 --scale <s>` in the session; phoc
+  implements wlr-output-management), phoc.ini is what a new session starts with.
 
 **The system font size is the user's call, and the toggle is built in.**  Everything
 above is about the *output* scale; the *font* is
@@ -3544,6 +3549,6 @@ flight at a time (20 concurrent status calls: 2 `nmcli` runs).
   deleted anything.
 * The unisoc-cpd web page (`:7887`) is gone with the daemon; UFI-TOOLS keeps working
   through `e5-at`.
-* Not yet exercised: incoming calls and SMS under ModemManager, Calls and
-  Chatty's own send/dial (only `mmcli` so far), call audio, and a real CP reset
-  (the module reload stands in for it).
+* Confirmed in use afterwards: SMS and calls both ways from Chatty and Calls.
+  Open: call audio (neither side hears anything), and a real CP reset (the module
+  reload stands in for it).

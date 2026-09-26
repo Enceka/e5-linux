@@ -44,11 +44,10 @@ FINDINGS.
   static from `+CGCONTRDP`, IPv6 SLAAC, the /64 passed to `br0`).  Phosh shows the
   signal, Chatty lists the SIM's SMS (and deletes them from the SIM once imported),
   UFI-TOOLS reads ModemManager and toggles the `Mobile` connection, `e5-at` goes
-  through `mmcli --command`.  Sending SMS works (the plugin writes the SMSC back
-  once per boot, FINDINGS 37.4) and outgoing VoLTE calls ring out and hang up;
-  still open: call audio (nothing routes the codec into the CP's voice path),
-  incoming calls/SMS and the Calls/Chatty UIs under ModemManager, a real CP reset
-  (a module reload recovers).  The CP boot is still `modem_control` in the chroot.
+  through `mmcli --command`.  SMS and calls work both ways in Chatty and Calls
+  (confirmed by the owner, 2026-09-26; the plugin writes the SMSC back once per
+  boot, FINDINGS 37.4); still open: call audio (see Next), a real CP reset (a
+  module reload recovers).  The CP boot is still `modem_control` in the chroot.
 - **`/dev/null` and friends come up 0660 on some boots** (FINDINGS 37.3):
   `rootfs-fixups` restores 0666 and logs it ("rootfs-fixups: /dev/null was mode
   660"); the culprit is not found.
@@ -123,9 +122,11 @@ FINDINGS.
   saver on idle, because this gnome-settings-daemon ships no `gsd-screensaver` and the
   phosh session does not start one; `logind`'s `IdleAction=lock` would need an idle
   hint that phoc never sets (`docs/FINDINGS.md` section 18).
-- **Calls and sending SMS** through ModemManager (Calls, Chatty).  SMS over MO was
-  proven through `unisoc-cpd` (FINDINGS 25.7: mind the PDU first octet); voice rides
-  IMS/VoLTE here and needs the call audio route (UCM "Voice Call", callaudiod).
+- **Call audio.**  Calls work in both directions under ModemManager (Calls rings,
+  answers, dials, hangs up; FINDINGS 37.4), but neither side hears anything: nothing
+  routes the codec (mic, earpiece/speaker) into the CP's VoLTE voice path.  Needs the
+  vendor voice route in ALSA (the AGDSP's voice scene, as the Android audio HAL sets
+  it up in a call), a UCM "Voice Call" verb, and callaudiod to switch it.
 - **The CP's 300 s dump wait after an assert** (FINDINGS 30): modem_control waits for
   a "dump complete" that only Android's CP log daemon sends.  Recovery itself should
   be automatic now (the AT port leaves and comes back with the channel, ModemManager

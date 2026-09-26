@@ -67,7 +67,7 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 | Wi-Fi | ✅ **已在设备上验证**——WCN 芯片上的 `sprd_wlan_combo` + `wcn_bsp`，开箱即可扫描 2.4 GHz 与 5 GHz AP（需要 initramfs overlay 中的固件以及厂商的 *user* 构建变体）；docs/FINDINGS.md 第 8.5–8.6 节 |
 | 蓝牙 | ✅ 内核按厂商 HAL 的方式配置 marlin3 核心（经 `request_firmware` 发送 pskey/RF/启用，关闭 tty 前发送核心禁用）——出厂地址 `FC:B5:85:D0:85:9B`，可扫描、可连接；内核补丁 `0018`、`0021`，FINDINGS §33.3、§35。⏳ 音频 profile 未测试 |
 | 会话时长 | ✅ 已修复：约 295 秒的静默重启来自 PMIC 看门狗；加载负责喂狗的 sprd_pmic_wdt.ko 后，会话可持续运行 10 分钟以上——docs/FINDINGS.md 第 9 节 |
-| 基带、数据 | ✅ **原生**：`sipc_wwan` 把 AT 通道注册为 WWAN 端口（内核 `0022`、`0023`），ModemManager 的 `unisoc` 插件驱动它（打过补丁的 modemmanager，见 `rootfs/deb-patches/`），NetworkManager 的 `Mobile` 连接在 `sipa_eth0` 上建立数据（IPv4 + IPv6）；5G SA、Phosh 显示信号、Chatty 读取短信；CP 仍由 chroot 中的 Android `modem_control` 启动——FINDINGS §36、§37；短信收发正常，VoLTE 去电可以接通振铃。⏳ 通话音频（对方听到的是静音） |
+| 基带、数据 | ✅ **原生**：`sipc_wwan` 把 AT 通道注册为 WWAN 端口（内核 `0022`、`0023`），ModemManager 的 `unisoc` 插件驱动它（打过补丁的 modemmanager，见 `rootfs/deb-patches/`），NetworkManager 的 `Mobile` 连接在 `sipa_eth0` 上建立数据（IPv4 + IPv6）；5G SA、Phosh 显示信号、Chatty 读取短信；CP 仍由 chroot 中的 Android `modem_control` 启动——FINDINGS §36、§37；短信收发、VoLTE 电话拨打和接听均正常（Chatty、Calls）。⏳ 通话音频：双方目前都听不到声音 |
 | 基带备用方案 | [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) 仍然安装但不启用：`systemctl start unisoc-cpd` 会从 ModemManager 手中收回基带（运行时页面位于 `http://192.168.9.1:7887`） |
 | UFI-TOOLS（Linux 移植版） | ✅ `http://<设备>:2333`，修改前登录口令为 `admin` |
 | 热点 | ✅ NetworkManager 的 `Hotspot` 连接（Phosh、UFI-TOOLS、`nmcli` 均可控制），5 GHz 149 信道 / 80 MHz（使用打过补丁的 network-manager，见 `rootfs/deb-patches/`），SSID `E5-Linux`，作为 `br0` 的端口与 USB 端口同网；IPv4 经 NAT 走承载，承载的公网 IPv6 /64 通过 SLAAC 分配给所有局域网客户端（带状态防火墙）——FINDINGS §35 |

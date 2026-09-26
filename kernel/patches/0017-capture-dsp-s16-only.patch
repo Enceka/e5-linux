@@ -1,0 +1,31 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] ASoC: sprd: FE_CAPTURE_DSP delivers 16-bit samples only
+
+The AGDSP capture scene writes S16_LE whatever the hw_params request.
+Opened S24_LE -- which PipeWire picks, since the DAI offered it -- the
+buffer holds two 16-bit samples per 32-bit word (0xf9530021), recorded as
+noise at -0.5 dBFS.  Offer S16_LE only; Android's HAL never opens it any
+other way.
+
+---
+diff --git a/sound/soc/sprd/unisoc/dai/vbc_v4/fe_dai/sprd-fe-dai.c b/sound/soc/sprd/unisoc/dai/vbc_v4/fe_dai/sprd-fe-dai.c
+index 91c631801..a965fd618 100644
+--- a/sound/soc/sprd/unisoc/dai/vbc_v4/fe_dai/sprd-fe-dai.c
++++ b/sound/soc/sprd/unisoc/dai/vbc_v4/fe_dai/sprd-fe-dai.c
+@@ -1021,8 +1021,14 @@ static struct snd_soc_dai_driver sprd_fe_dais[FE_DAI_ID_MAX] = {
+ 		.capture = {
+ 			.stream_name = "FE_DAI_CAP_DSP_C",
+ 			.rates = SNDRV_PCM_RATE_CONTINUOUS,
+-			.formats = (SNDRV_PCM_FMTBIT_S16_LE |
+-						SNDRV_PCM_FMTBIT_S24_LE),
++			/*
++			 * e5-linux: the AGDSP capture scene writes 16-bit samples
++			 * whatever the hw_params say; opened S24_LE the buffer
++			 * holds two of them per 32-bit word (0xf9530021), which
++			 * is what PipeWire picked and recorded as noise at
++			 * -0.5 dBFS.  Android's HAL only ever opens it S16_LE.
++			 */
++			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+ 			.channels_min = 1,
+ 			.channels_max = 2,
+ 			.rate_min = 8000,

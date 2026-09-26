@@ -8,6 +8,10 @@ Description: unisoc plugin -- Unisoc SoC modems over SIPC (E5)
     stated, not probed: +GCAP says +CGSM and +CGDCONT=? "IP" only;
   - signal from all nine +CESQ fields (NR included), and from the +CESQ the
     modem reports unsolicited; its unsolicited +CSQ is swallowed;
+  - the SMS service centre written back once per boot (+CSCA=, the value
+    +CSCA? reports): until then every submit fails with +CMS ERROR: 313;
+  - the dial's "+CDU:" and the call reports (^DSCI, +CLCCS, ...) swallowed,
+    calls followed through +CLCC polling;
   - a bearer that activates the context (+CGACT), routes it to the net port
     (+CGDATA="M-ETHER") and reads its settings from +CGCONTRDP: IPv4 static,
     IPv6 by router advertisement with the DNS servers of the dotted IPv6 line.
@@ -787,8 +791,8 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.h b/src/plugins/unisoc
 +#endif /* MM_BROADBAND_BEARER_UNISOC_H */
 diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/mm-broadband-modem-unisoc.c
 --- a/src/plugins/unisoc/mm-broadband-modem-unisoc.c	1970-01-01 08:00:00
-+++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c	2026-09-26 18:45:13
-@@ -0,0 +1,679 @@
++++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c	2026-09-26 19:44:18
+@@ -0,0 +1,784 @@
 +/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 +/*
 + * This program is free software; you can redistribute it and/or modify
@@ -812,6 +816,13 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 + *  - signal from +CESQ, NR fields included; +CSQ answers 255 ("unknown") on
 + *    NR.  The modem also sends +CSQ and +CESQ unsolicited every few seconds:
 + *    +CESQ updates the signal quality, +CSQ is swallowed.
++ *  - SMS submit needs the service centre written once per boot: until
++ *    AT+CSCA="<smsc>",<type> is sent (with the very value +CSCA? reports),
++ *    every +CMGS answers "+CMS ERROR: 313", whoever sends it and however the
++ *    PDU is built.  Done after the SMS format is set up.
++ *  - the dial answers "+CDU: <n>" before its OK, and a VoLTE call reports its
++ *    state with "+CLCCS:"; both are swallowed (calls are followed through the
++ *    +CLCC polling).
 + *  - power.  +CFUN=4 and +CFUN=1 are flight mode and back, with the SIM kept
 + *    on.  +CFUN=0 switches the SIM off, and nothing brings it back within
 + *    that boot (the vendor pair below then answers "not allowed" or nothing),
@@ -833,6 +844,7 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +#include "mm-base-modem-at.h"
 +#include "mm-iface-modem.h"
 +#include "mm-iface-modem-signal.h"
++#include "mm-iface-modem-messaging.h"
 +#include "mm-log-object.h"
 +#include "mm-broadband-modem-unisoc.h"
 +#include "mm-broadband-bearer-unisoc.h"
@@ -862,11 +874,15 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +
 +static void iface_modem_init (MMIfaceModemInterface *iface);
 +static void iface_modem_signal_init (MMIfaceModemSignalInterface *iface);
++static void iface_modem_messaging_init (MMIfaceModemMessagingInterface *iface);
++
++static MMIfaceModemMessagingInterface *iface_modem_messaging_parent;
 +
 +G_DEFINE_TYPE_EXTENDED (MMBroadbandModemUnisoc, mm_broadband_modem_unisoc, MM_TYPE_BROADBAND_MODEM, 0,
 +                        G_ADD_PRIVATE (MMBroadbandModemUnisoc)
 +                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
-+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init))
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init))
 +
 +static MMBroadbandModemUnisocPrivate *
 +get_private (gpointer self)
@@ -1061,6 +1077,88 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +    mm_base_modem_at_command (MM_BASE_MODEM (self), "+CESQ", 3, FALSE,
 +                              (GAsyncReadyCallback) cesq_values_ready,
 +                              g_task_new (self, cancellable, callback, user_data));
++}
++
++/*****************************************************************************/
++/* SMS format setup (Messaging interface): the parent's, then the service
++ * centre written back as +CSCA? reports it (see the top) */
++
++static gboolean
++messaging_setup_sms_format_finish (MMIfaceModemMessaging  *self,
++                                   GAsyncResult           *res,
++                                   GError                **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++csca_set_ready (MMBaseModem  *self,
++                GAsyncResult *res,
++                GTask        *task)
++{
++    g_autoptr(GError) error = NULL;
++
++    if (!mm_base_modem_at_command_finish (self, res, &error))
++        mm_obj_warn (self, "couldn't write the SMS service centre back: %s", error->message);
++    else
++        mm_obj_dbg (self, "SMS service centre written back");
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++csca_query_ready (MMBaseModem  *self,
++                  GAsyncResult *res,
++                  GTask        *task)
++{
++    const gchar      *response;
++    const gchar      *value;
++    g_autofree gchar *cmd = NULL;
++    g_autoptr(GError) error = NULL;
++
++    response = mm_base_modem_at_command_finish (self, res, &error);
++    value = response ? strstr (response, "+CSCA:") : NULL;
++    if (!value) {
++        mm_obj_warn (self, "no SMS service centre to write back: %s",
++                     error ? error->message : "no +CSCA reply");
++        g_task_return_boolean (task, TRUE);
++        g_object_unref (task);
++        return;
++    }
++    value += strlen ("+CSCA:");
++    while (*value == ' ')
++        value++;
++    /* verbatim, "<address>",<type>: in the charset it was read in */
++    cmd = g_strdup_printf ("+CSCA=%.*s", (int) strcspn (value, "\r\n"), value);
++    mm_base_modem_at_command (self, cmd, 10, FALSE,
++                              (GAsyncReadyCallback) csca_set_ready, task);
++}
++
++static void
++parent_setup_sms_format_ready (MMIfaceModemMessaging *self,
++                               GAsyncResult          *res,
++                               GTask                 *task)
++{
++    GError *error = NULL;
++
++    if (!iface_modem_messaging_parent->setup_sms_format_finish (self, res, &error)) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+CSCA?", 5, FALSE,
++                              (GAsyncReadyCallback) csca_query_ready, task);
++}
++
++static void
++messaging_setup_sms_format (MMIfaceModemMessaging *self,
++                            GAsyncReadyCallback    callback,
++                            gpointer               user_data)
++{
++    iface_modem_messaging_parent->setup_sms_format (
++        self,
++        (GAsyncReadyCallback) parent_setup_sms_format_ready,
++        g_task_new (self, NULL, callback, user_data));
 +}
 +
 +/*****************************************************************************/
@@ -1349,11 +1447,13 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +    /* Vendor reports nobody asked for, which otherwise end up inside command
 +     * replies (the model string read "+SPSLICEQUE:2|1,1|1 ^CONN: 11,2,2
 +     * V1.0.1-B7"): SIM/storage indications, PDN and slice state, and the call
-+     * control reports of the vendor RIL's protocol (^ORIG/^CONF/^CONN/^CEND;
-+     * calls are followed through +CLCC). */
-+    vendor = g_regex_new ("\\r\\n\\+(SIND|ECIND|PRENWINFU|SPPSREADY|SPSLICEQUE|SPERROR|SPPCODATA):[^\\r\\n]*\\r\\n",
++     * control reports of the vendor RIL's protocol (^ORIG/^CONF/^CONN/^CEND/^DSCI,
++     * +SPCALLEXTINFO),
++     * the dial's "+CDU: <n>" and the VoLTE call state "+CLCCS:" -- calls are
++     * followed through +CLCC -- and the IMS registration report "+CIREGU:". */
++    vendor = g_regex_new ("\\r\\n\\+(SIND|ECIND|PRENWINFU|SPPSREADY|SPSLICEQUE|SPERROR|SPPCODATA|SPCALLEXTINFO|CIREGU|CDU|CLCCS):[^\\r\\n]*\\r\\n",
 +                          G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
-+    call = g_regex_new ("\\r\\n\\^(ORIG|CONF|CONN|CEND):[^\\r\\n]*\\r\\n",
++    call = g_regex_new ("\\r\\n\\^(ORIG|CONF|CONN|CEND|DSCI):[^\\r\\n]*\\r\\n",
 +                        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 +    mm_port_serial_at_add_unsolicited_msg_handler (primary, vendor, NULL, NULL, NULL);
 +    mm_port_serial_at_add_unsolicited_msg_handler (primary, call, NULL, NULL, NULL);
@@ -1444,6 +1544,15 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +    iface->modem_power_down_finish = modem_power_finish;
 +    iface->modem_power_off = modem_power_down;
 +    iface->modem_power_off_finish = modem_power_finish;
++}
++
++static void
++iface_modem_messaging_init (MMIfaceModemMessagingInterface *iface)
++{
++    iface_modem_messaging_parent = g_type_interface_peek_parent (iface);
++
++    iface->setup_sms_format = messaging_setup_sms_format;
++    iface->setup_sms_format_finish = messaging_setup_sms_format_finish;
 +}
 +
 +static void

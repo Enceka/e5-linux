@@ -47,6 +47,9 @@ xdg-desktop-portal
 fonts-noto-core
 fonts-noto-color-emoji
 fonts-dejavu-core
+# CJK: without it every Chinese string in the session is boxes.  Noto Sans CJK
+# matches the Noto set above; fontconfig picks its SC face for zh-CN (91 MB).
+fonts-noto-cjk
 
 # --- graphics: software rendering only ---
 libgl1-mesa-dri

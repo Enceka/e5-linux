@@ -3356,3 +3356,46 @@ btattach is killed.  Result: `cp bt delete thread ok` at once, NM stopped in und
 second, the whole shutdown 2.7 s, and the USB link gone 8 s after `systemctl
 reboot` (35 s before); BT power-off/on from bluetoothctl still works.  0021 is in a
 module (`sprdbt_tty`, initramfs), so the kernel stays `#4`.
+
+## 36. Native baseband, step 1: the SIPC AT channel as a WWAN port (2026-09-26)
+
+Goal: the stock Linux modem stack (kernel WWAN framework, ModemManager,
+NetworkManager, Phosh, Calls, Chatty) on the baseband, instead of unisoc-cpd's private
+socket.  The CP boot stays Android's `modem_control` in its chroot for now
+(`sprd_modem_loader` accepts no other caller, and it needs the Trusty TA).
+
+**The port.**  `stty_nr` (SIPC dst 5, channel 6, 32 rings) are spipe character
+devices, not ttys, so ModemManager cannot take them.  `kernel/patches/0022`
+(`sipc_wwan`, `CONFIG_WWAN=m`) registers one WWAN AT port, `/dev/wwan0at0`, on the
+`stty_nr` platform device, modelled on `rpmsg_wwan_ctrl`: writes to ring 1 (the
+command ring), reads from ring 1 with ring 0's URCs merged in by whole lines between
+reply lines (the SMS `> ` prompt has no newline, so ring 1 passes straight through).
+Checked by hand: `+CPIN: READY`, `+CEREG: 2,1`, `+CGMI` Spreadtrum, URCs (`+CSQ`,
+`+CESQ`, `+CGREG`) arriving merged, `AT<CR><LF>` (ModemManager's terminator) fine.
+
+**Three ways to lose the CP's AT server** found on the way -- each silent (AT dead
+for every client, unisoc-cpd included, no assert) or an assert, each costing a reboot:
+
+* **Writing to ring 0.**  The first version exposed rings 1 and 0 as two AT ports;
+  ModemManager probed both with `AT`, and nothing on either answered from then on.
+  Ring 0 is receive-only; nobody ever writes it (unisoc-cpd only reads it).
+* **Leaving the rings unread.**  Three seconds into a handover (unisoc-cpd stopped,
+  port not yet open), after an earlier ModemManager session had changed the modem's
+  report settings: `MN_AL Task PS ... Error 0xb, The queue was full`.  A 2 KiB ring
+  fills in seconds when reports flow, and the CP's queue backs up behind it.  The
+  driver now drains both rings from load and drops what arrives while the port is
+  closed (285 bytes over one ModemManager session) -- which makes it and a user of
+  `/dev/stty_nr0/1` mutually exclusive.  The CP recovered from this assert by itself
+  (dump wait, then the bearer came back).
+* **`ATZ`.**  ModemManager's enable sequence starts with it; no reply, and AT was
+  dead from then on.
+
+**ModemManager 1.24, generic plugin**, ports tagged by a runtime udev rule
+(`ID_MM_DEVICE_PROCESS`, `ID_MM_PORT_TYPE_AT_PRIMARY` on `wwan0at0`, the same
+`ID_MM_PHYSDEV_UID` on it and `sipa_eth0`): the modem is created -- Spreadtrum,
+firmware `5G_MODEM_V2_23B_W24.16.1`, IMEI, own number, SIM (IMSI, ICCID, operator
+46015), modes 4G/5G, ports `wwan0at0` (at) + `sipa_eth0` (net) -- after about sixty
+probe/init commands, none of them harmful.  Enabling fails on `ATZ`.  Next: a
+`unisoc` ModemManager plugin (no `ATZ`, the vendor power-up, the M-ETHER bearer with
+the static IP config of `+CGCONTRDP`), carried in Debian's source package like the
+NetworkManager fixes.

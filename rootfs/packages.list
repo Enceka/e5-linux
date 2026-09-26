@@ -142,3 +142,29 @@ pipewire-alsa
 # e5-bt-attach runs btattach/bluetoothd; bluez only arrived as someone else's
 # dependency before.
 bluez
+
+# --- apps for the phosh session ---
+# Adaptive (libadwaita/GTK4) applications that fit a 320x480 portrait panel and
+# work with the on-screen keyboard.  Deliberately not here: gnome-calls and
+# chatty, which need ModemManager -- the modem is unisoc-cpd's (FINDINGS 25) and
+# ModemManager would fight it for /dev/stty_nr*; and the evolution-data-server
+# stack (contacts, calendar, maps) the 4 GiB loop file has no room for.
+gnome-console
+gnome-text-editor
+gnome-calculator
+gnome-clocks
+gnome-weather
+loupe
+papers
+portfolio-filemanager
+phosh-mobile-settings
+# browser: GNOME Web adapts to the narrow screen; Firefox ESR does not without
+# mobile-config-firefox (not in trixie), but it was installed and is kept
+epiphany-browser
+firefox-esr
+nautilus
+# media: music (Amberol), video (Showtime), and a recorder -- which is also the
+# quickest end-to-end check of the microphone path
+amberol
+showtime
+gnome-sound-recorder

@@ -28,6 +28,12 @@
 #   01  the hotspot switch follows an access point whatever its IP setup: the
 #       E5's "Hotspot" is a bridge port with no IPv4 setting, and phosh only
 #       counted ipv4.method=shared -- the switch showed off and could not stop it
+#   02  phone mode keeps the window close button: with no Escape key, and a
+#       back key that closes no GTK dialog, dialogs could not be left
+#
+# gnome-control-center:
+#   01  the Wi-Fi panel finds the bridged "Hotspot" and turns it on instead of
+#       creating a NAT-sharing one, and never adds ipv4.method=shared to a port
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG=${1:?package}
@@ -46,12 +52,14 @@ apt-get build-dep -y -qq "$PKG" >/dev/null
 mkdir -p /build && cd /build
 apt-get source -qq "$PKG"
 cd "$(find . -maxdepth 1 -mindepth 1 -type d | head -1)"
+# (a series without a final newline would take our first patch into its last line)
+[ -n "$(tail -c1 debian/patches/series 2>/dev/null)" ] && echo >> debian/patches/series
 for p in /patches/"$PKG"-*.patch; do
     cp "$p" debian/patches/
     echo "$(basename "$p")" >> debian/patches/series
 done
 export QUILT_PATCHES=debian/patches
-quilt push -a >/dev/null
+quilt push -a >/build/quilt.log 2>&1 || { tail -20 /build/quilt.log; exit 1; }
 quilt pop -a >/dev/null
 N=$(ls /patches/"$PKG"-*.patch | wc -l)
 DEBEMAIL="e5-linux@localhost" DEBFULLNAME="e5-linux" \

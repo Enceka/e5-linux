@@ -3552,3 +3552,35 @@ flight at a time (20 concurrent status calls: 2 `nmcli` runs).
 * Confirmed in use afterwards: SMS and calls both ways from Chatty and Calls.
   Open: call audio (neither side hears anything), and a real CP reset (the module
   reload stands in for it).
+
+## 38. The phone UI on the E5: hotspot switch, dialogs, the black panel, scale (2026-09-26)
+
+* **The hotspot in Phosh and Settings.**  Both took only `ipv4.method=shared`
+  connections for a hotspot, and the E5's `Hotspot` is a port of `br0` with no IPv4
+  setting.  Phosh (0.46) showed the switch off and its `stop_hotspot()` refused to
+  run; it has no way to turn a hotspot *on* at all (`start_hotspot()` has no caller
+  in the UI).  Settings' Wi-Fi panel did not find the connection and offered to
+  create a new one -- NetworkManager's own NAT-sharing hotspot, which would fight
+  br0/dnsmasq -- and its hotspot dialog adds `ipv4.method=shared` to a connection
+  without IPv4 settings, which would have broken the bridge port.
+  `rootfs/deb-patches/phosh-01` and `gnome-control-center-01`: an access point (or
+  ad-hoc network) is a hotspot whatever its IP setup, a bridge port is found and
+  reused, and no IPv4 setting is added to a port.
+* **Dialogs could not be closed.**  Phosh sets the window button layout to
+  `appmenu:` in phone mode (`docked-manager.c`), so no window has a close button,
+  and this device has no Escape: the back key reports KEY_BACK and BackSpace
+  (section 12.1), neither of which closes a `GtkDialog`.  Settings' "Modem Details"
+  (a `GtkDialog`) could only be left by killing the app.  `phosh-02` keeps
+  `appmenu:close` in phone mode.
+* **After a lock the panel stayed black.**  phoc: `DRM_IOCTL_MODE_CREATE_DUMB
+  failed: Invalid argument` ... `Failed to commit power mode change to 1`.  The
+  vendor display driver counted dumb-buffer creations in a static that never went
+  down (10, raised to 64 by kernel `0006`), and wlroots builds a new swapchain
+  whenever the output is reconfigured or comes back from blanking -- live scale
+  changes with `wlr-randr` used up the rest of the boot's budget, and screen-off/on
+  cycles alone would have in time.  Kernel `0025` removes the count (buffers are
+  freed with their GEM object; `dma_alloc_wc()` is the real limit).  Verified: 40
+  output off/on cycles after boot, the panel on, no allocation failure.
+* **Scale 0.85** after trying 1, 0.9 and 0.85 in use (the text is scaled to 1.25 in
+  Settings; section 21 has the measurements).  `wlr-randr` is in the image to change
+  it live; it cannot be applied while the panel is blanked.

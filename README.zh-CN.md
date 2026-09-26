@@ -70,7 +70,7 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 | 基带、数据 | ✅ **原生**：`sipc_wwan` 把 AT 通道注册为 WWAN 端口（内核 `0022`、`0023`），ModemManager 的 `unisoc` 插件驱动它（打过补丁的 modemmanager，见 `rootfs/deb-patches/`），NetworkManager 的 `Mobile` 连接在 `sipa_eth0` 上建立数据（IPv4 + IPv6）；5G SA、Phosh 显示信号、Chatty 读取短信；CP 仍由 chroot 中的 Android `modem_control` 启动——FINDINGS §36、§37；短信收发、VoLTE 电话拨打和接听均正常（Chatty、Calls）。⏳ 通话音频：双方目前都听不到声音 |
 | 基带备用方案 | [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) 仍然安装但不启用：`systemctl start unisoc-cpd` 会从 ModemManager 手中收回基带（运行时页面位于 `http://192.168.9.1:7887`） |
 | UFI-TOOLS（Linux 移植版） | ✅ `http://<设备>:2333`，修改前登录口令为 `admin` |
-| 热点 | ✅ NetworkManager 的 `Hotspot` 连接（Phosh、UFI-TOOLS、`nmcli` 均可控制），5 GHz 149 信道 / 80 MHz（使用打过补丁的 network-manager，见 `rootfs/deb-patches/`），SSID `E5-Linux`，作为 `br0` 的端口与 USB 端口同网；IPv4 经 NAT 走承载，承载的公网 IPv6 /64 通过 SLAAC 分配给所有局域网客户端（带状态防火墙）——FINDINGS §35 |
+| 热点 | ✅ NetworkManager 的 `Hotspot` 连接（Phosh 的开关和设置里的 Wi-Fi 面板已打补丁可识别它；UFI-TOOLS、`nmcli` 也可控制），5 GHz 149 信道 / 80 MHz（使用打过补丁的 network-manager，见 `rootfs/deb-patches/`），SSID `E5-Linux`，作为 `br0` 的端口与 USB 端口同网；IPv4 经 NAT 走承载，承载的公网 IPv6 /64 通过 SLAAC 分配给所有局域网客户端（带状态防火墙）——FINDINGS §35 |
 | 音频 | ✅ 扬声器与麦克风均已实际使用验证（Amberol、GNOME 录音机、设置中的声音测试）：扬声器经 ALSA（UCM `HiFi`/`Speaker`，S16 交错格式）与 PipeWire 播放，麦克风为 “Internal Microphone” 音源（DSP 录音，单声道 S16）；`e5-audio.service` 从 `l_agdsp_a` 启动 AGDSP；内核补丁 `0010`–`0014`、`0017`、`0019`、`0020`，FINDINGS §24.8、§33、§34。⏳ 听筒尚未实听 |
 | 空闲负载 | ✅ 空闲时负载均值约为 0（此前因厂商内核线程处于 `D` 状态及同步控制台输出而读数在 6 以上）——内核补丁 `0015`，FINDINGS §29 |
 
@@ -78,7 +78,7 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 
 | 路径 | 内容 |
 |---|---|
-| `kernel/` | `build-linux.sh`、`e5-linux.fragment`（在设备 defconfig 之上追加的 Linux 配置）、`patches/0001-0024`（由 `build-linux.sh` 应用） |
+| `kernel/` | `build-linux.sh`、`e5-linux.fragment`（在设备 defconfig 之上追加的 Linux 配置）、`patches/0001-0025`（由 `build-linux.sh` 应用） |
 | `boot/` | `init`（initramfs）、`build-boot-image.py`、`stage-modules.sh` + `module-order.{stock,extra}`、`flash-trial.sh` / `android-boot-linux.sh`（从 Android 执行）、`flash-from-linux.sh`（从运行中的 e5-linux 执行） |
 | `rootfs/` | `build-rootfs-container.sh`（及 `rootfs-in-container.sh`，在 Debian arm64 容器中构建）、`install-rootfs.sh`、`packages.list`、`configure-rootfs.sh`、`fetch-debian-rootfs.py`、`install-packages.sh`、`pull-wcn-firmware.sh` / `pull-audio-firmware.sh` / `extract-android-vendor.sh`（从你的设备提取文件）、`stage-unisoc-cpd.sh`、`overlay/`；`device-*.sh` 与 `build-rootfs.sh`/`e5-chroot.sh` 是较早的设备端构建与 qemu 构建路径 |
 | `tools/` | `collect-logs.sh`、`e5-telnet.py`、`e5-serial.py`，以及截图/按键/触摸辅助工具 |

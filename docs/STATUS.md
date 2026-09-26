@@ -86,11 +86,10 @@ FINDINGS.
   `stop_marlin(MARLIN_BLUETOOTH)` waited 30 s with the WCN power lock held and
   Wi-Fi's teardown queued behind it.  `kernel/patches/0021` sends the disable from
   `mtty_close`; the USB link now drops 8 s after `systemctl reboot`.
-- **Phosh's hotspot switch does not see the bridged hotspot as on.**  It starts the
-  `Hotspot` connection (the first AP-mode profile), but only counts a connection
-  with `ipv4.method=shared` as a hotspot, and a bridge port has no IP settings, so
-  the switch shows off and cannot stop it (Phosh 0.46 and main, `wifi-manager.c`
-  `is_active_connection_hotspot_master`).  UFI-TOOLS and `nmcli` control it fine.
+- **The hotspot in Phosh and Settings: patched, to be confirmed in use** (FINDINGS
+  38).  Phosh shows the bridged `Hotspot` as on and turns it off (it has no "on"
+  of its own in 0.46); Settings' Wi-Fi panel turns the same connection on instead
+  of creating a NAT-sharing one.  UFI-TOOLS and `nmcli` control it too.
 - **The hotspot needs one real client check over the bridge.**  usb0 and the AP are
   one LAN since 2026-09-26 (`br0`, FINDINGS 31): a phone associated and got
   192.168.9.41 plus a SLAAC address in the bearer's /64 during the live change, and
@@ -103,8 +102,9 @@ FINDINGS.
 - **GPU: the two open ends left by panfrost.**  The backport itself is done
   (`kernel/patches/0005`, `MALI_MIDGARD=m`, `docs/FINDINGS.md` 20.7) and clients
   render on `Mali-G57 (Panfrost)`; what is left is (a) the scanout buffers are still
-  the vendor KMS driver's dumb buffers, which is why `DUMB_CREATE_TIMES_LIMIT` sits
-  at 64, and (b) the frequency is pinned at DVFS index 3 (384 MHz) because devfreq
+  the vendor KMS driver's dumb buffers (their creation limit is gone since kernel
+  `0025`: it had left the panel black after enough screen-off/on cycles, FINDINGS
+  38), and (b) the frequency is pinned at DVFS index 3 (384 MHz) because devfreq
   is skipped on this board -- watch thermals under real load.  PanVK stays out of
   reach: Mesa has no Valhall v9 backend.
 
@@ -144,7 +144,7 @@ FINDINGS.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`-`0024`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`-`0025`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |

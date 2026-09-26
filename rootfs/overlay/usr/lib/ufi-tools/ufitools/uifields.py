@@ -14,6 +14,7 @@ the device through systemd and sysfs.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -98,6 +99,19 @@ class UiFields:
             "lte_rsrp": modem.get("lte_rsrp", ""),
             "lte_rsrq": modem.get("lte_rsrq", ""),
             "Z5g_rsrp": modem.get("Z5g_rsrp", ""),
+            "nr_rsrq": modem.get("nr_rsrq", ""),
+            "Nr_snr": modem.get("Nr_snr", ""),
+            "Nr_bands": modem.get("Nr_bands", ""),
+            "Nr_fcn": modem.get("Nr_fcn", ""),
+            "Nr_pci": modem.get("Nr_pci", ""),
+            "Nr_cell_id": modem.get("Nr_cell_id", ""),
+            "Nr_bands_widths": modem.get("Nr_bands_widths", ""),
+            "Lte_snr": modem.get("Lte_snr", ""),
+            "Lte_bands": modem.get("Lte_bands", ""),
+            "Lte_fcn": modem.get("Lte_fcn", ""),
+            "Lte_pci": modem.get("Lte_pci", ""),
+            "Lte_cell_id": modem.get("Lte_cell_id", ""),
+            "Lte_bands_widths": modem.get("Lte_bands_widths", ""),
             "Lte_ca_status": "",
             # -- connectivity ----------------------------------------------
             "ppp_status": mobile.get("ppp_status", "ppp_disconnected"),
@@ -157,7 +171,7 @@ class UiFields:
             # -- locks (intent only: the modem is not driven here) ----------
             "lte_band_lock": str(config.get("lte_band_lock", "")),
             "nr_band_lock": str(config.get("nr_band_lock", "")),
-            "neighbor_cell_info": [],
+            "neighbor_cell_info": self._neighbour_cells(modem.get("neighbor_cells", "")),
             "locked_cell_info": [],
             # -- sms (this device has no SMS stack) -------------------------
             "sms_received_flag": "0",
@@ -180,6 +194,15 @@ class UiFields:
         return out
 
     # -- helpers -----------------------------------------------------------
+    @staticmethod
+    def _neighbour_cells(text: str) -> List[Dict[str, str]]:
+        """The neighbour cells the modem snapshot carries as JSON."""
+        try:
+            cells = json.loads(text) if text else []
+        except ValueError:
+            return []
+        return cells if isinstance(cells, list) else []
+
     def _ipv6(self, interface: str) -> str:
         if not interface:
             return ""

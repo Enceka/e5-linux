@@ -16,7 +16,8 @@
 #
 # modemmanager (docs/FINDINGS.md 37):
 #   01  the unisoc plugin: the baseband over the kernel's sipc_wwan AT port
-#       and sipa_eth, without the commands that silence its AT server
+#       and sipa_eth, without the commands that silence its AT server; cell
+#       info (serving and neighbour cells) and the LTE SINR from +SPENGMD
 #   02  +CREG/+CGREG/+CEREG with a two-digit AcT (NR SA reports 11) parse
 #   03  +CMGL PDU listings with an empty line before each PDU parse
 #   04  AT commands over D-Bus (mmcli --command) without --debug: e5-at and
@@ -36,6 +37,8 @@
 # gnome-control-center:
 #   01  the Wi-Fi panel finds the bridged "Hotspot" and turns it on instead of
 #       creating a NAT-sharing one, and never adds ipv4.method=shared to a port
+#   02  Modem Details shows the serving cell (band, channel, PCI, cell id,
+#       TAC, bandwidth, RSRP/RSRQ/SINR) and the neighbour cells
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG=${1:?package}

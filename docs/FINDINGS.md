@@ -3553,6 +3553,48 @@ flight at a time (20 concurrent status calls: 2 `nmcli` runs).
   Open: call audio (neither side hears anything), and a real CP reset (the module
   reload stands in for it).
 
+### 37.7 Cell info: band, PCI and the neighbours (2026-09-26)
+
+ModemManager had no cell info for this modem (`mmcli --get-cell-info`:
+"operation not supported") and its Signal interface only what `+CESQ` carries,
+which has no LTE SINR.  The CP's engineering-mode query has all of it, and is
+what UFI's own firmware tools read: `AT+SPENGMD=0,<page>,<item>` answers one
+line of `-`-separated fields (a negative number just follows its separator,
+`-9963--1209`), levels in hundredths of a dB(m).
+
+    0,14,1  NR serving: 0 band, 1 NR-ARFCN, 2 PCI, 3 RSRP, 4 RSRQ, 7 bandwidth
+            (MHz), 8 gNB id, 9 NCI (low 32 bits), 15 SINR
+    0,14,2  NR neighbours, a list per field: band, NR-ARFCN, PCI, RSRP, RSRQ, SINR
+    0,6,0   LTE serving: 0 band, 1 EARFCN, 2 PCI, 3 RSRP, 4 RSRQ, 7 bandwidth
+            code, 10 eNB id, 11 cell id, 29 TAC
+    0,0,6   LTE physical layer: 2 SINR
+    0,6,6   LTE neighbours, a field per cell: EARFCN, PCI, RSRP, RSRQ, ...
+
+Checked on NR SA (band n41, 504990): field 5 is a constant -1.20 and 15 the
+one that moves, so 15 is the SINR; field 9 is the NCI cut to 32 bits, and with
+the gNB id (24 bits here) put back above it it equals the 36-bit
+`+C5GREG` cell id (`A10246001`, `A10277005`).  The serving cell changes every
+few minutes where this handset lies, and a cell being reselected reports its
+NCI as 0.  The LTE pages follow UFI's layout and have not been seen on LTE.
+
+The unisoc plugin (`modemmanager-01`) implements the Modem interface's cell
+info from pages 14,1 / 14,2 / 6,0 / 6,6 -- PCI and cell ids in hexadecimal, as
+ModemManager keeps them, bandwidth in Hz -- and adds page 0,6's LTE SINR to the
+Signal interface.  ModemManager's cell info has no band field: the consumers
+look it up from the channel (an EARFCN belongs to one band; NR bands overlap,
+and the ones used in China win: n78 before n77, n41 before n90).  An NR cell's
+TAC is not in its cell info either; the 3GPP location has it.
+
+* Settings' Modem Details (`gnome-control-center-02`) gains a "Serving Cell"
+  group -- band, channel, PCI, cell id, TAC, bandwidth, RSRP, RSRQ, SINR, per
+  RAT under EN-DC -- and a "Neighbour Cells" group, refreshed every 5 s while
+  the dialog is shown.
+* UFI-TOOLS (`modem.py`) fills the web UI's per-RAT fields from the cell info
+  (`Nr_bands`, `Nr_fcn`, `Nr_pci`, `Nr_cell_id`, `Nr_bands_widths`, `Z5g_rsrp`,
+  `nr_rsrq`, `Nr_snr`, and the `Lte_*` counterparts) and its neighbour table.
+  It used to copy the NR RSRP into the LTE fields as well, and had no SINR,
+  band, channel or PCI at all.
+
 ## 38. The phone UI on the E5: hotspot switch, dialogs, the black panel, scale, BT vs Wi-Fi (2026-09-26)
 
 * **The hotspot in Phosh and Settings.**  Both took only `ipv4.method=shared`

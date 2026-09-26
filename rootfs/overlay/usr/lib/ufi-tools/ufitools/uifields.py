@@ -3,7 +3,7 @@
 The frontend asks for names like ``ppp_status`` or ``monthly_rx_bytes``, which
 it inherited from the hotspot firmware it was originally written for.  Those
 names are a *UI contract*, not a protocol, and the values behind them exist on a
-Linux device too -- they just come from ``/proc``, ``/sys``, systemd, hostapd
+Linux device too -- they just come from ``/proc``, ``/sys``, systemd, NetworkManager
 and the modem.  This module is that translation, and it is read-only.
 
 Nothing here emulates a vendor backend: there is no session, no request signing

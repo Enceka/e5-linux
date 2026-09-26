@@ -1,0 +1,46 @@
+# The E5's hotspot, as NetworkManager runs it: what Phosh's hotspot switch,
+# UFI-TOOLS and `nmcli connection up Hotspot` start.
+#
+# Shipped read-only here, not in /etc: the overlay is copied over /etc at every
+# boot and would undo a changed SSID or password.  NetworkManager writes an
+# edited copy to /etc/NetworkManager/system-connections/, which shadows this one
+# and survives.
+#
+# The AP is a port of br0, the LAN it shares with the USB port -- no IP settings
+# here: dnsmasq on br0 hands out 192.168.9.x, the bearer's IPv6 /64 is
+# advertised on br0 (e5-ipv6-share), and nat.nft forwards and filters (its
+# bridge table keeps the management ports off wlan0).
+#
+# 5 GHz, 80 MHz on channel 36 (5170-5250, not DFS in CN), not the 149 hostapd
+# used: NetworkManager 1.52 computes the VHT80 centre as channel 154 for
+# 149-161 (the right one is 155; fixed upstream in 2026, "supplicant: fix
+# center channel calculation"), and wpa_supplicant then fails the AP with
+# "Interface initialization failed".  Its formula is right for 36-48.
+[connection]
+id=Hotspot
+uuid=6f2c9e5a-3b1d-4e57-9a0c-e5e5e5000001
+type=wifi
+interface-name=wlan0
+# up at boot, like the hostapd hotspot was; NetworkManager brings back whichever
+# of the hotspot and a joined Wi-Fi network was used last, and retries on its
+# own when the WCN firmware refuses the first beacon
+autoconnect=true
+master=br0
+slave-type=bridge
+
+[wifi]
+mode=ap
+ssid=E5-Linux
+band=a
+channel=36
+channel-width=80
+
+[wifi-security]
+key-mgmt=wpa-psk
+proto=rsn
+pairwise=ccmp
+group=ccmp
+pmf=1
+psk=12345678
+
+[bridge-port]

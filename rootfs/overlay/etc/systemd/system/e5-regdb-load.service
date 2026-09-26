@@ -1,9 +1,9 @@
 [Unit]
 # cfg80211 requests regulatory.db before the rootfs is mounted; the request then waits
 # up to 60 s in the sysfs firmware fallback.  Feeding it here is what makes the
-# regulatory domain (and therefore hostapd's channels) work -- afterwards the domain is
-# world/00 and every channel is NO-IR, which hostapd reports as "Failed to set beacon
-# parameters".  See docs/FINDINGS.md.
+# regulatory domain (and therefore the hotspot's channels) work -- afterwards the domain
+# is world/00 and every channel is NO-IR, which the AP (hostapd then, wpa_supplicant
+# under NetworkManager now) reports as "Failed to set beacon parameters".  See docs/FINDINGS.md.
 Description=E5 regulatory.db feed for cfg80211
 DefaultDependencies=no
 After=systemd-udevd.service local-fs.target

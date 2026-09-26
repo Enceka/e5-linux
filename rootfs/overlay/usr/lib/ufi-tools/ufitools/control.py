@@ -2,19 +2,25 @@
 
 This is the device's control plane: rather than asking a vendor web backend to
 reboot the device or change the hotspot, UFI-TOOLS drives the Linux facilities
-that already own those resources -- systemd units, hostapd, dnsmasq, sysfs.
+that already own those resources -- systemd units, NetworkManager, dnsmasq,
+nftables, sysfs.
 
-E5-LINUX caveat that shaped the hotspot code: the initramfs overlay is copied
-over ``/etc`` on every boot, so a file that exists in the baked overlay (such as
-``/etc/hostapd/e5.conf``) silently reverts.  Edits are therefore written to
-``<data_dir>/hostapd-managed.conf`` and a systemd drop-in is pointed at it;
-neither path is in the overlay, so both survive a reboot.
+The hotspot is NetworkManager's "Hotspot" connection (an AP that is a port of
+br0), the same one Phosh's Wi-Fi menu starts; every read and write goes through
+``nmcli``.  E5-LINUX caveat: the initramfs overlay is copied over ``/etc`` on
+every boot, so the profile ships read-only in
+``/usr/lib/NetworkManager/system-connections`` and NetworkManager itself writes
+the edited copy to ``/etc/NetworkManager/system-connections``, which is not in
+the overlay and survives.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import re
+import shlex
 import shutil
 import socket
 import struct
@@ -22,18 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from .shell import ShellResult, run_shell, systemctl, unit_active
 
-#: hostapd keys this module understands, with the config key that overrides them.
-HOSTAPD_KEYS = {
-    "ssid": "ssid",
-    "wpa_passphrase": "psk",
-    "channel": "channel",
-    "hw_mode": "hw_mode",
-    "max_num_sta": "max_clients",
-    "ignore_broadcast_ssid": "hidden",
-    "country_code": "country",
-}
-
-_IFACE_RE = re.compile(r"^\s+(?:inet|inet6)\s+([0-9a-fA-F:.]+\S*)(?:/(\d+))?", re.MULTILINE)
+_IFACE_RE = re.compile(r"^\s+(?:inet|inet6)\s+([0-9a-fA-F:.]+)(?:/(\d+))?", re.MULTILINE)
 _STATION_MAC_RE = re.compile(r"^Station\s+([0-9a-fA-F:]{17})", re.MULTILINE)
 
 
@@ -59,36 +54,45 @@ def write_text(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
-def parse_hostapd(text: str) -> Dict[str, str]:
-    """Parse the flat ``key=value`` hostapd configuration."""
+#: The hotspot settings read back from NetworkManager, in ``nmcli -t`` names.
+NM_HOTSPOT_FIELDS = ("802-11-wireless.ssid,802-11-wireless.band,802-11-wireless.channel,"
+                     "802-11-wireless.hidden,802-11-wireless-security.key-mgmt,"
+                     "802-11-wireless-security.psk")
+
+#: nftables table holding the hotspot's MAC allow/deny list (NetworkManager's AP
+#: mode has none of its own): a bridge filter on frames that enter from wlan0.
+ACL_TABLE = "e5acl"
+
+
+def parse_nmcli_terse(text: str) -> Dict[str, str]:
+    """``nmcli -t -f a,b connection show X`` prints ``a:value`` lines, with ``:``
+    and ``\\`` inside values backslash-escaped."""
     result: Dict[str, str] = {}
     for line in (text or "").splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line or "=" not in line:
+        if ":" not in line:
             continue
-        key, value = line.split("=", 1)
-        result[key.strip()] = value.strip()
+        key, value = line.split(":", 1)
+        result[key.strip()] = re.sub(r"\\(.)", r"\1", value)
     return result
 
 
-def render_hostapd(values: Dict[str, str]) -> str:
-    """Render a hostapd configuration, keeping unknown keys untouched by order."""
-    lines = ["# Managed by UFI-TOOLS -- do not edit by hand; change it in the web UI."]
-    for key, value in values.items():
-        lines.append("%s=%s" % (key, value))
-    return "\n".join(lines) + "\n"
-
-
-def auth_mode(values: Dict[str, str]) -> str:
-    """Map a hostapd config onto the auth names the web UI knows."""
-    if values.get("wpa", "0") in ("0", "") and values.get("auth_algs", "1") == "1":
+def auth_mode(key_mgmt: str) -> str:
+    """Map NetworkManager's key-mgmt onto the auth names the web UI knows."""
+    key_mgmt = (key_mgmt or "").strip().lower()
+    if key_mgmt in ("", "none"):
         return "OPEN"
-    key_mgmt = values.get("wpa_key_mgmt", "WPA-PSK")
-    if "SAE" in key_mgmt and "WPA-PSK" in key_mgmt:
-        return "WPA2-PSK/WPA3-PSK"
-    if "SAE" in key_mgmt or values.get("wpa", "2") == "3":
+    if key_mgmt == "sae":
         return "WPA3-PSK"
     return "WPA2(AES)-PSK"
+
+
+def _decode_ui_password(value: str) -> str:
+    """The web UI sends the password base64-encoded (main.js encodeBase64)."""
+    try:
+        decoded = base64.b64decode(value, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return value
+    return decoded if decoded.isprintable() else value
 
 
 def iface_ipv4(interface: str) -> Dict[str, str]:
@@ -166,130 +170,141 @@ class SystemControl:
         return systemctl("start" if enable else "stop", unit)
 
     # -- hotspot -----------------------------------------------------------
-    def _base_conf(self) -> str:
-        return str(self.config.get("hotspot_conf") or "")
+    def _hotspot_name(self) -> str:
+        return str(self.config.get("hotspot_connection") or "Hotspot")
 
-    def _managed_conf(self) -> str:
-        return os.path.join(self.config.data_dir, "hostapd-managed.conf")
+    def _nmcli(self, args: str, timeout: float = 15.0) -> ShellResult:
+        return run_shell("nmcli %s" % args, timeout=timeout)
 
-    def _effective_conf(self) -> str:
-        managed = self._managed_conf()
-        if os.path.isfile(managed):
-            return managed
-        return self._base_conf()
+    def hotspot_active(self) -> bool:
+        out = self._nmcli("-t -f NAME connection show --active", timeout=5.0).content
+        return self._hotspot_name() in (out or "").splitlines()
 
     def hotspot_values(self) -> Dict[str, str]:
-        raw = parse_hostapd(read_text(self._effective_conf()) or "")
-        values = dict(raw)
-        values.setdefault("ssid", "")
-        values.setdefault("channel", "")
-        values.setdefault("max_num_sta", "8")
-        values.setdefault("ignore_broadcast_ssid", "0")
-        return values
+        raw = parse_nmcli_terse(self._nmcli("-s -t -f %s connection show %s" % (
+            NM_HOTSPOT_FIELDS, shlex.quote(self._hotspot_name())), timeout=5.0).content)
+        band = raw.get("802-11-wireless.band", "")
+        return {
+            "ssid": raw.get("802-11-wireless.ssid", ""),
+            "channel": raw.get("802-11-wireless.channel", ""),
+            "hw_mode": "g" if band == "bg" else "a",
+            "hidden": raw.get("802-11-wireless.hidden", "no"),
+            "key_mgmt": raw.get("802-11-wireless-security.key-mgmt", ""),
+            "psk": raw.get("802-11-wireless-security.psk", ""),
+        }
 
     def hotspot_status(self) -> Dict[str, Any]:
-        interface = str(self.config.get("wlan_interface") or "wlan0")
         values = self.hotspot_values()
-        unit = str(self.config.get("hotspot_unit") or "")
-        info = iface_ipv4(interface)
+        lan = str(self.config.get("lan_interface") or "br0")
         return {
-            "active": unit_active(unit) if unit else False,
-            "unit": unit,
-            "interface": interface,
-            "ssid": values.get("ssid", ""),
-            "psk": values.get("wpa_passphrase", ""),
-            "channel": values.get("channel", ""),
-            "hw_mode": values.get("hw_mode", ""),
-            "auth": auth_mode(values),
-            "hidden": values.get("ignore_broadcast_ssid", "0") not in ("0", ""),
-            "max_clients": values.get("max_num_sta", ""),
-            "country": values.get("country_code", ""),
-            "managed_conf": self._managed_conf(),
-            "using_managed_conf": os.path.isfile(self._managed_conf()),
-            "ipv4": info.get("lan_ipaddr", ""),
+            "active": self.hotspot_active(),
+            "connection": self._hotspot_name(),
+            "unit": self._hotspot_name(),
+            "managed_by": "NetworkManager",
+            "interface": str(self.config.get("wlan_interface") or "wlan0"),
+            "ssid": values["ssid"],
+            "psk": values["psk"],
+            "channel": values["channel"],
+            "hw_mode": values["hw_mode"],
+            "auth": auth_mode(values["key_mgmt"]),
+            "hidden": values["hidden"] == "yes",
+            # NetworkManager's AP mode has no station limit
+            "max_clients": "",
+            "country": "CN",
+            "ipv4": iface_ipv4(lan).get("lan_ipaddr", ""),
         }
 
     def set_hotspot(self, enable: bool) -> ShellResult:
-        unit = str(self.config.get("hotspot_unit") or "")
-        if not unit:
-            raise ControlError("未配置热点服务单元")
-        if enable:
-            self._ensure_unit_dropin()
-        return systemctl("start" if enable else "stop", unit)
+        name = shlex.quote(self._hotspot_name())
+        if not enable:
+            return self._nmcli("connection down %s" % name, timeout=20.0)
+        # The WCN firmware can refuse the first beacon right after a boot; a
+        # second activation has always gone through.
+        result = self._nmcli("--wait 40 connection up %s" % name, timeout=45.0)
+        if not result.done:
+            result = self._nmcli("--wait 40 connection up %s" % name, timeout=45.0)
+        return result
 
     def configure_hotspot(self, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Merge ``updates`` into the managed hostapd config and restart.
+        """Change the hotspot connection with ``nmcli connection modify``.
 
-        Accepts the same field names the vendor UI used
-        (``SSID``/``Password``/``ApMaxStationNumber``/``ApBroadcastDisabled``/
-        ``channel``) so both the shim and a direct API caller work.
+        Accepts the field names the vendor UI used (``SSID``/``Password``/
+        ``AuthMode``/``ApBroadcastDisabled``/``channel``/``hw_mode``) and the
+        plain ones (``ssid``/``psk``/``auth``/``hidden``); an active hotspot is
+        brought up again with the new settings.
         """
-        mapping = {
-            "SSID": "ssid",
-            "ssid": "ssid",
-            "Password": "wpa_passphrase",
-            "psk": "wpa_passphrase",
-            "channel": "channel",
-            "ApMaxStationNumber": "max_num_sta",
-            "max_clients": "max_num_sta",
-        }
-        values = parse_hostapd(read_text(self._base_conf()) or "")
-        values.setdefault("ssid", "E5-Linux")
-        values.setdefault("channel", "149")
-        values.setdefault("hw_mode", "a")
-        values.setdefault("max_num_sta", "8")
-        values.setdefault("ignore_broadcast_ssid", "0")
-        values.setdefault("wpa", "2")
-        values.setdefault("wpa_key_mgmt", "WPA-PSK")
-        values.setdefault("rsn_pairwise", "CCMP")
-        values.setdefault("country_code", "CN")
-
+        props: List[tuple] = []
         applied: Dict[str, Any] = {}
-        for source, target in mapping.items():
-            if source in updates and updates[source] not in (None, ""):
-                values[target] = str(updates[source])
-                applied[target] = values[target]
-        if "ApBroadcastDisabled" in updates:
-            values["ignore_broadcast_ssid"] = "1" if str(updates["ApBroadcastDisabled"]) == "0" else "0"
-            applied["ignore_broadcast_ssid"] = values["ignore_broadcast_ssid"]
-        if "hidden" in updates:
-            values["ignore_broadcast_ssid"] = "1" if updates["hidden"] else "0"
-            applied["ignore_broadcast_ssid"] = values["ignore_broadcast_ssid"]
-        auth = str(updates.get("AuthMode") or updates.get("auth") or "")
+
+        def given(*names):
+            for name in names:
+                if name in updates and updates[name] not in (None, ""):
+                    return str(updates[name])
+            return None
+
+        ssid = given("SSID", "ssid")
+        if ssid:
+            props.append(("802-11-wireless.ssid", ssid))
+            applied["ssid"] = ssid
+
+        psk = given("psk")
+        if psk is None and given("Password"):
+            psk = _decode_ui_password(given("Password"))
+        auth = given("AuthMode", "auth")
+        if auth == "OPEN":
+            props.append(("802-11-wireless-security.key-mgmt", "none"))
+        elif auth:
+            props.append(("802-11-wireless-security.key-mgmt",
+                          "sae" if auth == "WPA3-PSK" else "wpa-psk"))
         if auth:
-            if auth == "OPEN":
-                values.update({"wpa": "0", "auth_algs": "1"})
-                values.pop("wpa_key_mgmt", None)
-                values.pop("wpa_passphrase", None)
-            elif auth == "WPA3-PSK":
-                values.update({"wpa": "2", "wpa_key_mgmt": "SAE", "ieee80211w": "2"})
-            else:
-                values.update({"wpa": "2", "wpa_key_mgmt": "WPA-PSK", "rsn_pairwise": "CCMP"})
             applied["auth"] = auth
+        if psk and auth != "OPEN":
+            if not 8 <= len(psk) <= 63:
+                raise ControlError("WPA 密码长度须为 8-63 个字符")
+            props.append(("802-11-wireless-security.psk", psk))
+            applied["psk"] = "***"
 
-        if not values.get("wpa_passphrase") and values.get("wpa", "0") != "0":
-            raise ControlError("非开放网络必须设置密码")
+        channel = given("channel")
+        hw_mode = given("hw_mode")
+        if channel or hw_mode:
+            if channel:
+                band = "bg" if int(channel) <= 14 else "a"
+            else:
+                band = "bg" if hw_mode in ("g", "b") else "a"
+                channel = "6" if band == "bg" else "36"
+            # 80 MHz on 5 GHz, except from channel 149 up: NetworkManager 1.52
+            # computes a wrong VHT80 centre there and the AP fails to start.
+            if band == "bg":
+                width = "20"
+            elif int(channel) >= 149:
+                width = "40"
+            else:
+                width = "80"
+            props += [("802-11-wireless.band", band), ("802-11-wireless.channel", channel),
+                      ("802-11-wireless.channel-width", width)]
+            applied.update({"band": band, "channel": channel, "channel_width": width})
 
-        write_text(self._managed_conf(), render_hostapd(values))
-        self._ensure_unit_dropin()
-        result = systemctl("restart", str(self.config.get("hotspot_unit") or ""))
-        return {"applied": applied, "conf": self._managed_conf(), "restarted": result.done}
+        hidden = None
+        if "ApBroadcastDisabled" in updates:
+            # main.js: the "broadcast SSID" box checked sends 0
+            hidden = str(updates["ApBroadcastDisabled"]) != "0"
+        if "hidden" in updates:
+            hidden = bool(updates["hidden"])
+        if hidden is not None:
+            props.append(("802-11-wireless.hidden", "yes" if hidden else "no"))
+            applied["hidden"] = hidden
 
-    def _ensure_unit_dropin(self) -> Optional[str]:
-        """Point the hotspot unit at the managed config (survives the overlay)."""
-        unit = str(self.config.get("hotspot_unit") or "")
-        base = self._base_conf()
-        if not unit or not os.path.isfile(self._managed_conf()):
-            return None
-        dropin_dir = "/etc/systemd/system/%s.d" % unit
-        dropin = os.path.join(dropin_dir, "10-ufi-tools.conf")
-        script = "/opt/e5/hotspot-start.sh"
-        if not os.path.isfile(script):
-            return None
-        write_text(dropin, "[Service]\nExecStart=\nExecStart=%s %s\n" % (
-            script, self._managed_conf()))
-        run_shell("systemctl daemon-reload", timeout=10)
-        return dropin
+        if not props:
+            return {"applied": {}, "connection": self._hotspot_name(), "restarted": False}
+        name = shlex.quote(self._hotspot_name())
+        args = " ".join("%s %s" % (key, shlex.quote(value)) for key, value in props)
+        result = self._nmcli("connection modify %s %s" % (name, args))
+        if not result.done:
+            raise ControlError("NetworkManager 拒绝了这些设置：%s" % result.content.strip())
+        restarted = False
+        if self.hotspot_active():
+            restarted = self.set_hotspot(True).done
+        return {"applied": applied, "connection": self._hotspot_name(), "restarted": restarted}
 
     # -- clients -----------------------------------------------------------
     def clients(self) -> List[Dict[str, str]]:
@@ -302,8 +317,10 @@ class SystemControl:
             by_mac[mac.lower()] = {"mac_addr": mac.lower(), "ip_addr": "", "hostname": "",
                                    "type": "wireless"}
 
-        # `ip neigh` prints "<ip> dev <if> lladdr <mac> <state>".
-        arp = run_shell("ip -4 neigh show dev %s" % interface, timeout=5.0).content
+        # `ip neigh` prints "<ip> dev <if> lladdr <mac> <state>".  The AP is a
+        # port of the LAN bridge, so its clients' addresses are on the bridge.
+        lan = str(self.config.get("lan_interface") or "br0")
+        arp = run_shell("ip -4 neigh show dev %s" % lan, timeout=5.0).content
         for line in (arp or "").splitlines():
             fields = line.split()
             if len(fields) < 4 or "lladdr" not in fields:
@@ -312,15 +329,15 @@ class SystemControl:
             mac = fields[fields.index("lladdr") + 1] if fields.index("lladdr") + 1 < len(fields) else ""
             if mac.count(":") != 5:
                 continue
-            entry = by_mac.setdefault(mac.lower(),
-                                      {"mac_addr": mac.lower(), "ip_addr": "",
-                                       "hostname": "", "type": "wireless"})
-            entry["ip_addr"] = address
+            entry = by_mac.get(mac.lower())
+            if entry is not None:
+                entry["ip_addr"] = address
 
+        # leases cover the USB port too: only the associated stations are Wi-Fi clients
         for mac, address, hostname in self._leases():
-            entry = by_mac.setdefault(mac.lower(),
-                                      {"mac_addr": mac.lower(), "ip_addr": "", "hostname": "",
-                                       "type": "wireless"})
+            entry = by_mac.get(mac.lower())
+            if entry is None:
+                continue
             if address:
                 entry["ip_addr"] = address
             if hostname:
@@ -346,31 +363,48 @@ class SystemControl:
         return []
 
     def set_client_access(self, mode: str, macs: List[str]) -> Dict[str, Any]:
-        """Allow/deny list, applied through the managed hostapd config."""
-        values = parse_hostapd(read_text(self._effective_conf()) or "")
-        values.pop("macaddr_acl", None)
-        values.pop("accept_mac_file", None)
-        values.pop("deny_mac_file", None)
+        """Allow/deny list for the hotspot, as an nftables bridge filter.
+
+        NetworkManager's AP mode has no MAC list, so a station still associates,
+        but nothing it sends gets past the bridge.  The ruleset is kept in the
+        data directory and loaded again by ``apply_client_access`` at start-up.
+        """
+        interface = str(self.config.get("wlan_interface") or "wlan0")
+        macs = [m.lower() for m in macs if re.match(r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$", m)]
+        lines = ["table bridge %s" % ACL_TABLE, "delete table bridge %s" % ACL_TABLE]
         if macs:
-            list_path = os.path.join(self.config.data_dir, "hostapd-maclist.conf")
-            write_text(list_path, "\n".join(macs) + "\n")
-            values["macaddr_acl"] = "0" if mode == "allow" else "1"
-            values["accept_mac_file" if mode == "allow" else "deny_mac_file"] = list_path
-        else:
-            list_path = ""
-        write_text(self._managed_conf(), render_hostapd(values))
-        self._ensure_unit_dropin()
-        systemctl("restart", str(self.config.get("hotspot_unit") or ""))
-        return {"mode": mode, "count": len(macs), "list": list_path}
+            match = "!=" if mode == "allow" else "=="
+            lines += [
+                "table bridge %s {" % ACL_TABLE,
+                "  chain filter {",
+                "    type filter hook prerouting priority -200; policy accept;",
+                "    iifname \"%s\" ether saddr %s { %s } drop" % (
+                    interface, match, ", ".join(macs)),
+                "  }",
+                "}",
+            ]
+        path = os.path.join(self.config.data_dir, "hotspot-acl.nft")
+        write_text(path, "\n".join(lines) + "\n")
+        result = run_shell("nft -f %s" % shlex.quote(path), timeout=10.0)
+        if not result.done:
+            raise ControlError("nftables 拒绝了访问控制规则：%s" % result.content.strip())
+        return {"mode": mode, "count": len(macs), "ruleset": path}
+
+    def apply_client_access(self) -> None:
+        """Load the saved allow/deny list (called once at start-up)."""
+        path = os.path.join(self.config.data_dir, "hotspot-acl.nft")
+        if os.path.isfile(path):
+            run_shell("nft -f %s" % shlex.quote(path), timeout=10.0)
 
     # -- LAN (read-only) ---------------------------------------------------
     def lan_status(self) -> Dict[str, Any]:
-        interface = str(self.config.get("wlan_interface") or "wlan0")
+        interface = str(self.config.get("lan_interface") or "br0")
         info = iface_ipv4(interface)
         mac = read_text("/sys/class/net/%s/address" % interface)
         conf = read_text(str(self.config.get("dnsmasq_conf") or "")) or ""
         start, end = "", ""
-        match = re.search(r"dhcp-range=([^,\s]+),([^,\s]+)", conf)
+        # dnsmasq: dhcp-range=[set:<tag>,|tag:<tag>,]<start>,<end>[,...]
+        match = re.search(r"dhcp-range=(?:(?:set|tag):[^,\s]+,)*([0-9.]+),([0-9.]+)", conf)
         if match:
             start, end = match.group(1), match.group(2)
         else:

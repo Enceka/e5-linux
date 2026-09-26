@@ -7,7 +7,7 @@ answered locally:
 * ``GET /api/ui/fields?cmd=<names>`` -- answered from :mod:`ufitools.uifields`
   (the real device) and :mod:`ufitools.modem` (AT-derived values);
 * ``POST /api/ui/action`` with ``action=<name>`` -- routed to
-  :mod:`ufitools.control`, which drives systemd, hostapd, dnsmasq and sysfs.
+  :mod:`ufitools.control`, which drives systemd, NetworkManager, dnsmasq and sysfs.
 
 There is no vendor backend, no session, no ``AD`` signature and no second
 credential: the single credential is the UFI-TOOLS token, checked by
@@ -175,12 +175,8 @@ def _dispatch(app, control, action: str, form: Dict[str, str]):
         return {"result": "success"}
     if action == "switchWiFiChip":
         band = "2g" if str(form.get("ChipEnum") or "").endswith("1") else "5g"
-        conf = config.get("hotspot_conf_2g" if band == "2g" else "hotspot_conf_5g")
-        if conf:
-            config.update({"hotspot_conf": str(conf), "hotspot_band": band})
-        channel = "6" if band == "2g" else "149"
-        control.configure_hotspot({"channel": channel,
-                                   "hw_mode": "g" if band == "2g" else "a"})
+        config.update({"hotspot_band": band})
+        control.configure_hotspot({"hw_mode": "g" if band == "2g" else "a"})
         return {"result": "success"}
     if action == "setAccessPointInfo":
         control.configure_hotspot(form)

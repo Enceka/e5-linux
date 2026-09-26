@@ -59,15 +59,17 @@ mesa-utils
 libdrm-tests
 
 # --- networking ---
-# No NetworkManager.  Everything is either systemd-networkd (usb0's management
-# LAN and its DHCPServer, wlan0's 192.168.9.1) or one of our scripts
-# (e5-bearer-up owns the baseband route, hotspot-start.sh owns wlan0 and
-# dnsmasq), so NM managed nothing but the desktop's network panel.  It cost real
-# time: NetworkManager-wait-online held network-online.target for minutes
-# because NM autoconnects on sipa_dummy0 -- the sprd-wlan placeholder netdev,
-# which needs no address at all -- and that in turn timed the hotspot's start
-# script out and left the WCN chip powered down; its stop path also sat 32 s on
-# WCN teardown during every reboot.
+# NetworkManager manages Wi-Fi and nothing else (etc/NetworkManager/conf.d/
+# 50-e5.conf): station mode from Phosh's Wi-Fi menu, and the hotspot -- the
+# "Hotspot" connection, an AP that is a port of br0 -- from Phosh, UFI-TOOLS or
+# nmcli.  The LAN (br0, usb0) is e5-net-bridge's, the bearer is e5-bearer-up's
+# and unisoc-cpd's, DHCP/DNS/RA is dnsmasq's.  Everything else is on NM's
+# unmanaged list, which is what keeps it off sipa_dummy0: an NM that
+# autoconnected there once held network-online.target for minutes and timed
+# the old hostapd hotspot out (docs/FINDINGS.md 26).  wpasupplicant runs both
+# station and AP mode for it.
+network-manager
+wpasupplicant
 rfkill
 # nftables: e5-mobile-data creates the NAT table for the USB/Wi-Fi clients and
 # the hotspot's forwarding depends on it.  ethtool: the sipa driver reports wrong
@@ -102,14 +104,11 @@ foot
 xdg-desktop-portal-gtk
 xdg-desktop-portal-phosh
 
-# --- Wi-Fi hotspot ---
-# hostapd runs the AP and iw sets the regulatory domain (regdb-load): with a
-# country and the signed regulatory.db the driver advertises 5725-5850 @ 80 MHz
-# and hostapd reaches AP-ENABLED (docs/FINDINGS.md 20).
+# --- Wi-Fi regulatory ---
+# iw sets the regulatory domain (e5-regdb-load) and wireless-regdb is the
+# signed regulatory.db it installs: with a country and that database the driver
+# advertises 5 GHz at 80 MHz and the hotspot can start (docs/FINDINGS.md 20).
 iw
-hostapd
-# The signed regulatory.db e5-regdb-load installs: with it the driver advertises
-# 5725-5850 @ 80 MHz and hostapd reaches AP-ENABLED.
 wireless-regdb
 
 # --- UFI-TOOLS ---

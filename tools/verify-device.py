@@ -326,7 +326,7 @@ def main():
         # those once and match against their text.
         drops = ['NetworkManager.service.d/50-e5-networkd.conf',
                  'NetworkManager.service.d/20-e5-shutdown-timeout.conf',
-                 'e5-hotspot.service', 'e5-zram.service.d/10-e5-4g.conf']
+                 'e5-zram.service.d/10-e5-4g.conf']
         drop_text = ''.join(dev.file('etc/systemd/system/' + d) for d in drops)
         pulled = set(u for u in known if u in drop_text)
         for unit in sorted(known):

@@ -90,18 +90,23 @@ bash "$HERE/e5-chroot.sh" '
     # still have them enabled).  A single owner is what the SIPC channel and the
     # CP command queue both require.
     #
-    # e5-regdb-load and e5-hotspot are what the Wi-Fi hotspot is (the regulatory
-    # database and hostapd on wlan0), e5-telnetd is the way in on a device with no
-    # usable keypad, and e5-gadget-guard keeps the USB gadget alive.  All four used
-    # to be enabled by hand on a device that was already installed, which is why a
-    # fresh install had no hotspot at all.  e5-fixups is the port of mu300-fixups:
+    # e5-regdb-load feeds cfg80211 the regulatory database the hotspot's 5 GHz
+    # channels need (the hotspot itself is NetworkManager's "Hotspot" connection,
+    # enabled below), e5-telnetd is the way in on a device with no usable keypad,
+    # and e5-gadget-guard keeps the USB gadget alive.  These used to be enabled by
+    # hand on a device that was already installed, which is why a fresh install
+    # once had no hotspot at all.  e5-fixups is the port of mu300-fixups:
     # it restores the cap_net_raw on ping and links e5-next-boot/mobile-data/e5-at into
     # /usr/local/bin, which is what makes `sudo e5-next-boot android` work.
     for s in e5-vendor e5-cp_diskserver e5-refnotify \
              e5-net-bridge unisoc-cpd unisoc-cpd-web e5-bearer-up \
-             e5-regdb-load e5-hotspot e5-telnetd e5-gadget-guard e5-fixups; do
+             e5-regdb-load e5-telnetd e5-gadget-guard e5-fixups; do
         systemctl --root=/ enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done
+    # Wi-Fi: NetworkManager owns wlan0 only (etc/NetworkManager/conf.d/50-e5.conf)
+    # -- the hotspot, an AP port of br0, and whatever network Phosh joins.  Its
+    # wait-online unit is a no-op (a drop-in in the overlay).
+    systemctl --root=/ enable NetworkManager.service >/dev/null 2>&1 || echo "warn: NetworkManager enable failed"
     # brings the bearer back after a CP reset (boot/init links it too)
     systemctl --root=/ enable e5-bearer-watch.timer >/dev/null 2>&1 || echo "warn: e5-bearer-watch.timer enable failed"
     # The sound card: e5-audio loads the 24 vendor audio modules, boots the AGDSP

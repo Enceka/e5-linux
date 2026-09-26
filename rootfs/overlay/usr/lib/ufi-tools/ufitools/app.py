@@ -193,6 +193,10 @@ class Application:
     def start_background(self) -> None:
         if self._scheduler is not None:
             return
+        try:
+            self.control.apply_client_access()
+        except Exception as exc:  # noqa: BLE001 - the web UI must come up regardless
+            self.log("hotspot acl: %s" % exc)
         self._scheduler = threading.Thread(target=self._scheduler_loop, name="ufi-scheduler", daemon=True)
         self._scheduler.start()
 

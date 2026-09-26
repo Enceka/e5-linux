@@ -1,0 +1,49 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] sprd_bt: tty: disable the BT core before powering it off
+
+Android's vendor HAL sends 0xfca1 00 00 00 ("core disable") right before
+it closes ttyBT, and the WCN CP then deletes its BT thread 17 ms after
+mtty_close() -> stop_marlin(MARLIN_BLUETOOTH) asks for it.  Linux closes
+the tty with the core still enabled (btattach exiting, at every
+shutdown), and stop_marlin() waits the full 30 s CP_TIMEROUT for the
+thread-delete interrupt with the WCN power lock held; Wi-Fi's
+stop_marlin queues behind it, so NetworkManager and wpa_supplicant
+taking wlan0 down sat unkillable for 21 s.
+
+Send the disable from mtty_close() itself, before stop_marlin(), in the
+HAL's order.  Doing it from the HCI driver at adapter power-off instead
+leaves the controller dead: with the tty still open the CP no longer
+answers the next power-on's pskey command.
+
+---
+diff --git a/drivers/unisoc_platform/sprd_bt/tty-515/tty.c b/drivers/unisoc_platform/sprd_bt/tty-515/tty.c
+index c9b4a108e..d7e8cb803 100755
+--- a/drivers/unisoc_platform/sprd_bt/tty-515/tty.c
++++ b/drivers/unisoc_platform/sprd_bt/tty-515/tty.c
+@@ -1128,6 +1128,26 @@ static void mtty_close(struct tty_struct *tty, struct file *filp)
+ 		return;
+ 	}
+ 
++	/*
++	 * e5-linux: tell the BT core it is being switched off, as Android's
++	 * vendor HAL does right before it closes this tty: vendor command
++	 * 0xfca1 00 00 00, the "core disable" counterpart of the 00 00 01 that
++	 * enables it.  Only then does the WCN CP delete its BT thread when
++	 * stop_marlin() asks (17 ms on Android).  Closed without it -- btattach
++	 * exiting, as at every shutdown -- stop_marlin() waited the full 30 s
++	 * CP_TIMEROUT for that thread-delete interrupt with the WCN power lock
++	 * held, and Wi-Fi's stop_marlin queued behind it: NetworkManager and
++	 * wpa_supplicant taking wlan0 down sat unkillable for 21 s.  The HAL
++	 * has the Command Complete ~20 ms later; wait a little longer than that.
++	 */
++	if (tty->ops && tty->ops->write) {
++		static const unsigned char core_disable[] = {
++			0x01, 0xa1, 0xfc, 0x03, 0x00, 0x00, 0x00 };
++
++		tty->ops->write(tty, core_disable, sizeof(core_disable));
++		msleep(50);
++	}
++
+ 	atomic_set(&mtty->state, MTTY_STATE_CLOSE);
+ 	sitm_cleanup();
+ 	ret = stop_marlin(MARLIN_BLUETOOTH);

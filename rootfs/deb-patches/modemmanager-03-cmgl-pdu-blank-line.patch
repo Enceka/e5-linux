@@ -1,0 +1,22 @@
+Description: modem-helpers: +CMGL PDU with an empty line before the PDU
+ Unisoc modems answer AT+CMGL=4 with
+   +CMGL: 1,1,,152<CR><LF><CR><LF><pdu>
+ and the parser took the empty line for the PDU, failing the whole listing.
+Author: e5-linux
+Forwarded: no
+
+--- a/src/mm-modem-helpers.c
++++ b/src/mm-modem-helpers.c
+@@ -4023,9 +4023,10 @@
+      *   or
+      * +CMGL: <index>, <status>, <length>
+      *
+-     * We just read <index>, <stat> and the PDU itself.
++     * We just read <index>, <stat> and the PDU itself.  Some modems (Unisoc)
++     * put an empty line between the header and the PDU.
+      */
+-    r = g_regex_new ("\\+CMGL:\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,(.*)\\r\\n([^\\r\\n]*)(\\r\\n)?",
++    r = g_regex_new ("\\+CMGL:\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,(.*)\\r\\n(?:\\r\\n)?([^\\r\\n]*)(\\r\\n)?",
+                      G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+     g_assert (r != NULL);
+ 

@@ -142,12 +142,22 @@ class SystemControl:
         return run_shell("systemctl poweroff", timeout=10)
 
     # -- mobile data -------------------------------------------------------
+    def _mobile_connection(self) -> str:
+        return str(self.config.get("mobile_connection") or "")
+
     def mobile_data_status(self) -> Dict[str, Any]:
+        connection = self._mobile_connection()
         unit = str(self.config.get("mobile_data_unit") or "")
         interface = self.gateway_interface()
+        if connection:
+            active = connection in (self._nmcli("-t -f NAME connection show --active",
+                                                timeout=5.0).content or "").splitlines()
+        else:
+            active = unit_active(unit) if unit else False
         status: Dict[str, Any] = {
-            "active": unit_active(unit) if unit else False,
-            "unit": unit,
+            "active": active,
+            "unit": connection or unit,
+            "managed_by": "NetworkManager" if connection else "systemd",
             "interface": interface,
         }
         if interface:
@@ -164,9 +174,15 @@ class SystemControl:
         return default_route_interface() or ""
 
     def set_mobile_data(self, enable: bool) -> ShellResult:
+        connection = self._mobile_connection()
+        if connection:
+            # the connection retries by itself (autoconnect-retries=0); "down"
+            # keeps it down until it is brought up again
+            return self._nmcli("--wait 60 connection %s %s" % (
+                "up" if enable else "down", shlex.quote(connection)), timeout=70.0)
         unit = str(self.config.get("mobile_data_unit") or "")
         if not unit:
-            raise ControlError("未配置蜂窝数据服务单元")
+            raise ControlError("未配置蜂窝数据连接")
         return systemctl("start" if enable else "stop", unit)
 
     # -- hotspot -----------------------------------------------------------

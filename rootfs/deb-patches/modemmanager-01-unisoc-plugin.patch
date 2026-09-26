@@ -1,0 +1,1600 @@
+Description: unisoc plugin -- Unisoc SoC modems over SIPC (E5)
+ The AT port is the WWAN port of the kernel's sipc_wwan driver, the data path
+ the sipa_eth interface.  The generic modem, except:
+  - no ATZ and no +CPMS=: either silences the CP's AT server until a reboot.
+    The core gains MMBroadbandModemClass.sms_storages_fixed: storage locks
+    succeed, without a command, only for the storages +CPMS? reported;
+  - capabilities (GSM/UMTS, LTE, 5G NR) and IP families (IPv4, IPv6, IPv4v6)
+    stated, not probed: +GCAP says +CGSM and +CGDCONT=? "IP" only;
+  - signal from all nine +CESQ fields (NR included), and from the +CESQ the
+    modem reports unsolicited; its unsolicited +CSQ is swallowed;
+  - a bearer that activates the context (+CGACT), routes it to the net port
+    (+CGDATA="M-ETHER") and reads its settings from +CGCONTRDP: IPv4 static,
+    IPv6 by router advertisement with the DNS servers of the dotted IPv6 line.
+Author: e5-linux
+Forwarded: not-needed
+
+diff -ruN a/meson.build b/meson.build
+--- a/meson.build	2025-04-10 09:30:25
++++ b/meson.build	2026-09-26 16:57:13
+@@ -365,6 +365,7 @@
+   'thuraya': {'available': true, 'shared': []},
+   'tplink': {'available': true, 'shared': []},
+   'ublox': {'available': true, 'shared': []},
++  'unisoc': {'available': true, 'shared': []},
+   'via': {'available': true, 'shared': []},
+   'wavecom': {'available': true, 'shared': []},
+   'x22x': {'available': true, 'shared': []},
+diff -ruN a/meson_options.txt b/meson_options.txt
+--- a/meson_options.txt	2025-04-10 09:30:25
++++ b/meson_options.txt	2026-09-26 16:57:20
+@@ -66,6 +66,7 @@
+ option('plugin_thuraya', type: 'feature', value: 'auto', description: 'enable thuraya plugin support')
+ option('plugin_tplink', type: 'feature', value: 'auto', description: 'enable tplink plugin support')
+ option('plugin_ublox', type: 'feature', value: 'auto', description: 'enable ublox plugin support')
++option('plugin_unisoc', type: 'feature', value: 'auto', description: 'enable unisoc SIPC plugin support')
+ option('plugin_via', type: 'feature', value: 'auto', description: 'enable via plugin support')
+ option('plugin_wavecom', type: 'feature', value: 'auto', description: 'enable wavecom plugin support')
+ option('plugin_x22x', type: 'feature', value: 'auto', description: 'enable x22x plugin support')
+diff -ruN a/src/mm-broadband-modem.c b/src/mm-broadband-modem.c
+--- a/src/mm-broadband-modem.c	2025-04-10 09:30:25
++++ b/src/mm-broadband-modem.c	2026-09-26 17:08:10
+@@ -7246,6 +7246,25 @@
+     g_assert (mem1 != MM_SMS_STORAGE_UNKNOWN ||
+               mem2 != MM_SMS_STORAGE_UNKNOWN);
+ 
++    if (MM_BROADBAND_MODEM_GET_CLASS (self)->sms_storages_fixed) {
++        if ((mem1 != MM_SMS_STORAGE_UNKNOWN && mem1 != self->priv->current_sms_mem1_storage) ||
++            (mem2 != MM_SMS_STORAGE_UNKNOWN && mem2 != self->priv->current_sms_mem2_storage)) {
++            g_task_report_new_error (self, callback, user_data,
++                                     mm_broadband_modem_lock_sms_storages,
++                                     MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
++                                     "SMS storages of this modem cannot be changed");
++            return;
++        }
++        if (mem1 != MM_SMS_STORAGE_UNKNOWN)
++            self->priv->mem1_storage_locked = TRUE;
++        if (mem2 != MM_SMS_STORAGE_UNKNOWN)
++            self->priv->mem2_storage_locked = TRUE;
++        task = g_task_new (self, NULL, callback, user_data);
++        g_task_return_boolean (task, TRUE);
++        g_object_unref (task);
++        return;
++    }
++
+     ctx = g_new0 (LockSmsStoragesContext, 1);
+ 
+     task = g_task_new (self, NULL, callback, user_data);
+@@ -7355,6 +7374,17 @@
+                                  MM_CORE_ERROR,
+                                  MM_CORE_ERROR_INVALID_ARGS,
+                                  "Cannot set default storage when current mem1 storage is unknown");
++        return;
++    }
++
++    if (MM_BROADBAND_MODEM_GET_CLASS (self)->sms_storages_fixed) {
++        task = g_task_new (self, NULL, callback, user_data);
++        if (storage == self->priv->current_sms_mem2_storage)
++            g_task_return_boolean (task, TRUE);
++        else
++            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
++                                     "SMS storages of this modem cannot be changed");
++        g_object_unref (task);
+         return;
+     }
+ 
+diff -ruN a/src/mm-broadband-modem.h b/src/mm-broadband-modem.h
+--- a/src/mm-broadband-modem.h	2025-04-10 09:30:25
++++ b/src/mm-broadband-modem.h	2026-09-26 17:08:10
+@@ -105,6 +105,11 @@
+     gint (* load_initial_eps_bearer_cid_finish) (MMBroadbandModem     *self,
+                                                  GAsyncResult         *res,
+                                                  GError              **error);
++
++    /* The modem must not be sent +CPMS=: SMS storage locks and the default
++     * storage only succeed for the storages it reported with +CPMS?, and
++     * without a command; any other storage is refused. */
++    gboolean sms_storages_fixed;
+ };
+ 
+ GType mm_broadband_modem_get_type (void);
+diff -ruN a/src/plugins/meson.build b/src/plugins/meson.build
+--- a/src/plugins/meson.build	2025-04-10 09:30:25
++++ b/src/plugins/meson.build	2026-09-26 16:57:13
+@@ -1038,6 +1038,25 @@
+   plugins_udev_rules += files('ublox/77-mm-ublox-port-types.rules')
+ endif
+ 
++# plugin: unisoc (SoC modems reached over SIPC)
++if plugins_options['unisoc']
++  test_udev_rules_dir_c_args = ['-DTESTUDEVRULESDIR_UNISOC="@0@"'.format(plugins_dir / 'unisoc')]
++  plugins_test_udev_rules_dir_c_args += test_udev_rules_dir_c_args
++
++  sources = files(
++    'unisoc/mm-broadband-bearer-unisoc.c',
++    'unisoc/mm-broadband-modem-unisoc.c',
++    'unisoc/mm-plugin-unisoc.c',
++  )
++
++  plugins += {'plugin-unisoc': {
++    'plugin': true,
++    'module': {'sources': sources, 'include_directories': plugins_incs, 'c_args': test_udev_rules_dir_c_args + ['-DMM_MODULE_NAME="unisoc"']},
++  }}
++
++  plugins_udev_rules += files('unisoc/77-mm-unisoc-sipc.rules')
++endif
++
+ # plugin: via
+ if plugins_options['via']
+   sources = files(
+diff -ruN a/src/plugins/mm-builtin-plugins.c b/src/plugins/mm-builtin-plugins.c
+--- a/src/plugins/mm-builtin-plugins.c	2025-04-10 09:30:25
++++ b/src/plugins/mm-builtin-plugins.c	2026-09-26 16:57:13
+@@ -133,6 +133,9 @@
+ #if defined ENABLE_PLUGIN_UBLOX
+ MMPlugin *mm_plugin_create_ublox (void);
+ #endif
++#if defined ENABLE_PLUGIN_UNISOC
++MMPlugin *mm_plugin_create_unisoc (void);
++#endif
+ #if defined ENABLE_PLUGIN_VIA
+ MMPlugin *mm_plugin_create_via (void);
+ #endif
+@@ -270,6 +273,9 @@
+ #endif
+ #if defined ENABLE_PLUGIN_UBLOX
+     PREPEND_PLUGIN (ublox);
++#endif
++#if defined ENABLE_PLUGIN_UNISOC
++    PREPEND_PLUGIN (unisoc);
+ #endif
+ #if defined ENABLE_PLUGIN_VIA
+     PREPEND_PLUGIN (via);
+diff -ruN a/src/plugins/unisoc/77-mm-unisoc-sipc.rules b/src/plugins/unisoc/77-mm-unisoc-sipc.rules
+--- a/src/plugins/unisoc/77-mm-unisoc-sipc.rules	1970-01-01 08:00:00
++++ b/src/plugins/unisoc/77-mm-unisoc-sipc.rules	2026-09-26 16:53:09
+@@ -0,0 +1,12 @@
++# do not edit this file, it will be overwritten on update
++
++# Unisoc (Spreadtrum) SoC modems reached over SIPC: the AT port is the WWAN
++# port the kernel's sipc_wwan driver registers on the sprd,spipe AT channel,
++# the data path the sipa_eth interface of the first PDP context.  Tag both for
++# the unisoc plugin and group them into one modem.
++ACTION!="add|change|move|bind", GOTO="mm_unisoc_sipc_end"
++
++SUBSYSTEM=="wwan", DRIVERS=="sprd-spipe", ENV{ID_MM_UNISOC_SIPC}="1", ENV{ID_MM_PHYSDEV_UID}="unisoc-sipc", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
++SUBSYSTEM=="net", KERNEL=="sipa_eth0", ENV{ID_MM_UNISOC_SIPC}="1", ENV{ID_MM_PHYSDEV_UID}="unisoc-sipc"
++
++LABEL="mm_unisoc_sipc_end"
+diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c b/src/plugins/unisoc/mm-broadband-bearer-unisoc.c
+--- a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c	1970-01-01 08:00:00
++++ b/src/plugins/unisoc/mm-broadband-bearer-unisoc.c	2026-09-26 18:38:53
+@@ -0,0 +1,562 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * Data bearer of the Unisoc SIPC modems.  The PDP context is selected and
++ * defined by the generic code (+CGDCONT); then
++ *
++ *   AT+CGACT=1,<cid>              activate it
++ *   AT+CGDATA="M-ETHER",<cid>     route it to the SIPA network interface
++ *                                 (answers CONNECT; the AT port stays in
++ *                                 command mode)
++ *   AT+CGCONTRDP=<cid>            the IPv4 settings, which the interface does
++ *                                 not learn by DHCP: static configuration.
++ *                                 IPv6 comes by router advertisement, with
++ *                                 the interface identifier given here.
++ *
++ * and AT+CGACT=0,<cid> to disconnect.  The CP routes context <cid> to the
++ * SIPA interface of net id <cid> - 1, i.e. sipa_eth<cid - 1>: context 1 is
++ * sipa_eth0, the one interface the E5 hands to ModemManager.  (Another
++ * context's traffic does not come out of sipa_eth0 -- measured: context 12,
++ * which the generic profile selection once picked, left sipa_eth0 silent.)
++ */
++
++#include <config.h>
++
++#include <stdlib.h>
++#include <string.h>
++
++#include <gio/gio.h>
++
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "ModemManager.h"
++#include "mm-base-modem-at.h"
++#include "mm-broadband-bearer-unisoc.h"
++#include "mm-log-object.h"
++#include "mm-modem-helpers.h"
++
++G_DEFINE_TYPE (MMBroadbandBearerUnisoc, mm_broadband_bearer_unisoc, MM_TYPE_BROADBAND_BEARER)
++
++typedef struct {
++    MMBaseModem    *modem;
++    MMPortSerialAt *primary;
++    MMPort         *data;
++    guint           cid;
++    MMBearerIpFamily ip_family;
++} CommonContext;
++
++static void
++common_context_free (CommonContext *ctx)
++{
++    g_clear_object (&ctx->modem);
++    g_clear_object (&ctx->primary);
++    g_clear_object (&ctx->data);
++    g_slice_free (CommonContext, ctx);
++}
++
++static GTask *
++common_task_new (MMBroadbandBearerUnisoc *self,
++                 MMBaseModem             *modem,
++                 MMPortSerialAt          *primary,
++                 MMPort                  *data,
++                 guint                    cid,
++                 GCancellable            *cancellable,
++                 GAsyncReadyCallback      callback,
++                 gpointer                 user_data)
++{
++    CommonContext *ctx;
++    GTask         *task;
++
++    task = g_task_new (self, cancellable, callback, user_data);
++    ctx = g_slice_new0 (CommonContext);
++    ctx->modem = g_object_ref (modem);
++    ctx->primary = g_object_ref (primary);
++    ctx->cid = cid;
++    if (data)
++        ctx->data = g_object_ref (data);
++    else {
++        g_autofree gchar *name = NULL;
++
++        name = g_strdup_printf ("sipa_eth%u", cid ? cid - 1 : 0);
++        ctx->data = mm_base_modem_get_port (modem, name);
++        if (ctx->data && mm_port_get_port_type (ctx->data) != MM_PORT_TYPE_NET)
++            g_clear_object (&ctx->data);
++    }
++    g_task_set_task_data (task, ctx, (GDestroyNotify) common_context_free);
++
++    if (!ctx->data) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
++                                 "No network interface for PDP context %u (sipa_eth%u)",
++                                 cid, cid ? cid - 1 : 0);
++        g_object_unref (task);
++        return NULL;
++    }
++    return task;
++}
++
++/*****************************************************************************/
++/* Dial (sub-step of the 3GPP connection sequence) */
++
++static MMPort *
++dial_3gpp_finish (MMBroadbandBearer  *self,
++                  GAsyncResult       *res,
++                  GError            **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void
++cgdata_ready (MMBaseModem  *modem,
++              GAsyncResult *res,
++              GTask        *task)
++{
++    CommonContext *ctx = g_task_get_task_data (task);
++    GError        *error = NULL;
++
++    if (!mm_base_modem_at_command_full_finish (modem, res, &error)) {
++        g_prefix_error (&error, "Couldn't route the PDP context to %s: ",
++                        mm_port_get_device (ctx->data));
++        g_task_return_error (task, error);
++    } else
++        g_task_return_pointer (task, g_object_ref (ctx->data), g_object_unref);
++    g_object_unref (task);
++}
++
++static void
++cgact_ready (MMBaseModem  *modem,
++             GAsyncResult *res,
++             GTask        *task)
++{
++    CommonContext    *ctx = g_task_get_task_data (task);
++    GError           *error = NULL;
++    g_autofree gchar *cmd = NULL;
++
++    if (!mm_base_modem_at_command_full_finish (modem, res, &error)) {
++        g_prefix_error (&error, "Couldn't activate PDP context %u: ", ctx->cid);
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    cmd = g_strdup_printf ("+CGDATA=\"M-ETHER\",%u", ctx->cid);
++    mm_base_modem_at_command_full (ctx->modem,
++                                   MM_IFACE_PORT_AT (ctx->primary),
++                                   cmd,
++                                   30,
++                                   FALSE, /* allow_cached */
++                                   FALSE, /* is_raw */
++                                   g_task_get_cancellable (task),
++                                   (GAsyncReadyCallback) cgdata_ready,
++                                   task);
++}
++
++static void
++dial_3gpp (MMBroadbandBearer   *self,
++           MMBaseModem         *modem,
++           MMPortSerialAt      *primary,
++           guint                cid,
++           GCancellable        *cancellable,
++           GAsyncReadyCallback  callback,
++           gpointer             user_data)
++{
++    GTask            *task;
++    g_autofree gchar *cmd = NULL;
++
++    task = common_task_new (MM_BROADBAND_BEARER_UNISOC (self), modem, primary, NULL, cid,
++                            cancellable, callback, user_data);
++    if (!task)
++        return;
++
++    cmd = g_strdup_printf ("+CGACT=1,%u", cid);
++    mm_base_modem_at_command_full (modem,
++                                   MM_IFACE_PORT_AT (primary),
++                                   cmd,
++                                   60,
++                                   FALSE, /* allow_cached */
++                                   FALSE, /* is_raw */
++                                   cancellable,
++                                   (GAsyncReadyCallback) cgact_ready,
++                                   task);
++}
++
++/*****************************************************************************/
++/* IP config (sub-step of the 3GPP connection sequence) */
++
++static gboolean
++get_ip_config_3gpp_finish (MMBroadbandBearer  *self,
++                           GAsyncResult       *res,
++                           MMBearerIpConfig  **ipv4_config,
++                           MMBearerIpConfig  **ipv6_config,
++                           GError            **error)
++{
++    MMBearerConnectResult *result;
++    MMBearerIpConfig      *ipv4;
++    MMBearerIpConfig      *ipv6;
++
++    result = g_task_propagate_pointer (G_TASK (res), error);
++    if (!result)
++        return FALSE;
++
++    ipv4 = mm_bearer_connect_result_peek_ipv4_config (result);
++    ipv6 = mm_bearer_connect_result_peek_ipv6_config (result);
++    if (ipv4_config)
++        *ipv4_config = ipv4 ? g_object_ref (ipv4) : NULL;
++    if (ipv6_config)
++        *ipv6_config = ipv6 ? g_object_ref (ipv6) : NULL;
++    mm_bearer_connect_result_unref (result);
++    return TRUE;
++}
++
++static guint
++count_dots (const gchar *s)
++{
++    guint n = 0;
++
++    for (; *s; s++)
++        n += (*s == '.');
++    return n;
++}
++
++/* An IPv6 address as +CGCONTRDP gives it: sixteen dotted bytes (or already
++ * colon-separated) */
++static gchar *
++cgcontrdp_ipv6 (const gchar *str)
++{
++    g_autoptr(GInetAddress) addr = NULL;
++    g_auto(GStrv)           b = NULL;
++    guint8                  bytes[16];
++    guint                   i;
++
++    if (!str || !*str)
++        return NULL;
++    if (strchr (str, ':'))
++        return g_strdup (str);
++    b = g_strsplit (str, ".", -1);
++    if (g_strv_length (b) < 16)
++        return NULL;
++    for (i = 0; i < 16; i++)
++        bytes[i] = (guint8) atoi (b[i]);
++    addr = g_inet_address_new_from_bytes (bytes, G_SOCKET_FAMILY_IPV6);
++    return g_inet_address_to_string (addr);
++}
++
++typedef struct {
++    gchar *address;
++    gchar *subnet;
++    gchar *gateway;
++    gchar *dns[3];
++} CgcontrdpIpv4;
++
++typedef struct {
++    gchar *link_local;
++    gchar *dns[3];
++} CgcontrdpIpv6;
++
++static void
++cgcontrdp_clear (CgcontrdpIpv4 *v4,
++                 CgcontrdpIpv6 *v6)
++{
++    g_free (v4->address);
++    g_free (v4->subnet);
++    g_free (v4->gateway);
++    g_free (v4->dns[0]);
++    g_free (v4->dns[1]);
++    g_free (v6->link_local);
++    g_free (v6->dns[0]);
++    g_free (v6->dns[1]);
++}
++
++/* The link-local address from the interface identifier the network assigned:
++ * the lower half of the IPv6 line's address, whose upper half is zero (the
++ * /64 comes by router advertisement).  The parser split the dotted field after
++ * its fourth byte, so the halves are put back together first. */
++static gchar *
++cgcontrdp_link_local (const gchar *head,
++                      const gchar *tail)
++{
++    g_autofree gchar        *joined = NULL;
++    g_auto(GStrv)            b = NULL;
++    g_autoptr(GInetAddress)  addr = NULL;
++    guint8                   bytes[16] = { 0xfe, 0x80 };
++    gboolean                 nonzero = FALSE;
++    guint                    i;
++
++    joined = g_strjoin (".", head, tail ? tail : "", NULL);
++    b = g_strsplit (joined, ".", -1);
++    if (g_strv_length (b) < 16)
++        return NULL;
++    for (i = 8; i < 16; i++) {
++        bytes[i] = (guint8) atoi (b[i]);
++        nonzero |= !!bytes[i];
++    }
++    if (!nonzero)
++        return NULL;
++    addr = g_inet_address_new_from_bytes (bytes, G_SOCKET_FAMILY_IPV6);
++    return g_inet_address_to_string (addr);
++}
++
++/* One +CGCONTRDP line per address family.  An IPv6 line may be dotted
++ * decimal too, 16 bytes of address and 16 of mask: an IPv4 mask has four. */
++static void
++parse_cgcontrdp (const gchar   *response,
++                 gboolean      *have_v4,
++                 CgcontrdpIpv4 *v4,
++                 gboolean      *have_v6,
++                 CgcontrdpIpv6 *v6)
++{
++    g_auto(GStrv) lines = NULL;
++    guint         i;
++
++    *have_v4 = *have_v6 = FALSE;
++    lines = g_strsplit_set (response, "\r\n", -1);
++    for (i = 0; lines[i]; i++) {
++        g_autofree gchar *a = NULL;
++        g_autofree gchar *m = NULL;
++        g_autofree gchar *g = NULL;
++        g_autofree gchar *d1 = NULL;
++        g_autofree gchar *d2 = NULL;
++
++        if (!g_str_has_prefix (lines[i], "+CGCONTRDP:") ||
++            !mm_3gpp_parse_cgcontrdp_response (lines[i], NULL, NULL, NULL,
++                                               &a, &m, &g, &d1, &d2, NULL) ||
++            !a)
++            continue;
++        if (!*have_v4 && !strchr (a, ':') && (!m || count_dots (m) == 3)) {
++            *have_v4 = TRUE;
++            v4->address = g_steal_pointer (&a);
++            v4->subnet = g_steal_pointer (&m);
++            v4->gateway = g_steal_pointer (&g);
++            v4->dns[0] = g_steal_pointer (&d1);
++            v4->dns[1] = g_steal_pointer (&d2);
++        } else if (!*have_v6) {
++            *have_v6 = TRUE;
++            if (!strchr (a, ':'))
++                v6->link_local = cgcontrdp_link_local (a, m);
++            v6->dns[0] = cgcontrdp_ipv6 (d1);
++            v6->dns[1] = cgcontrdp_ipv6 (d2);
++            if (!v6->dns[0]) {
++                v6->dns[0] = v6->dns[1];
++                v6->dns[1] = NULL;
++            }
++        }
++    }
++}
++
++static void
++cgcontrdp_ready (MMBaseModem  *modem,
++                 GAsyncResult *res,
++                 GTask        *task)
++{
++    MMBroadbandBearerUnisoc    *self = g_task_get_source_object (task);
++    CommonContext              *ctx = g_task_get_task_data (task);
++    const gchar                *response;
++    GError                     *error = NULL;
++    gboolean                    want_ipv4;
++    gboolean                    want_ipv6;
++    gboolean                    have_v4;
++    gboolean                    have_v6;
++    CgcontrdpIpv4               v4 = { 0 };
++    CgcontrdpIpv6               v6 = { 0 };
++    g_autoptr(MMBearerIpConfig) ipv4 = NULL;
++    g_autoptr(MMBearerIpConfig) ipv6 = NULL;
++
++    want_ipv4 = !!(ctx->ip_family & (MM_BEARER_IP_FAMILY_IPV4 | MM_BEARER_IP_FAMILY_IPV4V6));
++    want_ipv6 = !!(ctx->ip_family & (MM_BEARER_IP_FAMILY_IPV6 | MM_BEARER_IP_FAMILY_IPV4V6));
++
++    response = mm_base_modem_at_command_full_finish (modem, res, &error);
++    if (!response) {
++        g_prefix_error (&error, "Couldn't read the settings of PDP context %u: ", ctx->cid);
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++    parse_cgcontrdp (response, &have_v4, &v4, &have_v6, &v6);
++    /* an IPv4v6 context the network granted only IPv6 goes on without IPv4 */
++    if (want_ipv4 && !have_v4 && !(want_ipv6 && have_v6)) {
++        cgcontrdp_clear (&v4, &v6);
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                                 "No IPv4 settings for PDP context %u", ctx->cid);
++        g_object_unref (task);
++        return;
++    }
++
++    if (want_ipv4 && have_v4) {
++        ipv4 = mm_bearer_ip_config_new ();
++        mm_bearer_ip_config_set_method (ipv4, MM_BEARER_IP_METHOD_STATIC);
++        mm_bearer_ip_config_set_address (ipv4, v4.address);
++        if (v4.subnet)
++            mm_bearer_ip_config_set_prefix (ipv4, mm_netmask_to_cidr (v4.subnet));
++        /* no gateway: the default route goes straight out of the interface */
++        if (v4.gateway && *v4.gateway && g_strcmp0 (v4.gateway, "0.0.0.0") != 0)
++            mm_bearer_ip_config_set_gateway (ipv4, v4.gateway);
++        mm_bearer_ip_config_set_dns (ipv4, (const gchar **) v4.dns);
++        mm_obj_dbg (self, "PDP context %u: %s/%s, dns %s %s", ctx->cid, v4.address,
++                    v4.subnet ? v4.subnet : "?",
++                    v4.dns[0] ? v4.dns[0] : "-", v4.dns[1] ? v4.dns[1] : "-");
++    }
++    /* the interface learns its IPv6 address by router advertisement */
++    if (want_ipv6) {
++        ipv6 = mm_bearer_ip_config_new ();
++        mm_bearer_ip_config_set_method (ipv6, MM_BEARER_IP_METHOD_DHCP);
++        /* a link-local address hands NetworkManager the interface identifier
++         * for SLAAC; sipa_eth0 has no MAC address to derive one from */
++        if (have_v6 && v6.link_local) {
++            mm_bearer_ip_config_set_address (ipv6, v6.link_local);
++            mm_bearer_ip_config_set_prefix (ipv6, 64);
++        }
++        if (have_v6 && v6.dns[0]) {
++            mm_bearer_ip_config_set_dns (ipv6, (const gchar **) v6.dns);
++            mm_obj_dbg (self, "PDP context %u: IPv6 dns %s %s", ctx->cid,
++                        v6.dns[0], v6.dns[1] ? v6.dns[1] : "-");
++        }
++    }
++    cgcontrdp_clear (&v4, &v6);
++
++    g_task_return_pointer (task, mm_bearer_connect_result_new (ctx->data, ipv4, ipv6),
++                           (GDestroyNotify) mm_bearer_connect_result_unref);
++    g_object_unref (task);
++}
++
++static void
++get_ip_config_3gpp (MMBroadbandBearer   *self,
++                    MMBroadbandModem    *modem,
++                    MMPortSerialAt      *primary,
++                    MMPortSerialAt      *secondary,
++                    MMPort              *data,
++                    guint                cid,
++                    MMBearerIpFamily     ip_family,
++                    GAsyncReadyCallback  callback,
++                    gpointer             user_data)
++{
++    GTask            *task;
++    CommonContext    *ctx;
++    g_autofree gchar *cmd = NULL;
++
++    task = common_task_new (MM_BROADBAND_BEARER_UNISOC (self), MM_BASE_MODEM (modem),
++                            primary, data, cid, NULL, callback, user_data);
++    if (!task)
++        return;
++    ctx = g_task_get_task_data (task);
++    ctx->ip_family = ip_family;
++
++    cmd = g_strdup_printf ("+CGCONTRDP=%u", cid);
++    mm_base_modem_at_command_full (MM_BASE_MODEM (modem),
++                                   MM_IFACE_PORT_AT (primary),
++                                   cmd,
++                                   10,
++                                   FALSE, /* allow_cached */
++                                   FALSE, /* is_raw */
++                                   NULL,
++                                   (GAsyncReadyCallback) cgcontrdp_ready,
++                                   task);
++}
++
++/*****************************************************************************/
++/* Disconnect */
++
++static gboolean
++disconnect_3gpp_finish (MMBroadbandBearer  *self,
++                        GAsyncResult       *res,
++                        GError            **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++cgact_disconnect_ready (MMBaseModem  *modem,
++                        GAsyncResult *res,
++                        GTask        *task)
++{
++    GError *error = NULL;
++
++    if (!mm_base_modem_at_command_full_finish (modem, res, &error))
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++disconnect_3gpp (MMBroadbandBearer   *self,
++                 MMBroadbandModem    *modem,
++                 MMPortSerialAt      *primary,
++                 MMPortSerialAt      *secondary,
++                 MMPort              *data,
++                 guint                cid,
++                 GAsyncReadyCallback  callback,
++                 gpointer             user_data)
++{
++    GTask            *task;
++    g_autofree gchar *cmd = NULL;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    cmd = cid ? g_strdup_printf ("+CGACT=0,%u", cid) : g_strdup ("+CGACT=0");
++    mm_base_modem_at_command_full (MM_BASE_MODEM (modem),
++                                   MM_IFACE_PORT_AT (primary),
++                                   cmd,
++                                   45,
++                                   FALSE, /* allow_cached */
++                                   FALSE, /* is_raw */
++                                   NULL,
++                                   (GAsyncReadyCallback) cgact_disconnect_ready,
++                                   task);
++}
++
++/*****************************************************************************/
++
++MMBaseBearer *
++mm_broadband_bearer_unisoc_new_finish (GAsyncResult  *res,
++                                       GError       **error)
++{
++    GObject *source;
++    GObject *bearer;
++
++    source = g_async_result_get_source_object (res);
++    bearer = g_async_initable_new_finish (G_ASYNC_INITABLE (source), res, error);
++    g_object_unref (source);
++    if (!bearer)
++        return NULL;
++
++    mm_base_bearer_export (MM_BASE_BEARER (bearer));
++    return MM_BASE_BEARER (bearer);
++}
++
++void
++mm_broadband_bearer_unisoc_new (MMBroadbandModemUnisoc *modem,
++                                MMBearerProperties     *config,
++                                GCancellable           *cancellable,
++                                GAsyncReadyCallback     callback,
++                                gpointer                user_data)
++{
++    g_async_initable_new_async (MM_TYPE_BROADBAND_BEARER_UNISOC,
++                                G_PRIORITY_DEFAULT,
++                                cancellable,
++                                callback,
++                                user_data,
++                                MM_BASE_BEARER_MODEM,  modem,
++                                MM_BASE_BEARER_CONFIG, config,
++                                NULL);
++}
++
++static void
++mm_broadband_bearer_unisoc_init (MMBroadbandBearerUnisoc *self)
++{
++}
++
++static void
++mm_broadband_bearer_unisoc_class_init (MMBroadbandBearerUnisocClass *klass)
++{
++    MMBroadbandBearerClass *broadband_bearer_class = MM_BROADBAND_BEARER_CLASS (klass);
++
++    broadband_bearer_class->dial_3gpp = dial_3gpp;
++    broadband_bearer_class->dial_3gpp_finish = dial_3gpp_finish;
++    broadband_bearer_class->get_ip_config_3gpp = get_ip_config_3gpp;
++    broadband_bearer_class->get_ip_config_3gpp_finish = get_ip_config_3gpp_finish;
++    broadband_bearer_class->disconnect_3gpp = disconnect_3gpp;
++    broadband_bearer_class->disconnect_3gpp_finish = disconnect_3gpp_finish;
++}
+diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.h b/src/plugins/unisoc/mm-broadband-bearer-unisoc.h
+--- a/src/plugins/unisoc/mm-broadband-bearer-unisoc.h	1970-01-01 08:00:00
++++ b/src/plugins/unisoc/mm-broadband-bearer-unisoc.h	2026-09-26 16:53:09
+@@ -0,0 +1,49 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++
++#ifndef MM_BROADBAND_BEARER_UNISOC_H
++#define MM_BROADBAND_BEARER_UNISOC_H
++
++#include <glib.h>
++#include <glib-object.h>
++
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "mm-broadband-bearer.h"
++#include "mm-broadband-modem-unisoc.h"
++
++#define MM_TYPE_BROADBAND_BEARER_UNISOC            (mm_broadband_bearer_unisoc_get_type ())
++#define MM_BROADBAND_BEARER_UNISOC(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_BROADBAND_BEARER_UNISOC, MMBroadbandBearerUnisoc))
++#define MM_BROADBAND_BEARER_UNISOC_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  MM_TYPE_BROADBAND_BEARER_UNISOC, MMBroadbandBearerUnisocClass))
++#define MM_IS_BROADBAND_BEARER_UNISOC(obj)         (G_TYPE_CHECK_INSTANCE_TYPE ((obj), MM_TYPE_BROADBAND_BEARER_UNISOC))
++#define MM_IS_BROADBAND_BEARER_UNISOC_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass),  MM_TYPE_BROADBAND_BEARER_UNISOC))
++#define MM_BROADBAND_BEARER_UNISOC_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),  MM_TYPE_BROADBAND_BEARER_UNISOC, MMBroadbandBearerUnisocClass))
++
++typedef struct _MMBroadbandBearerUnisoc MMBroadbandBearerUnisoc;
++typedef struct _MMBroadbandBearerUnisocClass MMBroadbandBearerUnisocClass;
++
++struct _MMBroadbandBearerUnisoc {
++    MMBroadbandBearer parent;
++};
++
++struct _MMBroadbandBearerUnisocClass {
++    MMBroadbandBearerClass parent;
++};
++
++GType mm_broadband_bearer_unisoc_get_type (void);
++
++void          mm_broadband_bearer_unisoc_new        (MMBroadbandModemUnisoc *modem,
++                                                     MMBearerProperties     *config,
++                                                     GCancellable           *cancellable,
++                                                     GAsyncReadyCallback     callback,
++                                                     gpointer                user_data);
++MMBaseBearer *mm_broadband_bearer_unisoc_new_finish (GAsyncResult           *res,
++                                                     GError                **error);
++
++#endif /* MM_BROADBAND_BEARER_UNISOC_H */
+diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/mm-broadband-modem-unisoc.c
+--- a/src/plugins/unisoc/mm-broadband-modem-unisoc.c	1970-01-01 08:00:00
++++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c	2026-09-26 18:45:13
+@@ -0,0 +1,679 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * The generic broadband modem, except:
++ *
++ *  - no ATZ.  The CP's AT server does not answer it and stays silent for
++ *    every client afterwards (seen on a UMS9621); the rest of the generic
++ *    enabling sequence was checked command by command and is harmless.
++ *  - no +CPMS= either, which silences it the same way -- even to select the
++ *    storages it already uses.  SMS work stays in the storages +CPMS?
++ *    reports (SIM, for mem1 to mem3).
++ *  - data goes through a network interface (sipa_eth), with the IP settings
++ *    of +CGCONTRDP: see mm-broadband-bearer-unisoc.c.
++ *  - what the modem does not say about itself: +GCAP reports +CGSM only and
++ *    +WS46=? is not supported, although it is an LTE and NR modem, and
++ *    +CGDCONT=? lists "IP" only although its contexts are IPV4V6.
++ *  - signal from +CESQ, NR fields included; +CSQ answers 255 ("unknown") on
++ *    NR.  The modem also sends +CSQ and +CESQ unsolicited every few seconds:
++ *    +CESQ updates the signal quality, +CSQ is swallowed.
++ *  - power.  +CFUN=4 and +CFUN=1 are flight mode and back, with the SIM kept
++ *    on.  +CFUN=0 switches the SIM off, and nothing brings it back within
++ *    that boot (the vendor pair below then answers "not allowed" or nothing),
++ *    so it is never sent.  The CP comes out of modem_control at +CFUN: 0 with
++ *    the SIM off, though, and the vendor RIL's way up from there is AT+SFUN=2
++ *    (SIM on) and AT+SFUN=4 (protocol stack on): done as soon as the port is
++ *    open, before initialization reads the SIM, and by power-up.
++ */
++
++#include <config.h>
++
++#include <stdlib.h>
++#include <string.h>
++
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "ModemManager.h"
++#include "mm-base-modem-at.h"
++#include "mm-iface-modem.h"
++#include "mm-iface-modem-signal.h"
++#include "mm-log-object.h"
++#include "mm-broadband-modem-unisoc.h"
++#include "mm-broadband-bearer-unisoc.h"
++
++/*****************************************************************************/
++/* +CESQ, all nine fields (27.007 8.69):
++ *   rxlev,ber,rscp,ecno,rsrq,rsrp,ss_rsrq,ss_rsrp,ss_sinr
++ * The generic parser stops at the LTE ones. */
++
++typedef struct {
++    gdouble lte_rsrq;
++    gdouble lte_rsrp;
++    gdouble nr_rsrq;
++    gdouble nr_rsrp;
++    gdouble nr_sinr;
++} Cesq;
++
++#define CESQ_NONE (-G_MAXDOUBLE)
++
++/* The +CESQ handler on the primary port may still take a reply to AT+CESQ out
++ * of the response (when the reply and its OK arrive in separate reads): the
++ * queries fall back to what it left here. */
++typedef struct {
++    Cesq     last_cesq;
++    gboolean have_cesq;
++} MMBroadbandModemUnisocPrivate;
++
++static void iface_modem_init (MMIfaceModemInterface *iface);
++static void iface_modem_signal_init (MMIfaceModemSignalInterface *iface);
++
++G_DEFINE_TYPE_EXTENDED (MMBroadbandModemUnisoc, mm_broadband_modem_unisoc, MM_TYPE_BROADBAND_MODEM, 0,
++                        G_ADD_PRIVATE (MMBroadbandModemUnisoc)
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init))
++
++static MMBroadbandModemUnisocPrivate *
++get_private (gpointer self)
++{
++    return mm_broadband_modem_unisoc_get_instance_private (MM_BROADBAND_MODEM_UNISOC (self));
++}
++
++static gboolean
++parse_cesq (const gchar  *str,
++            Cesq         *out,
++            GError      **error)
++{
++    g_auto(GStrv) f = NULL;
++    guint         v[9];
++    guint         i;
++
++    str = strstr (str, "+CESQ:");
++    if (!str) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "No +CESQ response");
++        return FALSE;
++    }
++    f = g_strsplit (str + strlen ("+CESQ:"), ",", -1);
++    if (g_strv_length (f) < 6) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Short +CESQ response");
++        return FALSE;
++    }
++    for (i = 0; i < G_N_ELEMENTS (v); i++)
++        v[i] = (i < g_strv_length (f)) ? (guint) strtoul (g_strstrip (f[i]), NULL, 10) : 255;
++
++    out->lte_rsrq = v[4] <= 34  ? -20.0 + v[4] * 0.5 : CESQ_NONE;
++    out->lte_rsrp = v[5] <= 97  ? -141.0 + v[5]      : CESQ_NONE;
++    out->nr_rsrq  = v[6] <= 127 ? -43.0 + v[6] * 0.5 : CESQ_NONE;
++    out->nr_rsrp  = v[7] <= 126 ? -157.0 + v[7]      : CESQ_NONE;
++    out->nr_sinr  = v[8] <= 127 ? -23.0 + v[8] * 0.5 : CESQ_NONE;
++    return TRUE;
++}
++
++/* A +CESQ query: the reply, or what the handler took out of it */
++static gboolean
++cesq_query_finish (MMBaseModem  *self,
++                   GAsyncResult *res,
++                   Cesq         *out,
++                   GError      **error)
++{
++    MMBroadbandModemUnisocPrivate *priv = get_private (self);
++    const gchar                   *response;
++
++    response = mm_base_modem_at_command_finish (self, res, error);
++    if (!response)
++        return FALSE;
++    if (strstr (response, "+CESQ:"))
++        return parse_cesq (response, out, error);
++    if (!priv->have_cesq) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "No +CESQ response");
++        return FALSE;
++    }
++    *out = priv->last_cesq;
++    return TRUE;
++}
++
++/* RSRP -120 dBm (nothing usable) to -80 dBm (excellent) as 0-100% */
++static guint
++cesq_quality (const Cesq *c)
++{
++    gdouble rsrp;
++
++    rsrp = c->nr_rsrp != CESQ_NONE ? c->nr_rsrp : c->lte_rsrp;
++    if (rsrp == CESQ_NONE)
++        return 0;
++    return (guint) CLAMP ((rsrp + 120.0) * 100.0 / 40.0, 0.0, 100.0);
++}
++
++/*****************************************************************************/
++/* Signal quality (Modem interface) */
++
++static guint
++modem_load_signal_quality_finish (MMIfaceModem  *self,
++                                  GAsyncResult  *res,
++                                  GError       **error)
++{
++    GError *inner_error = NULL;
++    gssize  value;
++
++    value = g_task_propagate_int (G_TASK (res), &inner_error);
++    if (inner_error) {
++        g_propagate_error (error, inner_error);
++        return 0;
++    }
++    return (guint) value;
++}
++
++static void
++cesq_quality_ready (MMBaseModem  *self,
++                    GAsyncResult *res,
++                    GTask        *task)
++{
++    GError      *error = NULL;
++    Cesq         c;
++
++    if (!cesq_query_finish (self, res, &c, &error))
++        g_task_return_error (task, error);
++    else
++        g_task_return_int (task, cesq_quality (&c));
++    g_object_unref (task);
++}
++
++static void
++modem_load_signal_quality (MMIfaceModem        *self,
++                           GAsyncReadyCallback  callback,
++                           gpointer             user_data)
++{
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+CESQ", 3, FALSE,
++                              (GAsyncReadyCallback) cesq_quality_ready,
++                              g_task_new (self, NULL, callback, user_data));
++}
++
++/*****************************************************************************/
++/* Extended signal (Signal interface) */
++
++static gboolean
++signal_load_values_finish (MMIfaceModemSignal  *self,
++                           GAsyncResult        *res,
++                           MMSignal           **cdma,
++                           MMSignal           **evdo,
++                           MMSignal           **gsm,
++                           MMSignal           **umts,
++                           MMSignal           **lte,
++                           MMSignal           **nr5g,
++                           GError             **error)
++{
++    Cesq *c;
++
++    c = g_task_propagate_pointer (G_TASK (res), error);
++    if (!c)
++        return FALSE;
++
++    if (lte) {
++        *lte = NULL;
++        if (c->lte_rsrp != CESQ_NONE) {
++            *lte = mm_signal_new ();
++            mm_signal_set_rsrp (*lte, c->lte_rsrp);
++            if (c->lte_rsrq != CESQ_NONE)
++                mm_signal_set_rsrq (*lte, c->lte_rsrq);
++        }
++    }
++    if (nr5g) {
++        *nr5g = NULL;
++        if (c->nr_rsrp != CESQ_NONE) {
++            *nr5g = mm_signal_new ();
++            mm_signal_set_rsrp (*nr5g, c->nr_rsrp);
++            if (c->nr_rsrq != CESQ_NONE)
++                mm_signal_set_rsrq (*nr5g, c->nr_rsrq);
++            if (c->nr_sinr != CESQ_NONE)
++                mm_signal_set_snr (*nr5g, c->nr_sinr);
++        }
++    }
++    if (cdma)
++        *cdma = NULL;
++    if (evdo)
++        *evdo = NULL;
++    if (gsm)
++        *gsm = NULL;
++    if (umts)
++        *umts = NULL;
++    g_free (c);
++    return TRUE;
++}
++
++static void
++cesq_values_ready (MMBaseModem  *self,
++                   GAsyncResult *res,
++                   GTask        *task)
++{
++    GError      *error = NULL;
++    Cesq        *c;
++
++    c = g_new0 (Cesq, 1);
++    if (!cesq_query_finish (self, res, c, &error)) {
++        g_free (c);
++        g_task_return_error (task, error);
++    } else
++        g_task_return_pointer (task, c, g_free);
++    g_object_unref (task);
++}
++
++static void
++signal_load_values (MMIfaceModemSignal  *self,
++                    GCancellable        *cancellable,
++                    GAsyncReadyCallback  callback,
++                    gpointer             user_data)
++{
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+CESQ", 3, FALSE,
++                              (GAsyncReadyCallback) cesq_values_ready,
++                              g_task_new (self, cancellable, callback, user_data));
++}
++
++/*****************************************************************************/
++/* Power */
++
++static const MMBaseModemAtCommand sim_on_sequence[] = {
++    { "+SFUN=2", 60, FALSE, mm_base_modem_response_processor_no_result_continue },
++    { "+SFUN=4", 60, FALSE, mm_base_modem_response_processor_no_result_continue },
++    { NULL }
++};
++
++static gboolean
++cfun_is_zero (const gchar *response)
++{
++    const gchar *p;
++
++    p = response ? strstr (response, "+CFUN:") : NULL;
++    if (!p)
++        return FALSE;
++    p += strlen ("+CFUN:");
++    while (*p == ' ')
++        p++;
++    return p[0] == '0' && !g_ascii_isdigit (p[1]);
++}
++
++static gboolean
++modem_power_finish (MMIfaceModem  *self,
++                    GAsyncResult  *res,
++                    GError       **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++power_command_ready (MMBaseModem  *self,
++                     GAsyncResult *res,
++                     GTask        *task)
++{
++    GError *error = NULL;
++
++    if (!mm_base_modem_at_command_finish (self, res, &error))
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++power_sequence_ready (MMBaseModem  *self,
++                      GAsyncResult *res,
++                      GTask        *task)
++{
++    GError *error = NULL;
++
++    mm_base_modem_at_sequence_finish (self, res, NULL, &error);
++    if (error)
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++power_up_cfun_ready (MMBaseModem  *self,
++                     GAsyncResult *res,
++                     GTask        *task)
++{
++    const gchar *response;
++
++    response = mm_base_modem_at_command_finish (self, res, NULL);
++    if (cfun_is_zero (response)) {
++        mm_obj_dbg (self, "SIM and protocol stack off (+CFUN: 0): AT+SFUN=2, AT+SFUN=4");
++        mm_base_modem_at_sequence (self, sim_on_sequence, NULL, NULL,
++                                   (GAsyncReadyCallback) power_sequence_ready, task);
++        return;
++    }
++    mm_base_modem_at_command (self, "+CFUN=1", 30, FALSE,
++                              (GAsyncReadyCallback) power_command_ready, task);
++}
++
++static void
++modem_power_up (MMIfaceModem        *self,
++                GAsyncReadyCallback  callback,
++                gpointer             user_data)
++{
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+CFUN?", 5, FALSE,
++                              (GAsyncReadyCallback) power_up_cfun_ready,
++                              g_task_new (self, NULL, callback, user_data));
++}
++
++/* Low power and off are both flight mode: see the top */
++static void
++modem_power_down (MMIfaceModem        *self,
++                  GAsyncReadyCallback  callback,
++                  gpointer             user_data)
++{
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+CFUN=4", 30, FALSE,
++                              (GAsyncReadyCallback) power_command_ready,
++                              g_task_new (self, NULL, callback, user_data));
++}
++
++/* Initialization: the SIM on before anything reads it */
++
++static gpointer
++initialization_started_finish (MMBroadbandModem  *self,
++                               GAsyncResult      *res,
++                               GError           **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void
++init_sim_on_ready (MMBaseModem  *self,
++                   GAsyncResult *res,
++                   GTask        *task)
++{
++    GError *error = NULL;
++
++    mm_base_modem_at_sequence_finish (self, res, NULL, &error);
++    if (error) {
++        mm_obj_warn (self, "couldn't switch the SIM on: %s", error->message);
++        g_error_free (error);
++    }
++    g_task_return_pointer (task, g_task_get_task_data (task), NULL);
++    g_object_unref (task);
++}
++
++static void
++init_cfun_ready (MMBaseModem  *self,
++                 GAsyncResult *res,
++                 GTask        *task)
++{
++    const gchar *response;
++
++    response = mm_base_modem_at_command_finish (self, res, NULL);
++    if (cfun_is_zero (response)) {
++        mm_obj_msg (self, "SIM and protocol stack off (+CFUN: 0): switching them on");
++        mm_base_modem_at_sequence (self, sim_on_sequence, NULL, NULL,
++                                   (GAsyncReadyCallback) init_sim_on_ready, task);
++        return;
++    }
++    g_task_return_pointer (task, g_task_get_task_data (task), NULL);
++    g_object_unref (task);
++}
++
++static void
++parent_initialization_started_ready (MMBroadbandModem *self,
++                                     GAsyncResult     *res,
++                                     GTask            *task)
++{
++    GError   *error = NULL;
++    gpointer  ports_ctx;
++
++    ports_ctx = MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_unisoc_parent_class)->initialization_started_finish (self, res, &error);
++    if (error) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++    /* handed back as is; the parent's initialization_stopped() releases it */
++    g_task_set_task_data (task, ports_ctx, NULL);
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+CFUN?", 5, FALSE,
++                              (GAsyncReadyCallback) init_cfun_ready, task);
++}
++
++static void
++initialization_started (MMBroadbandModem    *self,
++                        GAsyncReadyCallback  callback,
++                        gpointer             user_data)
++{
++    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_unisoc_parent_class)->initialization_started (
++        self,
++        (GAsyncReadyCallback) parent_initialization_started_ready,
++        g_task_new (self, NULL, callback, user_data));
++}
++
++/*****************************************************************************/
++/* Capabilities and IP families (Modem interface): no AT, see the top */
++
++static MMModemCapability
++modem_load_current_capabilities_finish (MMIfaceModem  *self,
++                                        GAsyncResult  *res,
++                                        GError       **error)
++{
++    GError *inner_error = NULL;
++    gssize  value;
++
++    value = g_task_propagate_int (G_TASK (res), &inner_error);
++    if (inner_error) {
++        g_propagate_error (error, inner_error);
++        return MM_MODEM_CAPABILITY_NONE;
++    }
++    return (MMModemCapability) value;
++}
++
++static void
++modem_load_current_capabilities (MMIfaceModem        *self,
++                                 GAsyncReadyCallback  callback,
++                                 gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    g_task_return_int (task, (MM_MODEM_CAPABILITY_GSM_UMTS |
++                              MM_MODEM_CAPABILITY_LTE |
++                              MM_MODEM_CAPABILITY_5GNR));
++    g_object_unref (task);
++}
++
++static MMBearerIpFamily
++modem_load_supported_ip_families_finish (MMIfaceModem  *self,
++                                         GAsyncResult  *res,
++                                         GError       **error)
++{
++    GError *inner_error = NULL;
++    gssize  value;
++
++    value = g_task_propagate_int (G_TASK (res), &inner_error);
++    if (inner_error) {
++        g_propagate_error (error, inner_error);
++        return MM_BEARER_IP_FAMILY_NONE;
++    }
++    return (MMBearerIpFamily) value;
++}
++
++static void
++modem_load_supported_ip_families (MMIfaceModem        *self,
++                                  GAsyncReadyCallback  callback,
++                                  gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    g_task_return_int (task, (MM_BEARER_IP_FAMILY_IPV4 |
++                              MM_BEARER_IP_FAMILY_IPV6 |
++                              MM_BEARER_IP_FAMILY_IPV4V6));
++    g_object_unref (task);
++}
++
++/*****************************************************************************/
++/* Unsolicited signal reports */
++
++static void
++cesq_received (MMPortSerialAt         *port,
++               GMatchInfo             *match_info,
++               MMBroadbandModemUnisoc *self)
++{
++    g_autofree gchar *line = NULL;
++    Cesq              c;
++
++    line = g_match_info_fetch (match_info, 0);
++    if (line && parse_cesq (line, &c, NULL)) {
++        get_private (self)->last_cesq = c;
++        get_private (self)->have_cesq = TRUE;
++        mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), cesq_quality (&c));
++    }
++}
++
++static void
++setup_ports (MMBroadbandModem *self)
++{
++    MMPortSerialAt   *primary;
++    g_autoptr(GRegex) cesq = NULL;
++    g_autoptr(GRegex) csq = NULL;
++    g_autoptr(GRegex) vendor = NULL;
++    g_autoptr(GRegex) call = NULL;
++
++    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_unisoc_parent_class)->setup_ports (self);
++
++    primary = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
++    if (!primary)
++        return;
++
++    /* Same format solicited and unsolicited: a line followed by its final
++     * result code is a reply (to AT+CESQ here, or to a client's AT+CSQ through
++     * Modem.Command) and stays in the response. */
++    cesq = g_regex_new ("\\r\\n\\+CESQ:[^\\r\\n]*\\r\\n(?!\\r\\n(OK|ERROR|\\+CME ERROR))",
++                        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
++    csq = g_regex_new ("\\r\\n\\+CSQ:[^\\r\\n]*\\r\\n(?!\\r\\n(OK|ERROR|\\+CME ERROR))",
++                       G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
++    mm_port_serial_at_add_unsolicited_msg_handler (primary, cesq,
++                                                   (MMPortSerialAtUnsolicitedMsgFn) cesq_received,
++                                                   self, NULL);
++    mm_port_serial_at_add_unsolicited_msg_handler (primary, csq, NULL, NULL, NULL);
++
++    /* Vendor reports nobody asked for, which otherwise end up inside command
++     * replies (the model string read "+SPSLICEQUE:2|1,1|1 ^CONN: 11,2,2
++     * V1.0.1-B7"): SIM/storage indications, PDN and slice state, and the call
++     * control reports of the vendor RIL's protocol (^ORIG/^CONF/^CONN/^CEND;
++     * calls are followed through +CLCC). */
++    vendor = g_regex_new ("\\r\\n\\+(SIND|ECIND|PRENWINFU|SPPSREADY|SPSLICEQUE|SPERROR|SPPCODATA):[^\\r\\n]*\\r\\n",
++                          G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
++    call = g_regex_new ("\\r\\n\\^(ORIG|CONF|CONN|CEND):[^\\r\\n]*\\r\\n",
++                        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
++    mm_port_serial_at_add_unsolicited_msg_handler (primary, vendor, NULL, NULL, NULL);
++    mm_port_serial_at_add_unsolicited_msg_handler (primary, call, NULL, NULL, NULL);
++}
++
++/*****************************************************************************/
++/* Create bearer (Modem interface) */
++
++static MMBaseBearer *
++modem_create_bearer_finish (MMIfaceModem  *self,
++                            GAsyncResult  *res,
++                            GError       **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void
++broadband_bearer_unisoc_new_ready (GObject      *source,
++                                   GAsyncResult *res,
++                                   GTask        *task)
++{
++    MMBaseBearer *bearer;
++    GError       *error = NULL;
++
++    bearer = mm_broadband_bearer_unisoc_new_finish (res, &error);
++    if (!bearer)
++        g_task_return_error (task, error);
++    else
++        g_task_return_pointer (task, bearer, g_object_unref);
++    g_object_unref (task);
++}
++
++static void
++modem_create_bearer (MMIfaceModem        *self,
++                     MMBearerProperties  *properties,
++                     GAsyncReadyCallback  callback,
++                     gpointer             user_data)
++{
++    mm_broadband_bearer_unisoc_new (MM_BROADBAND_MODEM_UNISOC (self),
++                                    properties,
++                                    NULL, /* cancellable */
++                                    (GAsyncReadyCallback) broadband_bearer_unisoc_new_ready,
++                                    g_task_new (self, NULL, callback, user_data));
++}
++
++/*****************************************************************************/
++
++MMBroadbandModemUnisoc *
++mm_broadband_modem_unisoc_new (const gchar  *device,
++                               const gchar  *physdev,
++                               const gchar **drivers,
++                               const gchar  *plugin,
++                               guint16       vendor_id,
++                               guint16       product_id)
++{
++    return g_object_new (MM_TYPE_BROADBAND_MODEM_UNISOC,
++                         MM_BASE_MODEM_DEVICE,             device,
++                         MM_BASE_MODEM_PHYSDEV,            physdev,
++                         MM_BASE_MODEM_DRIVERS,            drivers,
++                         MM_BASE_MODEM_PLUGIN,             plugin,
++                         MM_BASE_MODEM_VENDOR_ID,          vendor_id,
++                         MM_BASE_MODEM_PRODUCT_ID,         product_id,
++                         /* data only through the sipa_eth network interface */
++                         MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
++                         MM_BASE_MODEM_DATA_TTY_SUPPORTED, FALSE,
++                         NULL);
++}
++
++static void
++mm_broadband_modem_unisoc_init (MMBroadbandModemUnisoc *self)
++{
++}
++
++static void
++iface_modem_init (MMIfaceModemInterface *iface)
++{
++    iface->create_bearer = modem_create_bearer;
++    iface->create_bearer_finish = modem_create_bearer_finish;
++    iface->load_current_capabilities = modem_load_current_capabilities;
++    iface->load_current_capabilities_finish = modem_load_current_capabilities_finish;
++    iface->load_supported_ip_families = modem_load_supported_ip_families;
++    iface->load_supported_ip_families_finish = modem_load_supported_ip_families_finish;
++    iface->load_signal_quality = modem_load_signal_quality;
++    iface->load_signal_quality_finish = modem_load_signal_quality_finish;
++    iface->modem_power_up = modem_power_up;
++    iface->modem_power_up_finish = modem_power_finish;
++    iface->modem_power_down = modem_power_down;
++    iface->modem_power_down_finish = modem_power_finish;
++    iface->modem_power_off = modem_power_down;
++    iface->modem_power_off_finish = modem_power_finish;
++}
++
++static void
++iface_modem_signal_init (MMIfaceModemSignalInterface *iface)
++{
++    iface->load_values = signal_load_values;
++    iface->load_values_finish = signal_load_values_finish;
++}
++
++static void
++mm_broadband_modem_unisoc_class_init (MMBroadbandModemUnisocClass *klass)
++{
++    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
++
++    broadband_modem_class->setup_ports = setup_ports;
++    broadband_modem_class->initialization_started = initialization_started;
++    broadband_modem_class->initialization_started_finish = initialization_started_finish;
++
++    /* No ATZ: it leaves the CP's AT server silent */
++    broadband_modem_class->enabling_modem_init = NULL;
++    broadband_modem_class->enabling_modem_init_finish = NULL;
++    /* No +CPMS=: it leaves the CP's AT server silent too */
++    broadband_modem_class->sms_storages_fixed = TRUE;
++}
+diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.h b/src/plugins/unisoc/mm-broadband-modem-unisoc.h
+--- a/src/plugins/unisoc/mm-broadband-modem-unisoc.h	1970-01-01 08:00:00
++++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.h	2026-09-26 16:51:45
+@@ -0,0 +1,41 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++
++#ifndef MM_BROADBAND_MODEM_UNISOC_H
++#define MM_BROADBAND_MODEM_UNISOC_H
++
++#include "mm-broadband-modem.h"
++
++#define MM_TYPE_BROADBAND_MODEM_UNISOC            (mm_broadband_modem_unisoc_get_type ())
++#define MM_BROADBAND_MODEM_UNISOC(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_BROADBAND_MODEM_UNISOC, MMBroadbandModemUnisoc))
++#define MM_BROADBAND_MODEM_UNISOC_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  MM_TYPE_BROADBAND_MODEM_UNISOC, MMBroadbandModemUnisocClass))
++#define MM_IS_BROADBAND_MODEM_UNISOC(obj)         (G_TYPE_CHECK_INSTANCE_TYPE ((obj), MM_TYPE_BROADBAND_MODEM_UNISOC))
++#define MM_IS_BROADBAND_MODEM_UNISOC_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass),  MM_TYPE_BROADBAND_MODEM_UNISOC))
++#define MM_BROADBAND_MODEM_UNISOC_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),  MM_TYPE_BROADBAND_MODEM_UNISOC, MMBroadbandModemUnisocClass))
++
++typedef struct _MMBroadbandModemUnisoc MMBroadbandModemUnisoc;
++typedef struct _MMBroadbandModemUnisocClass MMBroadbandModemUnisocClass;
++
++struct _MMBroadbandModemUnisoc {
++    MMBroadbandModem parent;
++};
++
++struct _MMBroadbandModemUnisocClass {
++    MMBroadbandModemClass parent;
++};
++
++GType mm_broadband_modem_unisoc_get_type (void);
++
++MMBroadbandModemUnisoc *mm_broadband_modem_unisoc_new (const gchar  *device,
++                                                       const gchar  *physdev,
++                                                       const gchar **drivers,
++                                                       const gchar  *plugin,
++                                                       guint16       vendor_id,
++                                                       guint16       product_id);
++
++#endif /* MM_BROADBAND_MODEM_UNISOC_H */
+diff -ruN a/src/plugins/unisoc/mm-plugin-unisoc.c b/src/plugins/unisoc/mm-plugin-unisoc.c
+--- a/src/plugins/unisoc/mm-plugin-unisoc.c	1970-01-01 08:00:00
++++ b/src/plugins/unisoc/mm-plugin-unisoc.c	2026-09-26 16:51:45
+@@ -0,0 +1,81 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Unisoc (Spreadtrum) SoC-integrated modems reached over SIPC: the AT channel
++ * is the WWAN port the kernel's sipc_wwan driver registers, the data path a
++ * sipa_eth network interface.  Ports are claimed by the ID_MM_UNISOC_SIPC udev
++ * tag (77-mm-unisoc-sipc.rules), as the qcom-soc plugin does for its SoCs.
++ */
++
++#include <string.h>
++#include <gmodule.h>
++
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "mm-plugin-common.h"
++#include "mm-broadband-modem-unisoc.h"
++
++#define MM_TYPE_PLUGIN_UNISOC mm_plugin_unisoc_get_type ()
++MM_DEFINE_PLUGIN (UNISOC, unisoc, Unisoc)
++
++/*****************************************************************************/
++
++static MMBaseModem *
++create_modem (MMPlugin     *self,
++              const gchar  *uid,
++              const gchar  *physdev,
++              const gchar **drivers,
++              guint16       vendor,
++              guint16       product,
++              guint16       subsystem_vendor,
++              guint16       subsystem_device,
++              GList        *probes,
++              GError      **error)
++{
++    return MM_BASE_MODEM (mm_broadband_modem_unisoc_new (uid,
++                                                         physdev,
++                                                         drivers,
++                                                         mm_plugin_get_name (self),
++                                                         vendor,
++                                                         product));
++}
++
++/*****************************************************************************/
++
++MM_PLUGIN_NAMED_CREATOR_SCOPE MMPlugin *
++mm_plugin_create_unisoc (void)
++{
++    static const gchar *subsystems[] = { "wwan", "net", NULL };
++    static const gchar *udev_tags[] = { "ID_MM_UNISOC_SIPC", NULL };
++
++    return MM_PLUGIN (
++        g_object_new (MM_TYPE_PLUGIN_UNISOC,
++                      MM_PLUGIN_NAME,               MM_MODULE_NAME,
++                      MM_PLUGIN_ALLOWED_SUBSYSTEMS, subsystems,
++                      MM_PLUGIN_ALLOWED_UDEV_TAGS,  udev_tags,
++                      MM_PLUGIN_ALLOWED_AT,         TRUE,
++                      NULL));
++}
++
++static void
++mm_plugin_unisoc_init (MMPluginUnisoc *self)
++{
++}
++
++static void
++mm_plugin_unisoc_class_init (MMPluginUnisocClass *klass)
++{
++    MMPluginClass *plugin_class = MM_PLUGIN_CLASS (klass);
++
++    plugin_class->create_modem = create_modem;
++}

@@ -1,4 +1,10 @@
-"""Cached, AT-derived modem state.
+"""Cached modem state: from ModemManager, or AT-derived.
+
+On the E5 ModemManager owns the modem (docs/FINDINGS.md 37) and already keeps
+everything the UI shows -- registration, operator, access technology, signal,
+the SIM, the bearer -- so the snapshot reads it over D-Bus (``mmcli -J``) and
+sends no AT at all.  The AT path below is the fallback for an image without
+ModemManager.
 
 Signal strength, operator, registration and the SIM identity only exist behind
 AT commands, and AT is the one resource on this device that must not be polled
@@ -16,10 +22,13 @@ disables AT entirely and every derived field becomes empty.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 import threading
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 #: Read-only commands, in the order they are issued.  Nothing here changes modem
 #: state, so a refresh is safe to run at any time.
@@ -65,8 +74,119 @@ def _quoted(text: str):
     return re.findall(r'"([^"]*)"', text or "")
 
 
+def _mmcli(*args: str, timeout: float = 10.0) -> Dict[str, Any]:
+    """One mmcli call with JSON output; {} when it fails."""
+    try:
+        out = subprocess.run(("mmcli", "-J") + args, capture_output=True, text=True,
+                             timeout=timeout, check=False)
+        return json.loads(out.stdout) if out.returncode == 0 and out.stdout else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+
+
+def _mm_value(value: Any) -> str:
+    """mmcli prints "--" for an unset property."""
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    value = "" if value is None else str(value)
+    return "" if value == "--" else value
+
+
+def modemmanager_available() -> bool:
+    if not shutil.which("mmcli"):
+        return False
+    try:
+        return subprocess.run(("systemctl", "-q", "is-active", "ModemManager"),
+                              timeout=5, check=False).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+#: ModemManager's registration states -> the 27.007 <stat> the UI expects.
+_MM_REG_STAT = {"idle": "0", "home": "1", "searching": "2", "denied": "3",
+                "unknown": "4", "roaming": "5", "home-sms-only": "6",
+                "roaming-sms-only": "7", "emergency-only": "8"}
+
+
+def _mm_network_type(techs: str) -> str:
+    techs = techs.lower()
+    for key, name in (("5gnr", "5G"), ("lte", "4G"), ("hspa", "3G"), ("umts", "3G"),
+                      ("edge", "2G"), ("gprs", "2G"), ("gsm", "2G")):
+        if key in techs:
+            return name
+    return ""
+
+
+def modemmanager_snapshot() -> Dict[str, str]:
+    """The fields :func:`derive` produces, read from ModemManager."""
+    modem = _mmcli("-m", "any").get("modem", {})
+    if not modem:
+        return {}
+    generic = modem.get("generic", {})
+    gpp = modem.get("3gpp", {})
+    raw: Dict[str, str] = {}
+
+    raw["imei"] = _mm_value(gpp.get("imei")) or _mm_value(generic.get("equipment-identifier"))
+    raw["network_provider"] = _mm_value(gpp.get("operator-name"))
+    state = _mm_value(gpp.get("registration-state"))
+    if state in _MM_REG_STAT:
+        raw["reg_status"] = _MM_REG_STAT[state]
+    raw["network_type"] = _mm_network_type(" ".join(generic.get("access-technologies") or []))
+    raw["msisdn"] = _mm_value(generic.get("own-numbers"))
+    quality = (generic.get("signal-quality") or {}).get("value")
+    if _mm_value(quality):
+        raw["signal_quality"] = _mm_value(quality)
+
+    sim_path = _mm_value(generic.get("sim"))
+    if sim_path:
+        props = _mmcli("-i", sim_path).get("sim", {}).get("properties", {})
+        raw["imsi"] = _mm_value(props.get("imsi"))
+        raw["iccid"] = _mm_value(props.get("iccid"))
+
+    # extended signal: ModemManager polls it only once a refresh rate is set
+    signal = _mmcli("-m", "any", "--signal-get").get("modem", {}).get("signal", {})
+    if not _mm_value((signal.get("refresh") or {}).get("rate")) or \
+            _mm_value((signal.get("refresh") or {}).get("rate")) == "0":
+        _mmcli("-m", "any", "--signal-setup=60")
+    for tech in ("5g", "lte"):
+        block = signal.get(tech) or {}
+        rsrp = _mm_value(block.get("rsrp"))
+        if rsrp:
+            raw["lte_rsrp"] = str(int(float(rsrp)))
+            raw["Z5g_rsrp"] = raw["lte_rsrp"]
+            rsrq = _mm_value(block.get("rsrq"))
+            if rsrq:
+                raw["lte_rsrq"] = "%.1f" % float(rsrq)
+            break
+
+    for path in generic.get("bearers") or []:
+        bearer = _mmcli("-b", path).get("bearer", {})
+        if _mm_value((bearer.get("status") or {}).get("connected")) != "yes":
+            continue
+        raw["apn"] = _mm_value((bearer.get("properties") or {}).get("apn"))
+        raw["ipv4_wan_ipaddr"] = _mm_value((bearer.get("ipv4-config") or {}).get("address"))
+        break
+
+    out = {key: value for key, value in raw.items() if value}
+    bar = _signal_bar(out.get("lte_rsrp", ""))
+    if bar:
+        out["network_signalbar"] = bar
+    return out
+
+
+def _signal_bar(rsrp_text: str) -> str:
+    """Signal bars, 0..5, using the thresholds the Android UI used."""
+    rsrp = _ints(rsrp_text)
+    if not rsrp:
+        return ""
+    for bar, floor in (("5", -80), ("4", -90), ("3", -100), ("2", -110), ("1", -120)):
+        if rsrp[0] >= floor:
+            return bar
+    return "0"
+
+
 class ModemSnapshot:
-    """Thread-safe cache of read-only AT state."""
+    """Thread-safe cache of read-only modem state."""
 
     def __init__(self, at_runner, interval: float = 60.0, logger=None):
         self.at = at_runner
@@ -110,7 +230,7 @@ class ModemSnapshot:
         with self._lock:
             if self._running or not self._stale() or self.interval <= 0:
                 return
-            if not self.at.available():
+            if not modemmanager_available() and not self.at.available():
                 return
             self._running = True
         threading.Thread(target=self._refresh_worker, name="ufi-modem", daemon=True).start()
@@ -120,6 +240,17 @@ class ModemSnapshot:
         return self._refresh_worker()
 
     def _refresh_worker(self) -> Dict[str, str]:
+        if modemmanager_available():
+            derived: Dict[str, str] = {}
+            try:
+                derived = modemmanager_snapshot()
+            finally:
+                with self._lock:
+                    self._raw = {}
+                    self._data = derived
+                    self._refreshed_at = time.time()
+                    self._running = False
+            return derived
         raw: Dict[str, str] = {}
         try:
             for name, command in COMMANDS:
@@ -209,20 +340,7 @@ def derive(raw: Dict[str, str]) -> Dict[str, str]:
         if apns:
             out["apn"] = apns[-1]
 
-    # Signal bars, 0..5, using the thresholds the Android UI used.
-    rsrp = _ints(out.get("lte_rsrp", ""))
-    if rsrp:
-        value = rsrp[0]
-        if value >= -80:
-            out["network_signalbar"] = "5"
-        elif value >= -90:
-            out["network_signalbar"] = "4"
-        elif value >= -100:
-            out["network_signalbar"] = "3"
-        elif value >= -110:
-            out["network_signalbar"] = "2"
-        elif value >= -120:
-            out["network_signalbar"] = "1"
-        else:
-            out["network_signalbar"] = "0"
+    bar = _signal_bar(out.get("lte_rsrp", ""))
+    if bar:
+        out["network_signalbar"] = bar
     return out

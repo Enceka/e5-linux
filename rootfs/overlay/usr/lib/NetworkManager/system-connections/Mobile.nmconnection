@@ -1,0 +1,24 @@
+# The baseband's data connection (docs/FINDINGS.md 37): ModemManager's unisoc
+# plugin activates PDP context 1 and routes it to sipa_eth0; NetworkManager
+# gives the interface the static IPv4 of +CGCONTRDP and does IPv6 SLAAC on it.
+# The uplink NAT (e5-nat) and the IPv6 /64 passthrough to br0 (e5-ipv6-share,
+# from the dispatcher) ride on sipa_eth0 as they did before.
+[connection]
+id=Mobile
+uuid=6f2c9e5a-3b1d-4e57-9a0c-e5e5e5000002
+type=gsm
+autoconnect=true
+autoconnect-retries=0
+
+[gsm]
+apn=cbnet
+auto-config=false
+
+[ipv4]
+method=auto
+route-metric=100
+
+[ipv6]
+method=auto
+addr-gen-mode=stable-privacy
+route-metric=100

@@ -83,12 +83,13 @@ bash "$HERE/e5-chroot.sh" '
     # systemd-networkd is not involved any more (its rtnl requests time out on this
     # SoC; etc/systemd/network/*.network mark every link Unmanaged=yes).
     systemctl --root=/ enable e5-bt-attach.service >/dev/null 2>&1 || echo "warn: bt-attach enable failed"
-    # The baseband, G2 shape: the vendor modem_control chroot boots the CP, the
-    # two vendor helpers persist the modem NV data, and unisoc-cpd is the one
-    # owner of the AT/URC channels for the whole boot (it replaced e5-atd and
-    # e5-mobile-data; its unit carries Conflicts= against them for images that
-    # still have them enabled).  A single owner is what the SIPC channel and the
-    # CP command queue both require.
+    # The baseband: the vendor modem_control chroot boots the CP, the two vendor
+    # helpers persist the modem NV data, and ModemManager is the one owner of
+    # the AT channel for the whole boot -- its unisoc plugin, on the WWAN port
+    # e5-sipc-wwan loads (docs/FINDINGS.md 37).  A single owner is what the SIPC
+    # channel and the CP command queue both require; e5-sipc-wwan carries
+    # Conflicts= against unisoc-cpd and the older owners, which stay installed
+    # as the fallback, not enabled.
     #
     # e5-regdb-load feeds cfg80211 the regulatory database the hotspot's 5 GHz
     # channels need (the hotspot itself is NetworkManager's "Hotspot" connection,
@@ -99,7 +100,7 @@ bash "$HERE/e5-chroot.sh" '
     # it restores the cap_net_raw on ping and links e5-next-boot/mobile-data/e5-at into
     # /usr/local/bin, which is what makes `sudo e5-next-boot android` work.
     for s in e5-vendor e5-cp_diskserver e5-refnotify \
-             e5-net-bridge unisoc-cpd unisoc-cpd-web e5-bearer-up \
+             e5-net-bridge e5-sipc-wwan \
              e5-regdb-load e5-telnetd e5-gadget-guard e5-fixups; do
         systemctl --root=/ enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done
@@ -107,8 +108,7 @@ bash "$HERE/e5-chroot.sh" '
     # -- the hotspot, an AP port of br0, and whatever network Phosh joins.  Its
     # wait-online unit is a no-op (a drop-in in the overlay).
     systemctl --root=/ enable NetworkManager.service >/dev/null 2>&1 || echo "warn: NetworkManager enable failed"
-    # brings the bearer back after a CP reset (boot/init links it too)
-    systemctl --root=/ enable e5-bearer-watch.timer >/dev/null 2>&1 || echo "warn: e5-bearer-watch.timer enable failed"
+    systemctl --root=/ enable ModemManager.service >/dev/null 2>&1 || echo "warn: ModemManager enable failed"
     # The sound card: e5-audio loads the 24 vendor audio modules, boots the AGDSP
     # off l_agdsp_a and sets the speaker route before session PipeWire can
     # probe the card (the 2026-09-19 resets were exactly that probe landing on a
@@ -142,6 +142,15 @@ if [ -d "$OL" ] && [ -f "$OL/include/generated/utsrelease.h" ]; then
     find "$OL/sound/soc/sprd" "$OL/drivers/unisoc_platform/sprd_audio" -name '*.ko' -type f 2>/dev/null |
     while read -r f; do
         cp "$f" "$AMOD/"; n=$((n + 1)); echo "  $(basename "$f")"
+    done
+    # The same for the WWAN AT port of the baseband, which e5-sipc-wwan
+    # modprobes when ModemManager is to own the modem (it must not be loaded
+    # while unisoc-cpd holds the channel, so not from the initramfs either).
+    MMOD="$ROOT/usr/lib/modules/$REL/modem"
+    rm -rf "$MMOD"; mkdir -p "$MMOD"
+    for f in "$OL/drivers/net/wwan/wwan.ko" "$OL/drivers/unisoc_platform/modem/sipc/sipc_wwan.ko"; do
+        if [ -f "$f" ]; then cp "$f" "$MMOD/"; echo "  $(basename "$f")"
+        else echo "  warn: no $(basename "$f") in out_linux; e5-sipc-wwan will fail" >&2; fi
     done
     n=$(ls "$AMOD" | wc -l)
     if [ "$n" -gt 0 ]; then

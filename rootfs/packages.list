@@ -171,10 +171,9 @@ amberol
 showtime
 gnome-sound-recorder
 # phone: GNOME Calls (dialer, call history), Chatty (SMS; also XMPP/Matrix via
-# libpurple) and Contacts, the phosh set.  Calls depends on modemmanager, which
-# comes confined: etc/systemd/system/ModemManager.service.d/50-e5.conf runs it
-# allowlist-only, so it probes no port until one is tagged for it (the SIPC AT
-# channels belong to unisoc-cpd today, and the CP does not survive unexpected AT).
+# libpurple) and Contacts, the phosh set, over modemmanager -- replaced by the
+# patched build with the unisoc plugin (install-packages.sh), run allowlist-only
+# on the two ports tagged for it (ModemManager.service.d/50-e5.conf, FINDINGS 37).
 gnome-calls
 chatty
 gnome-contacts

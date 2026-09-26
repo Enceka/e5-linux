@@ -1,0 +1,27 @@
+[Unit]
+Description=E5 baseband AT channel as a WWAN port, for ModemManager (sipc_wwan)
+Documentation=file:///usr/share/doc/e5-linux/README.md
+# sipc_wwan registers /dev/wwan0at0 on the SIPC AT channel and drains its
+# rings from the moment it loads (docs/FINDINGS.md 36, 37).  Those rings are
+# the ones spipe hands out as /dev/stty_nrN, so it and the unisoc-cpd world
+# (the daemon, the old e5-atd/mobile-data) exclude each other: never two
+# readers on one AT channel.  ModemManager Wants= this unit; starting one of
+# the others stops it, and ModemManager with it.
+After=e5-vendor.service
+Wants=e5-vendor.service
+Before=ModemManager.service
+Conflicts=unisoc-cpd.service unisoc-cpd-web.service e5-bearer-up.service
+Conflicts=e5-atd.service e5-mobile-data.service e5-mobile-data-watch.service
+Conflicts=unisoc-cpd-soak.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# the spipe devices appear with the vendor stack (e5-vendor), which may still
+# be coming up
+ExecStartPre=/bin/sh -c 'i=0; until [ -e /dev/stty_nr1 ]; do i=$((i + 1)); [ $i -gt 120 ] && exit 1; sleep 1; done'
+ExecStart=/usr/sbin/modprobe sipc_wwan
+ExecStop=/usr/sbin/modprobe -r sipc_wwan
+
+[Install]
+WantedBy=multi-user.target

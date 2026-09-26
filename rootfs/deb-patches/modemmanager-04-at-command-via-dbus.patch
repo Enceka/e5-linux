@@ -1,0 +1,20 @@
+Description: meson: at_command_via_dbus on by default (E5)
+ The E5 has no second AT channel: ModemManager owns the only one, so the
+ tools that used to ask unisoc-cpd for a raw AT command (e5-at, UFI-TOOLS)
+ ask ModemManager (Modem.Command, mmcli --command) instead -- which it only
+ serves in --debug mode unless built with this option.  Access stays behind
+ the org.freedesktop.ModemManager1.Control polkit action.
+Author: e5-linux
+Forwarded: not-needed
+
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -16,7 +16,7 @@
+ 
+ option('polkit', type: 'combo', choices: ['strict', 'permissive', 'no'], value: 'strict', description: 'User auth-polkit configuration option.')
+ 
+-option('at_command_via_dbus', type: 'boolean', value: false, description: 'enable at commands via d-bus')
++option('at_command_via_dbus', type: 'boolean', value: true, description: 'enable at commands via d-bus')
+ 
+ option('builtin_plugins', type: 'boolean', value: false, description: 'integrate all built plugins within the daemon binary')
+ 

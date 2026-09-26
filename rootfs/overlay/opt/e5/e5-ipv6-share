@@ -1,7 +1,8 @@
 #!/bin/sh
 # Pass the bearer's public IPv6 /64 through to the LAN (hotspot and USB, br0).
 #
-#     e5-ipv6-share [--wait]     (idempotent; e5-bearer-up and e5-bearer-watch run it)
+#     e5-ipv6-share [--wait]     (idempotent; NetworkManager's dispatcher runs it
+#                                 with E5_V6_NM=1, e5-bearer-up/-watch without)
 #
 # What the carrier gives: an IPV4V6 context whose +CGPADDR carries only an
 # interface identifier (the upper 64 bits are zero), and a router advertisement
@@ -30,10 +31,17 @@ LAN=${E5_V6_LAN:-br0}
 WAIT=0; [ "${1:-}" = --wait ] && WAIT=15
 
 [ -d "/sys/class/net/$UP" ] || { echo "ipv6-share: no $UP" >&2; exit 0; }
-sysctl -qw "net.ipv6.conf.$UP.accept_ra=2" "net.ipv6.conf.$UP.autoconf=1"
 [ -d "/sys/class/net/$LAN" ] && sysctl -qw "net.ipv6.conf.$LAN.accept_ra=0"
 
-if ! ip -6 addr show dev "$UP" scope link | grep -q inet6; then
+# With NetworkManager on the uplink (E5_V6_NM=1, from its dispatcher) the
+# uplink is NM's: it runs router discovery itself, with the kernel's accept_ra
+# off, and keeps its own link-local -- only the prefix is taken from it.
+NM=${E5_V6_NM:-0}
+[ "$NM" = 1 ] || sysctl -qw "net.ipv6.conf.$UP.accept_ra=2" "net.ipv6.conf.$UP.autoconf=1"
+
+if [ "$NM" = 1 ]; then
+    :
+elif ! ip -6 addr show dev "$UP" scope link | grep -q inet6; then
     iid=$(timeout 30 /opt/e5/e5-at "AT+CGPADDR=1" 2>/dev/null | python3 -c '
 import sys
 for line in sys.stdin:

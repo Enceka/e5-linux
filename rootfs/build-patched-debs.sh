@@ -3,12 +3,16 @@
 # where trixie's package has a bug that upstream has already fixed and the fix
 # matters on the E5.  Runs Debian's own source package in a debian:trixie arm64
 # container (native on an Apple-silicon host), adds each patch to its quilt
-# series, gives the version a local "+e5N" suffix and builds binaries only.
+# series (in file-name order), gives the version a local "+e5.<patch count>"
+# suffix and builds binaries only.
 #
 #   rootfs/build-patched-debs.sh network-manager    -> out/debs-patched/*.deb
 #
-# network-manager: the VHT80 centre of channels 149-161 (backport of upstream
-# "supplicant: fix center channel calculation"; docs/FINDINGS.md 35.2).
+# network-manager (docs/FINDINGS.md 35.2):
+#   01  the VHT80 centre of channels 149-161 (backport of upstream "supplicant:
+#       fix center channel calculation") -- 149 at 80 MHz failed to start
+#   02  an AP with PMF disabled advertises WPA-PSK only, not also
+#       WPA-PSK-SHA256 (AKM 6 without MFPC) -- phones could not join
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG=${1:?package}
@@ -32,9 +36,11 @@ done
 export QUILT_PATCHES=debian/patches
 quilt push -a >/dev/null
 quilt pop -a >/dev/null
+N=$(ls /patches/"$PKG"-*.patch | wc -l)
 DEBEMAIL="e5-linux@localhost" DEBFULLNAME="e5-linux" \
-    dch --local +e5 "E5: $(cd /patches && ls "$PKG"-*.patch | tr "\n" " ")"
+    dch -v "$(dpkg-parsechangelog -SVersion)+e5.$N" "E5: $(cd /patches && ls "$PKG"-*.patch | tr "\n" " ")"
 DEB_BUILD_OPTIONS="nocheck parallel=$(nproc)" dpkg-buildpackage -b -uc -us >/build/log 2>&1 || { tail -40 /build/log; exit 1; }
+rm -f /out/*.deb
 cp ../*.deb /out/
 ls -la /out
 '

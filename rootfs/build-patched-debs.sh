@@ -30,6 +30,8 @@
 #       counted ipv4.method=shared -- the switch showed off and could not stop it
 #   02  phone mode keeps the window close button: with no Escape key, and a
 #       back key that closes no GTK dialog, dialogs could not be left
+#   03  the keypad's Menu key shows and hides the on-screen keyboard, which
+#       could not be dismissed from the keypad otherwise
 #
 # gnome-control-center:
 #   01  the Wi-Fi panel finds the bridged "Hotspot" and turns it on instead of

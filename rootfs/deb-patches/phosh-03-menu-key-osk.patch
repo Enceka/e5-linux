@@ -1,0 +1,49 @@
+Description: osk-manager: the Menu key toggles the on-screen keyboard
+ A device whose only keys are a keypad has no way to dismiss the on-screen
+ keyboard once it is up: its back key also reports BackSpace, and the keyboard
+ has no hide key.  The keypad's Menu key (KEY_MENU, keysym XF86MenuKB) now shows and hides it.
+Author: e5-linux
+Forwarded: not-needed
+
+--- a/src/osk-manager.c
++++ b/src/osk-manager.c
+@@ -178,6 +178,21 @@
+   /* Hide OSK on lock screen lock */
+   if (phosh_shell_get_locked (phosh_shell_get_default ()))
+     set_visible_real (self, FALSE);
++}
++
++
++/* The keypad's Menu key (KEY_MENU, keysym XF86MenuKB) shows and hides the on-screen keyboard: a phone whose
++ * only keys are a keypad has no other way to dismiss it (its back key is also
++ * BackSpace, and the keyboard offers no hide key). */
++static void
++on_toggle_osk_pressed (GSimpleAction *action, GVariant *param, gpointer data)
++{
++  PhoshOskManager *self = PHOSH_OSK_MANAGER (data);
++
++  if (!phosh_osk_manager_get_available (self))
++    return;
++
++  phosh_osk_manager_set_visible (self, !phosh_osk_manager_get_visible (self));
+ }
+ 
+ 
+@@ -226,6 +241,17 @@
+                             "notify::locked",
+                             G_CALLBACK (on_shell_locked_changed),
+                             self);
++
++  {
++    GActionEntry entries[] = {
++      { "XF86MenuKB", on_toggle_osk_pressed, },
++    };
++
++    phosh_shell_add_global_keyboard_action_entries (shell,
++                                                    (GActionEntry *) entries,
++                                                    G_N_ELEMENTS (entries),
++                                                    self);
++  }
+ }
+ 
+ 

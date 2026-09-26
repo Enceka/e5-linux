@@ -1,20 +1,29 @@
 From: tmp <tmp>
-Subject: [PATCH] sipc: sipc_wwan: WWAN AT ports on the SIPC AT channel
+Subject: [PATCH] sipc: sipc_wwan: a WWAN AT port on the SIPC AT channel
 
-The modem's AT interpreter sits on SIPC channel 6, the "stty_nr" sbuf
-(ring 0 carries the URCs, ring 1 is the command channel).  spipe hands the
-rings out as character devices, which ModemManager cannot use: it expects
-ttys or WWAN ports.  Register the rings as WWAN AT ports (/dev/wwanXatY),
-the way rpmsg_wwan_ctrl does for the Qualcomm SMD channels.
+The modem's AT interpreter sits on SIPC channel 6, the "stty_nr" sbuf:
+ring 1 is the command channel, ring 0 carries the URCs and is
+receive-only.  spipe hands the rings out as character devices, which
+ModemManager cannot use: it expects ttys or WWAN ports.  Register one
+WWAN AT port (/dev/wwanXat0), as rpmsg_wwan_ctrl does for the Qualcomm
+SMD channels: writes go to ring 1, reads return ring 1's replies with
+ring 0's URCs merged in by whole lines, between reply lines.
 
-The sbuf read notifier that feeds a port is installed only while the port
-is open, so /dev/stty_nrN keep working for whoever owns the ring when no
-WWAN port is.  The CP asserts ("Error 0xb, The queue was full") under
-back-to-back AT for minutes; tx_gap_ms (default 300) spaces the writes on
-a port so that no client has to know.
+Found on the device:
+- ring 0 must never be written: ModemManager probing it with "AT" left
+  the CP's AT server silent for every client until a reboot
+- a ring nobody reads fills within seconds while the modem is sending
+  reports, and the CP asserts ("MN_AL Task PS ... The queue was full")
+  -- it did three seconds into a handover from unisoc-cpd.  So both rings
+  are drained from module load; what arrives while the port is closed is
+  dropped (285 bytes in one ModemManager session).  This module and a
+  user of /dev/stty_nr0/1 are therefore mutually exclusive.
+- back-to-back AT for minutes also fills that queue: tx_gap_ms (default
+  300) spaces the writes.
 
-Tested on the E5: AT, +CEREG?, +COPS?, +CSQ answer on wwan0at0, 0.33 s
-apart, no assert.
+With it ModemManager 1.24's generic plugin creates the modem (IMEI,
+firmware, own number, SIM with IMSI/ICCID, 4G/5G modes, ports wwan0at0 +
+sipa_eth0) without an assert.
 
 ---
 diff --git a/drivers/unisoc_platform/modem/sipc/Kconfig b/drivers/unisoc_platform/modem/sipc/Kconfig
@@ -52,32 +61,39 @@ index 6fe181c84..534b53024 100644
  obj-$(CONFIG_UNISOC_SIPC_SBUF_BRIDGE)	+= sbuf_bridge.o
 diff --git a/drivers/unisoc_platform/modem/sipc/sipc_wwan.c b/drivers/unisoc_platform/modem/sipc/sipc_wwan.c
 new file mode 100644
-index 000000000..a58dbda8f
+index 000000000..c52fb2c35
 --- /dev/null
 +++ b/drivers/unisoc_platform/modem/sipc/sipc_wwan.c
-@@ -0,0 +1,247 @@
-+// SPDX-License-Identifier: GPL-2.0
+@@ -0,0 +1,338 @@
 +/*
-+ * WWAN AT ports for the Unisoc SIPC AT channels.
++ * A WWAN AT port for the Unisoc SIPC AT channel.
 + *
-+ * The modem's AT interpreter sits on SIPC channel 6, the "stty_nr" sbuf
-+ * (32 rings; ring 0 carries the unsolicited result codes, ring 1 is the
-+ * command channel Android's RIL uses).  spipe exposes the rings as plain
-+ * character devices (/dev/stty_nrN), which is enough for a private daemon but
-+ * not for ModemManager: it expects ttys or WWAN ports.  This driver registers
-+ * the rings as WWAN AT ports (/dev/wwanXatY, subsystem "wwan"), the way
-+ * rpmsg_wwan_ctrl does for the Qualcomm SMD channels, so the stock Linux
-+ * stack can drive the baseband.
++ * The modem's AT interpreter sits on SIPC channel 6, the "stty_nr" sbuf:
++ * ring 1 is the command channel (Android's RIL and unisoc-cpd send on it),
++ * ring 0 carries the unsolicited result codes and is receive-only -- nothing
++ * ever writes to it, and ModemManager probing it with "AT" left the CP's AT
++ * server silent for every client until a reboot.  spipe exposes the rings as
++ * character devices (/dev/stty_nrN), which ModemManager cannot use: it wants
++ * ttys or WWAN ports.  This driver registers one WWAN AT port (/dev/wwanXat0),
++ * as rpmsg_wwan_ctrl does for the Qualcomm SMD channels: writes go to the
++ * command ring, reads return the command ring's replies with ring 0's URCs
++ * merged in -- what a modem's primary AT port looks like.  URCs are merged by
++ * whole lines and only between reply lines, so they never split a reply; the
++ * command ring passes straight through (the SMS "> " prompt has no newline).
 + *
-+ * The rings are the same ones spipe hands out: only one side may use a ring
-+ * at a time.  The notifier that feeds a port is installed when the port is
-+ * opened and removed when it is closed, so the character devices keep
-+ * working while no WWAN port is open.
++ * The rings are drained from the moment the module loads, whether the port
++ * is open or not; what arrives while it is closed is dropped.  A ring nobody
++ * reads fills in seconds while the modem is sending reports, the CP's queue
++ * backs up behind it and the CP asserts ("The queue was full") -- it did,
++ * three seconds into a handover from unisoc-cpd, and ModemManager itself
++ * closes and reopens the port while probing.  The rings are the same ones
++ * spipe hands out as /dev/stty_nrN, so this module and a user of those
++ * character devices (unisoc-cpd) are mutually exclusive: load it only when
++ * ModemManager is to own the modem.
 + *
 + * The CP asserts ("Error 0xb, The queue was full") when AT commands arrive
 + * back to back for minutes; its RIL and unisoc-cpd space them.  tx_gap_ms
-+ * enforces a minimum gap between writes on a port here, so no client has to
-+ * know.
++ * enforces a minimum gap between writes, so no client has to know.
 + */
 +
 +#include <linux/delay.h>
@@ -92,39 +108,57 @@ index 000000000..a58dbda8f
 +#include <linux/slab.h>
 +#include <linux/wwan.h>
 +
-+#define SIPC_WWAN_MAX_PORTS	4
 +#define SIPC_WWAN_RX_CHUNK	2048
++#define SIPC_WWAN_URC_LINE	1024
++#define SIPC_WWAN_URC_HELD	32
 +
 +static char *node_label = "stty_nr";
 +module_param(node_label, charp, 0444);
 +MODULE_PARM_DESC(node_label, "label of the sprd,spipe node that carries AT");
 +
-+static int rings[SIPC_WWAN_MAX_PORTS] = { 1, 0 };
-+static int nr_rings = 2;
-+module_param_array(rings, int, &nr_rings, 0444);
-+MODULE_PARM_DESC(rings, "sbuf rings to expose as AT ports, in port order (default 1,0)");
++static int cmd_ring = 1;
++module_param(cmd_ring, int, 0444);
++MODULE_PARM_DESC(cmd_ring, "sbuf ring of the AT command channel");
++
++static int urc_ring;
++module_param(urc_ring, int, 0444);
++MODULE_PARM_DESC(urc_ring, "receive-only sbuf ring with the URCs, merged into the port (-1: none)");
 +
 +static unsigned int tx_gap_ms = 300;
 +module_param(tx_gap_ms, uint, 0644);
-+MODULE_PARM_DESC(tx_gap_ms, "minimum gap between two writes on a port, in ms");
++MODULE_PARM_DESC(tx_gap_ms, "minimum gap between two writes, in ms");
 +
-+struct sipc_wwan_port {
++struct sipc_wwan {
 +	struct wwan_port *port;
++	struct platform_device *pdev;
 +	u8 dst;
 +	u8 channel;
-+	u32 bufid;
 +	unsigned long last_tx;
 +	struct mutex tx_lock;
++	/* held while pushing to the port and while opening/closing it */
++	struct mutex rx_lock;
++	bool open;
++	unsigned long dropped;
++	/* both rings are served by the channel's one sbuf thread */
++	bool cmd_midline;
++	char urc_line[SIPC_WWAN_URC_LINE];
++	unsigned int urc_len;
++	struct sk_buff_head urc_held;
 +};
 +
-+static struct platform_device *sipc_wwan_pdev;
-+static struct sipc_wwan_port sipc_wwan_ports[SIPC_WWAN_MAX_PORTS];
-+static int sipc_wwan_nports;
++static struct sipc_wwan sipc_wwan;
 +
-+/* sbuf thread context: drain the ring into the port */
-+static void sipc_wwan_notify(int event, void *data)
++static void sipc_wwan_flush_urcs(struct sipc_wwan *sw)
 +{
-+	struct sipc_wwan_port *sp = data;
++	struct sk_buff *skb;
++
++	while ((skb = skb_dequeue(&sw->urc_held)))
++		wwan_port_rx(sw->port, skb);
++}
++
++static void sipc_wwan_cmd_notify(int event, void *data)
++{
++	struct sipc_wwan *sw = data;
 +	struct sk_buff *skb;
 +	int n;
 +
@@ -135,65 +169,120 @@ index 000000000..a58dbda8f
 +		skb = alloc_skb(SIPC_WWAN_RX_CHUNK, GFP_KERNEL);
 +		if (!skb)
 +			return;
-+		n = sbuf_read(sp->dst, sp->channel, sp->bufid, skb->data,
++		n = sbuf_read(sw->dst, sw->channel, cmd_ring, skb->data,
 +			      SIPC_WWAN_RX_CHUNK, 0);
 +		if (n <= 0) {
 +			kfree_skb(skb);
 +			return;
 +		}
 +		skb_put(skb, n);
-+		wwan_port_rx(sp->port, skb);
++		mutex_lock(&sw->rx_lock);
++		if (sw->open) {
++			sw->cmd_midline = skb->data[n - 1] != '\n';
++			wwan_port_rx(sw->port, skb);
++			if (!sw->cmd_midline)
++				sipc_wwan_flush_urcs(sw);
++		} else {
++			sw->dropped += n;
++			kfree_skb(skb);
++		}
++		mutex_unlock(&sw->rx_lock);
++	}
++}
++
++static void sipc_wwan_urc_line(struct sipc_wwan *sw)
++{
++	struct sk_buff *skb;
++
++	mutex_lock(&sw->rx_lock);
++	skb = sw->open ? alloc_skb(sw->urc_len, GFP_KERNEL) : NULL;
++	if (!sw->open)
++		sw->dropped += sw->urc_len;
++	if (skb) {
++		skb_put_data(skb, sw->urc_line, sw->urc_len);
++		if (sw->cmd_midline && skb_queue_len(&sw->urc_held) < SIPC_WWAN_URC_HELD)
++			skb_queue_tail(&sw->urc_held, skb);
++		else
++			wwan_port_rx(sw->port, skb);
++	}
++	sw->urc_len = 0;
++	mutex_unlock(&sw->rx_lock);
++}
++
++static void sipc_wwan_urc_notify(int event, void *data)
++{
++	struct sipc_wwan *sw = data;
++	char buf[256];
++	int n, i;
++
++	if (event != SBUF_NOTIFY_READ)
++		return;
++
++	while ((n = sbuf_read(sw->dst, sw->channel, urc_ring, buf,
++			      sizeof(buf), 0)) > 0) {
++		for (i = 0; i < n; i++) {
++			sw->urc_line[sw->urc_len++] = buf[i];
++			if (buf[i] == '\n' || sw->urc_len == SIPC_WWAN_URC_LINE)
++				sipc_wwan_urc_line(sw);
++		}
 +	}
 +}
 +
 +static int sipc_wwan_start(struct wwan_port *port)
 +{
-+	struct sipc_wwan_port *sp = wwan_port_get_drvdata(port);
++	struct sipc_wwan *sw = wwan_port_get_drvdata(port);
 +
-+	if (sbuf_status(sp->dst, sp->channel) != 0)
++	if (sbuf_status(sw->dst, sw->channel) != 0)
 +		return -ENODEV;
 +
-+	sp->last_tx = jiffies - msecs_to_jiffies(tx_gap_ms);
-+	/* also drains whatever arrived before the open */
-+	return sbuf_register_notifier(sp->dst, sp->channel, sp->bufid,
-+				      sipc_wwan_notify, sp);
++	mutex_lock(&sw->rx_lock);
++	sw->last_tx = jiffies - msecs_to_jiffies(tx_gap_ms);
++	sw->cmd_midline = false;
++	sw->urc_len = 0;
++	skb_queue_purge(&sw->urc_held);
++	sw->open = true;
++	mutex_unlock(&sw->rx_lock);
++	return 0;
 +}
 +
 +static void sipc_wwan_stop(struct wwan_port *port)
 +{
-+	struct sipc_wwan_port *sp = wwan_port_get_drvdata(port);
++	struct sipc_wwan *sw = wwan_port_get_drvdata(port);
 +
-+	sbuf_unregister_notifier(sp->dst, sp->channel, sp->bufid);
++	mutex_lock(&sw->rx_lock);
++	sw->open = false;
++	skb_queue_purge(&sw->urc_held);
++	mutex_unlock(&sw->rx_lock);
 +}
 +
-+static int sipc_wwan_write(struct sipc_wwan_port *sp, struct sk_buff *skb,
++static int sipc_wwan_write(struct sipc_wwan *sw, struct sk_buff *skb,
 +			   int timeout)
 +{
 +	unsigned long due;
 +	u32 done = 0;
-+	int n;
++	int n = 0;
 +
-+	mutex_lock(&sp->tx_lock);
-+	due = sp->last_tx + msecs_to_jiffies(tx_gap_ms);
++	mutex_lock(&sw->tx_lock);
++	due = sw->last_tx + msecs_to_jiffies(tx_gap_ms);
 +	if (time_before(jiffies, due))
 +		msleep(jiffies_to_msecs(due - jiffies));
 +
 +	while (done < skb->len) {
-+		n = sbuf_write(sp->dst, sp->channel, sp->bufid,
++		n = sbuf_write(sw->dst, sw->channel, cmd_ring,
 +			       skb->data + done, skb->len - done, timeout);
 +		if (n <= 0)
 +			break;
 +		done += n;
 +	}
-+	sp->last_tx = jiffies;
-+	mutex_unlock(&sp->tx_lock);
++	sw->last_tx = jiffies;
++	mutex_unlock(&sw->tx_lock);
 +
 +	if (!done)
 +		return n < 0 ? n : -EAGAIN;
 +	/* a command cut short cannot be resent without duplicating it */
 +	if (done < skb->len)
-+		pr_warn_ratelimited("sipc_wwan: ring %u took %u of %u bytes\n",
-+				    sp->bufid, done, skb->len);
++		pr_warn_ratelimited("sipc_wwan: ring %d took %u of %u bytes\n",
++				    cmd_ring, done, skb->len);
 +	consume_skb(skb);
 +	return 0;
 +}
@@ -231,9 +320,10 @@ index 000000000..a58dbda8f
 +
 +static int __init sipc_wwan_init(void)
 +{
++	struct sipc_wwan *sw = &sipc_wwan;
 +	struct device_node *np, *parent;
 +	u32 dst, channel, ringnr = 0;
-+	int i, ret;
++	int ret;
 +
 +	np = sipc_wwan_find_node();
 +	if (!np) {
@@ -246,60 +336,70 @@ index 000000000..a58dbda8f
 +	if (!ret)
 +		ret = of_property_read_u32(np, "reg", &channel);
 +	of_property_read_u32(np, "sprd,ringnr", &ringnr);
-+	sipc_wwan_pdev = of_find_device_by_node(np);
++	sw->pdev = of_find_device_by_node(np);
 +	of_node_put(np);
-+	if (ret || !sipc_wwan_pdev) {
++	if (ret || !sw->pdev) {
 +		pr_err("sipc_wwan: %s: no dst/channel or no platform device\n",
 +		       node_label);
 +		ret = ret ?: -ENODEV;
 +		goto err;
 +	}
-+
-+	for (i = 0; i < nr_rings && i < SIPC_WWAN_MAX_PORTS; i++) {
-+		struct sipc_wwan_port *sp = &sipc_wwan_ports[i];
-+
-+		if (rings[i] < 0 || rings[i] >= ringnr) {
-+			pr_err("sipc_wwan: ring %d out of range (%u rings)\n",
-+			       rings[i], ringnr);
-+			ret = -EINVAL;
-+			goto err_ports;
-+		}
-+		sp->dst = dst;
-+		sp->channel = channel;
-+		sp->bufid = rings[i];
-+		mutex_init(&sp->tx_lock);
-+		sp->port = wwan_create_port(&sipc_wwan_pdev->dev, WWAN_PORT_AT,
-+					    &sipc_wwan_ops, sp);
-+		if (IS_ERR(sp->port)) {
-+			ret = PTR_ERR(sp->port);
-+			goto err_ports;
-+		}
-+		sipc_wwan_nports++;
++	if (cmd_ring < 0 || cmd_ring >= ringnr || urc_ring >= (int)ringnr ||
++	    urc_ring == cmd_ring) {
++		pr_err("sipc_wwan: bad rings %d/%d (%u rings)\n", cmd_ring,
++		       urc_ring, ringnr);
++		ret = -EINVAL;
++		goto err;
 +	}
-+	pr_info("sipc_wwan: %d AT port(s) on %s (dst %u, channel %u)\n",
-+		sipc_wwan_nports, node_label, dst, channel);
++
++	sw->dst = dst;
++	sw->channel = channel;
++	mutex_init(&sw->tx_lock);
++	mutex_init(&sw->rx_lock);
++	skb_queue_head_init(&sw->urc_held);
++	sw->port = wwan_create_port(&sw->pdev->dev, WWAN_PORT_AT,
++				    &sipc_wwan_ops, sw);
++	if (IS_ERR(sw->port)) {
++		ret = PTR_ERR(sw->port);
++		goto err;
++	}
++	/* drain from now on (registering also drains what is already queued) */
++	ret = sbuf_register_notifier(dst, channel, cmd_ring,
++				     sipc_wwan_cmd_notify, sw);
++	if (!ret && urc_ring >= 0)
++		ret = sbuf_register_notifier(dst, channel, urc_ring,
++					     sipc_wwan_urc_notify, sw);
++	if (ret) {
++		sbuf_unregister_notifier(dst, channel, cmd_ring);
++		wwan_remove_port(sw->port);
++		goto err;
++	}
++	pr_info("sipc_wwan: AT port on %s (dst %u, channel %u): ring %d, URCs from ring %d\n",
++		node_label, dst, channel, cmd_ring, urc_ring);
 +	return 0;
 +
-+err_ports:
-+	while (sipc_wwan_nports--)
-+		wwan_remove_port(sipc_wwan_ports[sipc_wwan_nports].port);
-+	sipc_wwan_nports = 0;
 +err:
-+	if (sipc_wwan_pdev)
-+		put_device(&sipc_wwan_pdev->dev);
++	if (sw->pdev)
++		put_device(&sw->pdev->dev);
 +	return ret;
 +}
 +
 +static void __exit sipc_wwan_exit(void)
 +{
-+	while (sipc_wwan_nports--)
-+		wwan_remove_port(sipc_wwan_ports[sipc_wwan_nports].port);
-+	put_device(&sipc_wwan_pdev->dev);
++	struct sipc_wwan *sw = &sipc_wwan;
++
++	if (urc_ring >= 0)
++		sbuf_unregister_notifier(sw->dst, sw->channel, urc_ring);
++	sbuf_unregister_notifier(sw->dst, sw->channel, cmd_ring);
++	pr_info("sipc_wwan: %lu bytes dropped while the port was closed\n",
++		sw->dropped);
++	wwan_remove_port(sw->port);
++	put_device(&sipc_wwan.pdev->dev);
 +}
 +
 +module_init(sipc_wwan_init);
 +module_exit(sipc_wwan_exit);
 +
 +MODULE_LICENSE("GPL v2");
-+MODULE_DESCRIPTION("WWAN AT ports on the Unisoc SIPC AT channels");
++MODULE_DESCRIPTION("WWAN AT port on the Unisoc SIPC AT channel");
 +MODULE_SOFTDEP("pre: spipe");

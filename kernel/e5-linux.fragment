@@ -294,7 +294,7 @@ CONFIG_DEFAULT_SECURITY_DAC=y
 CONFIG_DEVMEM=y
 
 # --- WWAN: the baseband for ModemManager.  The WWAN core and sipc_wwan (the
-#     SIPC AT channel's rings as /dev/wwanXatY, kernel/patches/0022) are
-#     modules, so the Image does not change.
+#     SIPC AT channel as /dev/wwanXat0, kernel/patches/0022) are modules, so
+#     the Image does not change.
 CONFIG_WWAN=m
 CONFIG_UNISOC_SIPC_WWAN=m

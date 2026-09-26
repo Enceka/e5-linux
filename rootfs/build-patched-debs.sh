@@ -23,6 +23,11 @@
 #       UFI-TOOLS reach the modem through ModemManager
 #   05  new contexts may take the ids below the first defined one: context 1
 #       is the one routed to sipa_eth0, and the CP boots with only IMS at 11
+#
+# phosh:
+#   01  the hotspot switch follows an access point whatever its IP setup: the
+#       E5's "Hotspot" is a bridge port with no IPv4 setting, and phosh only
+#       counted ipv4.method=shared -- the switch showed off and could not stop it
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG=${1:?package}

@@ -260,6 +260,13 @@ CONFIG_MALI_MIDGARD=m
 # see docs/FINDINGS.md section 8.6 and the Kconfig help.
 CONFIG_UNISOC_WCN_BSP_USER_VARIANT=y
 
+# The marlin3 BT core needs its pskey/RF configuration (vendor commands
+# 0xfca0/0xfca2/0xfca1) before the first HCI Reset, or it runs on ROM defaults
+# with a placeholder BD address.  hci_uart sends it when a ttyBT tty is attached
+# (drivers/bluetooth/btsprd.c, kernel/patches/0018); the payloads are firmware
+# files built from the device's own ini by tools/sprd-bt-config.py.
+CONFIG_BT_HCIUART_SPRD=y
+
 # --- build speed: no DWARF/BTF for a bring-up kernel (kallsyms still gives
 #     symbol names in oops/panic output)
 # CONFIG_DEBUG_INFO is not set

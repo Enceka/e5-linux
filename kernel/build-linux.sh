@@ -53,19 +53,44 @@ if [ ! -e .scmversion ]; then
     ./scripts/setlocalversion --save-scmversion
     echo "frozen scmversion: $(cat .scmversion)"
 fi
-if [ -d "$HERE/patches" ]; then
-    for p in "$HERE"/patches/*.patch; do
-        [ -e "$p" ] || continue
-        if git apply --check "$p" 2>/dev/null; then
-            echo "== applying $(basename "$p") =="
-            git apply "$p"
-        elif git apply --reverse --check "$p" 2>/dev/null; then
-            echo "== $(basename "$p") already applied =="
-        else
-            echo "patch neither applies nor is applied: $p" >&2
-            exit 1
-        fi
+# The series is checked as a sequence, not patch by patch: a later patch that
+# edits the same function as an earlier one (0016 on top of 0013) makes the
+# earlier one impossible to reverse-check on its own even though the tree has
+# both, and `git apply` given several patches checks each against the original
+# file rather than stacking them.  So the check runs on a scratch copy of the
+# files the series touches: reverse-apply newest first (all applied?), else
+# apply oldest first (none applied?).
+series_check() {  # series_check reverse|forward
+    local tmp p f ok=0
+    tmp=$(mktemp -d)
+    for f in $(cat "$HERE"/patches/*.patch | sed -n 's|^+++ b/||p; s|^--- a/||p' | sort -u); do
+        [ -f "$f" ] && mkdir -p "$tmp/$(dirname "$f")" && cp "$f" "$tmp/$f"
     done
+    if [ "$1" = reverse ]; then
+        for p in $(ls "$HERE"/patches/*.patch | sort -r); do
+            (cd "$tmp" && git apply --reverse "$p" 2>/dev/null) || { ok=1; break; }
+        done
+    else
+        for p in $(ls "$HERE"/patches/*.patch | sort); do
+            (cd "$tmp" && git apply "$p" 2>/dev/null) || { ok=1; break; }
+        done
+    fi
+    rm -rf "$tmp"
+    return $ok
+}
+if [ -d "$HERE/patches" ] && ls "$HERE"/patches/*.patch >/dev/null 2>&1; then
+    n=$(ls "$HERE"/patches/*.patch | wc -l | tr -d ' ')
+    if series_check reverse; then
+        echo "== kernel/patches: all $n already applied =="
+    elif series_check forward; then
+        for p in $(ls "$HERE"/patches/*.patch | sort); do
+            echo "== applying $(basename "$p") =="; git apply "$p"
+        done
+    else
+        echo "kernel/patches: the series neither applies nor is applied as a whole" >&2
+        echo "  (a partly patched tree?  check with git apply --check per patch)" >&2
+        exit 1
+    fi
 fi
 
 # $O must exist before the first copy: "cp x $O/.config" fails silently when it

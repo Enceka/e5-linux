@@ -1,0 +1,221 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] Bluetooth: hci_uart: configure the Unisoc marlin3 BT core on ttyBT
+
+The marlin3 WCN combo chip's BT core, reached over the vendor SDIO tty
+(ttyBT) with plain H4, runs on ROM defaults until the host writes its
+configuration: a placeholder BD address (27:93:31:14:22:11),
+manufacturer 0, no RF calibration.  Android's HAL (libbt-vendor,
+marlin3_lite) sends three vendor commands before the first HCI Reset:
+
+  0xfca0  pskey (176 bytes: class, features, BD address, company id, ...)
+  0xfca2  RF    (252 bytes: gain and power tables)
+  0xfca1  00 00 01 (core enable)
+
+btsprd does the same from hci_uart's setup when the attached tty is a
+ttyBT, loading the two payloads through the firmware loader
+(sprd/marlin3lite_{pskey,rf}.bin, built from the device's own ini files),
+so a stock `btattach -P h4` is all userspace needs.  A missing file
+leaves the controller on its defaults, as before.
+
+With it the controller reports its factory address and manufacturer
+0x01ec (Spreadtrum), and scans find devices.
+
+---
+diff --git a/drivers/bluetooth/Kconfig b/drivers/bluetooth/Kconfig
+index 851842372..d0cc7b042 100644
+--- a/drivers/bluetooth/Kconfig
++++ b/drivers/bluetooth/Kconfig
+@@ -220,6 +220,20 @@ config BT_HCIUART_RTL
+ 
+ 	  Say Y here to compile support for Realtek protocol.
+ 
++config BT_HCIUART_SPRD
++	bool "Unisoc (Spreadtrum) marlin3 configuration"
++	depends on BT_HCIUART
++	help
++	  The Unisoc marlin3 WCN combo chip's Bluetooth core, attached over
++	  the vendor SDIO tty (ttyBT) with the H4 protocol, needs its pskey
++	  and RF configuration written before the first HCI Reset.  With this
++	  option hci_uart loads sprd/marlin3lite_pskey.bin and
++	  sprd/marlin3lite_rf.bin through the firmware loader and sends them
++	  when such a tty is attached.
++
++	  Say Y here if the Bluetooth controller of a Unisoc WCN chip is
++	  attached through its ttyBT device.
++
+ config BT_HCIUART_QCA
+ 	bool "Qualcomm Atheros protocol support"
+ 	depends on BT_HCIUART
+diff --git a/drivers/bluetooth/Makefile b/drivers/bluetooth/Makefile
+index 16286ea26..e01532589 100644
+--- a/drivers/bluetooth/Makefile
++++ b/drivers/bluetooth/Makefile
+@@ -44,6 +44,7 @@ hci_uart-$(CONFIG_BT_HCIUART_ATH3K)	+= hci_ath.o
+ hci_uart-$(CONFIG_BT_HCIUART_3WIRE)	+= hci_h5.o
+ hci_uart-$(CONFIG_BT_HCIUART_INTEL)	+= hci_intel.o
+ hci_uart-$(CONFIG_BT_HCIUART_BCM)	+= hci_bcm.o
++hci_uart-$(CONFIG_BT_HCIUART_SPRD)	+= btsprd.o
+ hci_uart-$(CONFIG_BT_HCIUART_QCA)	+= hci_qca.o
+ hci_uart-$(CONFIG_BT_HCIUART_AG6XX)	+= hci_ag6xx.o
+ hci_uart-$(CONFIG_BT_HCIUART_MRVL)	+= hci_mrvl.o
+diff --git a/drivers/bluetooth/btsprd.c b/drivers/bluetooth/btsprd.c
+new file mode 100644
+index 000000000..52e86b2c3
+--- /dev/null
++++ b/drivers/bluetooth/btsprd.c
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Unisoc (Spreadtrum) marlin3 Bluetooth controller setup.
++ *
++ * The BT core of the marlin3 WCN combo chip (reached through the vendor
++ * SDIO tty, /dev/ttyBT0) runs on its ROM defaults until the host writes
++ * its configuration: without it the controller reports a placeholder
++ * BD address (27:93:31:14:22:11), manufacturer 0 and runs uncalibrated.
++ * Android's BT HAL (libbt-vendor, marlin3_lite) sends three vendor
++ * commands before the first HCI Reset, and so does this:
++ *
++ *   0xfca0  pskey: class, feature set, BD address, company id, sleep and
++ *           audio parameters (176 bytes)
++ *   0xfca2  RF: gain and power tables (252 bytes)
++ *   0xfca1  00 00 01: enable the BT core with that configuration
++ *
++ * The two payloads are the device's own bt_configure_{pskey,rf}.ini
++ * (/odm/firmware) serialised as the HAL does it, with the factory address
++ * patched in; they are loaded as firmware so that nothing board-specific
++ * lives in the kernel.  A missing file is not fatal: the controller then
++ * comes up unconfigured, as it did before.
++ */
++
++#include <linux/firmware.h>
++#include <linux/module.h>
++
++#include <net/bluetooth/bluetooth.h>
++#include <net/bluetooth/hci_core.h>
++
++#include "btsprd.h"
++
++#define SPRD_OP_PSKEY		0xfca0
++#define SPRD_OP_CORE_ENABLE	0xfca1
++#define SPRD_OP_RF		0xfca2
++
++#define SPRD_PSKEY_FW		"sprd/marlin3lite_pskey.bin"
++#define SPRD_RF_FW		"sprd/marlin3lite_rf.bin"
++
++static int btsprd_send(struct hci_dev *hdev, u16 opcode, const void *data,
++		       u32 len, const char *what)
++{
++	struct sk_buff *skb;
++	int err = 0;
++
++	skb = __hci_cmd_sync(hdev, opcode, len, data, HCI_INIT_TIMEOUT);
++	if (IS_ERR(skb)) {
++		err = PTR_ERR(skb);
++		bt_dev_err(hdev, "sprd: %s (0x%04x) failed (%d)", what, opcode, err);
++		return err;
++	}
++	if (skb->len < 1 || skb->data[0]) {
++		bt_dev_err(hdev, "sprd: %s (0x%04x) rejected, status 0x%02x", what,
++			   opcode, skb->len ? skb->data[0] : 0xff);
++		err = -EIO;
++	} else if (opcode == SPRD_OP_PSKEY && skb->len >= 7) {
++		/* the answer carries the firmware build: node, then the date */
++		bt_dev_info(hdev, "sprd: firmware node %02x%02x, built %02x%02x-%02x-%02x",
++			    skb->data[2], skb->data[1], skb->data[6], skb->data[5],
++			    skb->data[4], skb->data[3]);
++	}
++	kfree_skb(skb);
++	return err;
++}
++
++static int btsprd_send_fw(struct hci_dev *hdev, u16 opcode, const char *name,
++			  size_t expect, const char *what)
++{
++	const struct firmware *fw;
++	int err;
++
++	err = request_firmware(&fw, name, &hdev->dev);
++	if (err) {
++		bt_dev_warn(hdev, "sprd: no %s (%d); the controller stays on its defaults",
++			    name, err);
++		return err;
++	}
++	if (fw->size != expect) {
++		bt_dev_err(hdev, "sprd: %s is %zu bytes, expected %zu", name,
++			   fw->size, expect);
++		err = -EINVAL;
++	} else {
++		err = btsprd_send(hdev, opcode, fw->data, fw->size, what);
++	}
++	release_firmware(fw);
++	return err;
++}
++
++int btsprd_setup_marlin3(struct hci_dev *hdev)
++{
++	static const u8 core_enable[] = { 0x00, 0x00, 0x01 };
++
++	if (btsprd_send_fw(hdev, SPRD_OP_PSKEY, SPRD_PSKEY_FW, 176, "pskey"))
++		return 0;
++	if (btsprd_send_fw(hdev, SPRD_OP_RF, SPRD_RF_FW, 252, "rf"))
++		return 0;
++	btsprd_send(hdev, SPRD_OP_CORE_ENABLE, core_enable, sizeof(core_enable),
++		    "core enable");
++	bt_dev_info(hdev, "sprd: marlin3 configured (pskey, rf, core enable)");
++	return 0;
++}
++
++MODULE_FIRMWARE(SPRD_PSKEY_FW);
++MODULE_FIRMWARE(SPRD_RF_FW);
+diff --git a/drivers/bluetooth/btsprd.h b/drivers/bluetooth/btsprd.h
+new file mode 100644
+index 000000000..22c45d300
+--- /dev/null
++++ b/drivers/bluetooth/btsprd.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __BTSPRD_H
++#define __BTSPRD_H
++
++struct hci_dev;
++
++#if IS_ENABLED(CONFIG_BT_HCIUART_SPRD)
++int btsprd_setup_marlin3(struct hci_dev *hdev);
++#else
++static inline int btsprd_setup_marlin3(struct hci_dev *hdev)
++{
++	return 0;
++}
++#endif
++
++#endif
+diff --git a/drivers/bluetooth/hci_ldisc.c b/drivers/bluetooth/hci_ldisc.c
+index f0fb84352..6a027fb16 100644
+--- a/drivers/bluetooth/hci_ldisc.c
++++ b/drivers/bluetooth/hci_ldisc.c
+@@ -33,6 +33,7 @@
+ 
+ #include "btintel.h"
+ #include "btbcm.h"
++#include "btsprd.h"
+ #include "hci_uart.h"
+ 
+ #define VERSION "2.3"
+@@ -437,6 +438,17 @@ static int hci_uart_setup(struct hci_dev *hdev)
+ 	if (hu->proto->setup)
+ 		return hu->proto->setup(hu);
+ 
++	/*
++	 * e5-linux: the Unisoc marlin3 BT core behind the vendor SDIO tty
++	 * ("ttyBT") needs its pskey/RF configuration before the first HCI
++	 * Reset.  It talks plain H4, so it is recognised by its transport
++	 * rather than by a protocol of its own: btattach -P h4 stays the
++	 * standard way to attach it.
++	 */
++	if (IS_ENABLED(CONFIG_BT_HCIUART_SPRD) && hu->tty && hu->tty->driver &&
++	    hu->tty->driver->name && !strcmp(hu->tty->driver->name, "ttyBT"))
++		return btsprd_setup_marlin3(hdev);
++
+ 	if (!test_bit(HCI_UART_VND_DETECT, &hu->hdev_flags))
+ 		return 0;
+ 

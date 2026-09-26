@@ -41,6 +41,14 @@ for f in $(adb shell "su -c 'ls /odm/firmware/'" | tr -d '\r' | grep '^wifi_boar
     pull "/odm/firmware/$f" "$f"
 done
 
+# The Bluetooth core's pskey/RF configuration.  Android's HAL picks the .xpe
+# pair on this chip (logcat: "set ini file: /odm/firmware/bt_configure_rf.xpe.ini,
+# /odm/firmware/bt_configure_pskey.xpe.ini" for id 2/Marlin3Lite_AB_0x2355B001/1);
+# tools/sprd-bt-config.py turns them into the payloads the kernel sends
+# (drivers/bluetooth/btsprd.c).
+pull /odm/firmware/bt_configure_pskey.xpe.ini bt_configure_pskey.ini
+pull /odm/firmware/bt_configure_rf.xpe.ini bt_configure_rf.ini
+
 echo "== tsx_data (/vendor/firmware) =="
 pull /vendor/firmware/tsx_data tsx_data
 
@@ -53,6 +61,10 @@ mkdir -p "$OVL/lib/firmware" "$OVL/mnt/vendor/wcn"
 cp "$STAGE"/*.bin "$STAGE"/wifi_board_config*.ini "$OVL/lib/firmware/"
 [ -f "$STAGE/tsx_data" ] && cp "$STAGE/tsx_data" "$OVL/lib/firmware/tsx_data"
 cp "$STAGE"/wifimac.txt "$OVL/mnt/vendor/wifimac.txt"
+mkdir -p "$OVL/lib/firmware/sprd"
+python3 "$HERE/../tools/sprd-bt-config.py" "$STAGE/bt_configure_pskey.ini" \
+    "$STAGE/bt_configure_rf.ini" "$STAGE/btmac.txt" "$OVL/lib/firmware/sprd"
+echo "  BT config: $(ls "$OVL/lib/firmware/sprd" | tr '\n' ' ')(address $(cat "$STAGE/btmac.txt"))"
 [ -f "$STAGE/btmac.txt" ] && cp "$STAGE/btmac.txt" "$OVL/mnt/vendor/btmac.txt"
 # The driver dumps its calibration backup here, so the directory has to exist.
 touch "$OVL/mnt/vendor/wcn/.keep"

@@ -1,0 +1,23 @@
+# ModemManager runs with --filter-policy=allowlist-only (ModemManager.service.d/
+# 50-e5.conf): it looks at nothing but ports tagged ID_MM_DEVICE_PROCESS.  Hand
+# it the baseband -- the AT port sipc_wwan registers and the sipa_eth0 data
+# interface -- which its unisoc plugin's 77-mm-unisoc-sipc.rules has tagged
+# ID_MM_UNISOC_SIPC (docs/FINDINGS.md 37).
+#
+# sipa_eth0 only together with the AT port.  sipa_eth0 exists from early boot,
+# the AT port only once the CP has booted (sipc_wwan registers it when the
+# channel comes up), and a device ModemManager sees with nothing but a net port
+# fails its probing -- a virtual netdev has no driver for the plugin filters --
+# and forgets the port for good, so the modem later comes without a data port.
+# So sipa_eth0 is handed over only while an AT port exists, and announced again
+# when the AT port appears.
+ACTION!="add|change|move|bind", GOTO="e5_mm_sipc_end"
+ENV{ID_MM_UNISOC_SIPC}!="1", GOTO="e5_mm_sipc_end"
+
+SUBSYSTEM=="wwan", ENV{ID_MM_DEVICE_PROCESS}="1"
+SUBSYSTEM=="net", PROGRAM=="/bin/sh -c 'ls -d /sys/class/wwan/wwan*at* >/dev/null 2>&1'", ENV{ID_MM_DEVICE_PROCESS}="1"
+
+SUBSYSTEM=="wwan", KERNEL=="wwan*at*", ACTION=="add", \
+    RUN+="/usr/bin/udevadm trigger --action=add --subsystem-match=net --sysname-match=sipa_eth0"
+
+LABEL="e5_mm_sipc_end"

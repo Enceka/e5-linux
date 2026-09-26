@@ -1,0 +1,16 @@
+# The baseband's data interfaces (sipa_eth*): no checksum offload.
+#
+# The SIPA driver advertises RX/TX checksum offload it does not deliver, and
+# with it on, traffic through sipa_eth0 carries bad checksums (unisoc-cpd
+# turned both off with ethtool after every bearer).  udev applies this when the
+# interface appears, whoever brings the bearer up.  Name and MAC stay the
+# kernel's: this file only matches sipa_eth*, and 99-default.link still names
+# everything else.
+[Match]
+OriginalName=sipa_eth*
+
+[Link]
+NamePolicy=keep kernel
+MACAddressPolicy=none
+ReceiveChecksumOffload=false
+TransmitChecksumOffload=false

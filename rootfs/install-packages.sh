@@ -8,22 +8,31 @@ DEBIAN_FRONTEND=noninteractive bash "$HERE/e5-chroot.sh" \
   "export DEBIAN_FRONTEND=noninteractive; apt-get -o APT::Sandbox::User=root -y --no-install-recommends install $PKGS"
 echo "INSTALL-DONE rc=$?"
 
-# Debian packages rebuilt with a fix upstream already has (rootfs/deb-patches/,
-# built into out/debs-patched/ by build-patched-debs.sh), installed over the
-# archive's and held so a later apt upgrade does not undo them.  Today that is
-# network-manager 1.52.1+e5: trixie's computes the VHT80 centre of channels
-# 149-161 wrong and the hotspot cannot run 149 at 80 MHz (docs/FINDINGS.md 35.2).
+# Debian packages rebuilt with fixes (rootfs/deb-patches/, built into
+# out/debs-patched/ by build-patched-debs.sh), installed over the archive's and
+# held so a later apt upgrade does not undo them:
+#   network-manager 1.52.1+e5: trixie's computes the VHT80 centre of channels
+#     149-161 wrong and the hotspot cannot run 149 at 80 MHz (FINDINGS 35.2);
+#   modemmanager 1.24.0+e5: the unisoc plugin, without which ModemManager
+#     cannot drive the baseband at all (FINDINGS 37).
 ROOT="${E5_ROOT:-$HERE/../work/rootfs-build/rootfs}"
-PATCHED=$(ls "$HERE"/../out/debs-patched/{network-manager,libnm0,gir1.2-nm-1.0}_*+e5*_arm64.deb 2>/dev/null || true)
-if [ -n "$PATCHED" ]; then
-    mkdir -p "$ROOT/tmp/e5-debs"
-    cp $PATCHED "$ROOT/tmp/e5-debs/"
-    DEBIAN_FRONTEND=noninteractive bash "$HERE/e5-chroot.sh" '
-        dpkg -i /tmp/e5-debs/*.deb && apt-mark hold network-manager libnm0 gir1.2-nm-1.0
-        rm -rf /tmp/e5-debs' || echo "warn: patched packages failed to install"
-else
-    echo "warn: no out/debs-patched -- run rootfs/build-patched-debs.sh network-manager (hotspot limited to 40 MHz on 149)"
-fi
+D="$HERE/../out/debs-patched"
+install_patched() {  # <build-patched-debs.sh package> <binary packages...>
+    local src=$1; shift
+    local debs="" p
+    for p in "$@"; do debs="$debs $(ls "$D"/${p}_*+e5*_arm64.deb 2>/dev/null)"; done
+    if [ -z "${debs// }" ]; then
+        echo "warn: no patched $src in out/debs-patched -- run rootfs/build-patched-debs.sh $src"
+        return
+    fi
+    rm -rf "$ROOT/tmp/e5-debs"; mkdir -p "$ROOT/tmp/e5-debs"
+    cp $debs "$ROOT/tmp/e5-debs/"
+    DEBIAN_FRONTEND=noninteractive bash "$HERE/e5-chroot.sh" "
+        dpkg -i /tmp/e5-debs/*.deb && apt-mark hold $*
+        rm -rf /tmp/e5-debs" || echo "warn: patched $src failed to install"
+}
+install_patched network-manager network-manager libnm0 gir1.2-nm-1.0
+install_patched modemmanager modemmanager libmm-glib0 gir1.2-modemmanager-1.0
 
 # The build tree is kept between builds and apt never removes a package that
 # stopped being asked for, so anything dropped from packages.list stays in the

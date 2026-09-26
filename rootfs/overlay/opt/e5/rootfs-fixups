@@ -10,6 +10,21 @@
 #  /etc/resolv.conf with the systemd-resolved stub -- is deliberately not done
 #  here: on this image e5-mobile-data writes resolv.conf with the baseband's DNS
 #  servers, public resolvers first, and a symlink would fight with it.)
+# The world-usable device nodes.  The kernel creates them 0666, but on some
+# boots something early in userspace leaves them unusable for a non-root user
+# until udev's coldplug re-applies MODE=0666: dbus-daemon, which drops to
+# messagebus, then failed with "Failed to open /dev/null: Permission denied",
+# and NetworkManager, bound to it, did not start at all (docs/FINDINGS.md 37).
+# This runs before sysinit.target, ahead of dbus; what it finds is logged, so
+# the culprit can still be found.
+for f in /dev/null /dev/zero /dev/full /dev/random /dev/urandom /dev/tty; do
+    [ -c "$f" ] || continue
+    m=$(stat -c %a "$f" 2>/dev/null)
+    [ "$m" = 666 ] && continue
+    echo "rootfs-fixups: $f was mode $m ($(stat -c '%U:%G' "$f")), restoring 0666"
+    chmod 0666 "$f"
+done
+
 for f in /usr/bin/ping /usr/bin/mtr-packet /usr/bin/arping; do
     [ -x "$f" ] || continue
     getcap "$f" 2>/dev/null | grep -q cap_net_raw || setcap cap_net_raw+ep "$f" 2>/dev/null || true

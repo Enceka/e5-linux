@@ -362,8 +362,7 @@ if [ -n "$rootdir" ]; then
         # it packs), and a device whose rootfs predates this needs them too.
         for unit in e5-bt-attach.service ufi-tools.service dnsmasq.service \
                      e5-vendor.service e5-cp_diskserver.service e5-refnotify.service \
-                     e5-net-bridge.service \
-                     unisoc-cpd.service unisoc-cpd-web.service e5-bearer-up.service \
+                     e5-net-bridge.service e5-sipc-wwan.service \
                      e5-regdb-load.service \
                      e5-telnetd.service e5-gadget-guard.service \
                      e5-fixups.service e5-nat.service; do
@@ -403,14 +402,26 @@ if [ -n "$rootdir" ]; then
                 /newroot/etc/systemd/system/dbus-org.freedesktop.NetworkManager.service
         fi
 
-        # Timers go to timers.target, not multi-user.target.
-        for timer in e5-bearer-watch.timer; do
-            if [ -f "/newroot/etc/systemd/system/$timer" ]; then
-                mkdir -p /newroot/etc/systemd/system/timers.target.wants
-                ln -sf "/etc/systemd/system/$timer" \
-                    "/newroot/etc/systemd/system/timers.target.wants/$timer"
-            fi
-        done
+        # The baseband belongs to ModemManager (its unisoc plugin, on the WWAN
+        # port e5-sipc-wwan loads; docs/FINDINGS.md 37), and NetworkManager's
+        # "Mobile" connection brings the data up.  Retired with that: the
+        # unisoc-cpd daemon and its web face, and the bearer scripts that went
+        # through it (e5-bearer-up and its watch timer).  Their units stay
+        # installed as the fallback -- starting unisoc-cpd stops e5-sipc-wwan
+        # and ModemManager (Conflicts=/BindsTo=) -- but a rootfs that predates
+        # this still has them enabled, and they would take the AT channel
+        # from ModemManager at every boot.
+        rm -f /newroot/etc/systemd/system/multi-user.target.wants/unisoc-cpd.service \
+              /newroot/etc/systemd/system/multi-user.target.wants/unisoc-cpd-web.service \
+              /newroot/etc/systemd/system/multi-user.target.wants/e5-bearer-up.service \
+              /newroot/etc/systemd/system/timers.target.wants/e5-bearer-watch.timer
+        if [ -f /newroot/lib/systemd/system/ModemManager.service ]; then
+            mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
+            ln -sf /lib/systemd/system/ModemManager.service \
+                /newroot/etc/systemd/system/multi-user.target.wants/ModemManager.service
+            ln -sf /lib/systemd/system/ModemManager.service \
+                /newroot/etc/systemd/system/dbus-org.freedesktop.ModemManager1.service
+        fi
 
         # The serial console has to survive too -- it is the only way in when the
         # management LAN is down (docs/FINDINGS.md section 26).  A rootfs build

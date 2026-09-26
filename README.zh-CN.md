@@ -67,8 +67,8 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 | Wi-Fi | ✅ **已在设备上验证**——WCN 芯片上的 `sprd_wlan_combo` + `wcn_bsp`，开箱即可扫描 2.4 GHz 与 5 GHz AP（需要 initramfs overlay 中的固件以及厂商的 *user* 构建变体）；docs/FINDINGS.md 第 8.5–8.6 节 |
 | 蓝牙 | ✅ 内核按厂商 HAL 的方式配置 marlin3 核心（经 `request_firmware` 发送 pskey/RF/启用，关闭 tty 前发送核心禁用）——出厂地址 `FC:B5:85:D0:85:9B`，可扫描、可连接；内核补丁 `0018`、`0021`，FINDINGS §33.3、§35。⏳ 音频 profile 未测试 |
 | 会话时长 | ✅ 已修复：约 295 秒的静默重启来自 PMIC 看门狗；加载负责喂狗的 sprd_pmic_wdt.ko 后，会话可持续运行 10 分钟以上——docs/FINDINGS.md 第 9 节 |
-| 基带、数据承载 | ✅ [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) 在开机时接管 CP（由在 chroot 中运行的 Android `modem_control` 启动 CP）；5G SA 注册成功，`e5-bearer-up` 在 `sipa_eth0` 上建立承载；CP 复位后由 `e5-bearer-watch.timer` 恢复——FINDINGS §25、§30 |
-| 基带 Web 页面 | ✅ `unisoc-cpd web` 位于 `http://192.168.9.1:7887`（仅限 USB 端口访问，无认证） |
+| 基带、数据 | ✅ **原生**：`sipc_wwan` 把 AT 通道注册为 WWAN 端口（内核 `0022`、`0023`），ModemManager 的 `unisoc` 插件驱动它（打过补丁的 modemmanager，见 `rootfs/deb-patches/`），NetworkManager 的 `Mobile` 连接在 `sipa_eth0` 上建立数据（IPv4 + IPv6）；5G SA、Phosh 显示信号、Chatty 读取短信；CP 仍由 chroot 中的 Android `modem_control` 启动——FINDINGS §36、§37。⏳ 语音通话、发送短信 |
+| 基带备用方案 | [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) 仍然安装但不启用：`systemctl start unisoc-cpd` 会从 ModemManager 手中收回基带（运行时页面位于 `http://192.168.9.1:7887`） |
 | UFI-TOOLS（Linux 移植版） | ✅ `http://<设备>:2333`，修改前登录口令为 `admin` |
 | 热点 | ✅ NetworkManager 的 `Hotspot` 连接（Phosh、UFI-TOOLS、`nmcli` 均可控制），5 GHz 149 信道 / 80 MHz（使用打过补丁的 network-manager，见 `rootfs/deb-patches/`），SSID `E5-Linux`，作为 `br0` 的端口与 USB 端口同网；IPv4 经 NAT 走承载，承载的公网 IPv6 /64 通过 SLAAC 分配给所有局域网客户端（带状态防火墙）——FINDINGS §35 |
 | 音频 | ✅ 扬声器与麦克风均已实际使用验证（Amberol、GNOME 录音机、设置中的声音测试）：扬声器经 ALSA（UCM `HiFi`/`Speaker`，S16 交错格式）与 PipeWire 播放，麦克风为 “Internal Microphone” 音源（DSP 录音，单声道 S16）；`e5-audio.service` 从 `l_agdsp_a` 启动 AGDSP；内核补丁 `0010`–`0014`、`0017`、`0019`、`0020`，FINDINGS §24.8、§33、§34。⏳ 听筒尚未实听 |
@@ -78,7 +78,7 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 
 | 路径 | 内容 |
 |---|---|
-| `kernel/` | `build-linux.sh`、`e5-linux.fragment`（在设备 defconfig 之上追加的 Linux 配置）、`patches/0001-0016`（由 `build-linux.sh` 应用） |
+| `kernel/` | `build-linux.sh`、`e5-linux.fragment`（在设备 defconfig 之上追加的 Linux 配置）、`patches/0001-0023`（由 `build-linux.sh` 应用） |
 | `boot/` | `init`（initramfs）、`build-boot-image.py`、`stage-modules.sh` + `module-order.{stock,extra}`、`flash-trial.sh` / `android-boot-linux.sh`（从 Android 执行）、`flash-from-linux.sh`（从运行中的 e5-linux 执行） |
 | `rootfs/` | `build-rootfs-container.sh`（及 `rootfs-in-container.sh`，在 Debian arm64 容器中构建）、`install-rootfs.sh`、`packages.list`、`configure-rootfs.sh`、`fetch-debian-rootfs.py`、`install-packages.sh`、`pull-wcn-firmware.sh` / `pull-audio-firmware.sh` / `extract-android-vendor.sh`（从你的设备提取文件）、`stage-unisoc-cpd.sh`、`overlay/`；`device-*.sh` 与 `build-rootfs.sh`/`e5-chroot.sh` 是较早的设备端构建与 qemu 构建路径 |
 | `tools/` | `collect-logs.sh`、`e5-telnet.py`、`e5-serial.py`，以及截图/按键/触摸辅助工具 |
@@ -213,13 +213,13 @@ tar -C work -cf work/android-subset.tar android-subset
 # 在 e5-linux 的 shell 中（telnet 192.168.9.1 或 USB 串口控制台），以 root 身份执行：
 cd /tmp && /usr/local/bin/busybox wget http://192.168.9.2:8000/android-subset.tar
 mkdir -p /opt/e5 && tar --no-same-owner -xf android-subset.tar -C /opt/e5
-mv /opt/e5/android-subset /opt/e5/android && systemctl start e5-vendor unisoc-cpd
+mv /opt/e5/android-subset /opt/e5/android && systemctl start e5-vendor e5-sipc-wwan ModemManager
 ```
 
 `--no-same-owner` 必不可少：bionic 拒绝解析不属于 root 的 `__properties__` 目录。`e5-vendor`
 运行期间切勿再用 `chown -R` “修正”属主——chroot 中绑定挂载了 `/dev`、`/proc` 与 `/sys`，递归操作
 会改写运行中的设备节点（FINDINGS §28）。在厂商文件子集就位之前，`e5-vendor.service` 会被跳过
-（`ConditionPathExists=`），`/dev/stty_nr1` 返回 `ENODEV`，`unisoc-cpd` 会不断重启。
+（`ConditionPathExists=`），`/dev/stty_nr1` 返回 `ENODEV`，ModemManager 找不到基带。
 
 ### 4. 启动镜像
 
@@ -275,12 +275,12 @@ boot/flash-from-linux.sh boot-linux-slotb.img
 | shell | `telnet 192.168.9.1`（`root`/`root`，仅限 USB 端口），或 USB CDC-ACM 串口控制台 |
 | 账户 | `e5`/`123456`（phosh 会话自动登录）、`root`/`root` |
 | 热点 | SSID `E5-Linux`，WPA2 密码 `12345678`，客户端位于 192.168.9.0/24 |
-| 基带页面 | `http://192.168.9.1:7887`（`unisoc-cpd web`，仅限 USB 端口） |
+| 基带 | ModemManager：Phosh 的移动网络设置、Calls、Chatty、`mmcli -m any`；数据是 NetworkManager 的 `Mobile` 连接（`nmcli c up/down Mobile`）；原始 AT 用 `e5-at 'AT+CSQ'` |
 | UFI-TOOLS | `http://192.168.9.1:2333`（仅限 USB 端口），口令 `admin`；命令行 `ufi-tools status`、`ufi-tools set-token` |
 | 切回 Android | `e5-next-boot android && systemctl reboot` |
 
 设备离开你的桌面之前，请修改各账户密码、热点密码与 UFI-TOOLS 口令。对于来自网桥 Wi-Fi 侧的帧
-以及来自上行链路的一切连接，telnet、gotty、UFI-TOOLS 与基带页面均会被丢弃（`etc/e5/nat.nft`），
+以及来自上行链路的一切连接，telnet、gotty 与 UFI-TOOLS 均会被丢弃（`etc/e5/nat.nft`），
 因此热点客户端和互联网都无法访问它们——USB 线缆即管理端口。
 
 ### 7. 读取结果

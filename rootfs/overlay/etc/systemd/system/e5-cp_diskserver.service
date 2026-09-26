@@ -3,7 +3,12 @@ ConditionPathExists=|/dev/modem
 Description=E5 Android vendor daemon cp_diskserver
 # the modem asks for its NV data while it boots, so bind the channel before modem_control starts it
 # (android-run waits for the chroot itself, so this does not need the vendor service to have finished)
-Before=e5-vendor.service
+# After, not Before: e5-vendor runs before sysinit.target and this unit (with
+# the default dependencies) after it, so Before= was an ordering cycle, which
+# systemd breaks by dropping one of the jobs -- once it dropped e5-vendor, and
+# the CP never booted.  Nothing is lost: android-run waits for the chroot that
+# vendor-start.sh mounts, and both run alongside modem_control either way.
+After=e5-vendor.service
 Requires=e5-vendor.service
 
 [Service]

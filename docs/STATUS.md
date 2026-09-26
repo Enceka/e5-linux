@@ -37,15 +37,26 @@ FINDINGS.
   evening worked.  Unexplained; something on the Linux shutdown path may be writing
   the slot-a block.  Recovery that works: from Android, write
   `*.misc-slot-b-trial.bin` into `misc` and reset with sysrq (FINDINGS 24.5).
-- **G2: `unisoc-cpd` has taken the RIL's seat on the handset (2026-09-20, Android
-  side).**  It holds both SIPC channels, serves capabilities on a unix socket,
+- **The baseband is native on Linux since 2026-09-26** (FINDINGS 36, 37):
+  `sipc_wwan` (kernel 0022/0023) puts the AT channel on a WWAN port, ModemManager
+  1.24 with the `unisoc` plugin (`rootfs/deb-patches/modemmanager-0[1-5]`) drives it,
+  NetworkManager's `Mobile` connection brings context 1 up on `sipa_eth0` (IPv4
+  static from `+CGCONTRDP`, IPv6 SLAAC, the /64 passed to `br0`).  Phosh shows the
+  signal, Chatty lists the SIM's SMS (and deletes them from the SIM once imported),
+  UFI-TOOLS reads ModemManager and toggles the `Mobile` connection, `e5-at` goes
+  through `mmcli --command`.  Still open: voice calls (and their audio route),
+  sending SMS from Chatty, a real CP reset (a module reload recovers).  The CP boot
+  is still `modem_control` in the chroot.
+- **`/dev/null` and friends come up 0660 on some boots** (FINDINGS 37.3):
+  `rootfs-fixups` restores 0666 and logs it ("rootfs-fixups: /dev/null was mode
+  660"); the culprit is not found.
+- **G2, historical: `unisoc-cpd` took the RIL's seat on the handset (2026-09-20,
+  Android side); on Linux it was the owner until 2026-09-26.**  It holds both SIPC channels, serves capabilities on a unix socket,
   decodes the URC stream, re-arms the SMS surface, reads MT SMS and re-established
   the data bearer over `cbnet`; MO SMS works too (FINDINGS 25.7).  Still open: the
-  72 h soak.  On the Linux side it now owns the CP at boot too: `unisoc-cpd` and
-  `e5-bearer-up` come up active (5G SA registered, bearer on `sipa_eth0`), and its web
-  page answers on `http://192.168.9.1:7887` (USB port only; no auth).  The page
-  is slow on first open: the daemon serves one request at a time (2-6 s each) and the
-  page fires about seven at once.
+  72 h soak.  It stays installed on Linux as the fallback (`systemctl start
+  unisoc-cpd` stops `e5-sipc-wwan` and ModemManager), with its web page on
+  `http://192.168.9.1:7887` while it runs.
 - **Bluetooth: configured natively since 2026-09-26** (FINDINGS 33.3, kernel 0018:
   factory address, manufacturer 0x01ec).  Pairing, A2DP and HFP are untested; the two
   older problems below predate the configuration and need re-checking with it.
@@ -85,10 +96,9 @@ FINDINGS.
   the USB host has IPv6 through it; still to confirm that a phone reaches an
   IPv6-only site and that the management ports are closed from its side (tested
   only from a namespace port).
-- **UFI-TOOLS shows no signal on 5G SA.**  `lte_rsrp` is empty and
-  `network_signalbar` 0 while registered on NR SA: `modem.py` derives both from
-  `AT+CESQ`'s LTE fields only.  Login is `admin` until changed (`ufi-tools set-token`
-  or the web UI; it survives reboots now).
+- **UFI-TOOLS** reads its modem fields from ModemManager now (5G RSRP included);
+  login is `admin` until changed (`ufi-tools set-token` or the web UI; it survives
+  reboots).
 - **GPU: the two open ends left by panfrost.**  The backport itself is done
   (`kernel/patches/0005`, `MALI_MIDGARD=m`, `docs/FINDINGS.md` 20.7) and clients
   render on `Mali-G57 (Panfrost)`; what is left is (a) the scanout buffers are still
@@ -111,15 +121,13 @@ FINDINGS.
   saver on idle, because this gnome-settings-daemon ships no `gsd-screensaver` and the
   phosh session does not start one; `logind`'s `IdleAction=lock` would need an idle
   hint that phoc never sets (`docs/FINDINGS.md` section 18).
-- **Calls and SMS** need a RIL -> the daemon is now that RIL (G2): MT **and** MO SMS
-  both work through `unisoc-cpd serve` (the MO blockade was a malformed PDU of our
-  own -- first octet `0x11` promising an absent TP-VP; FINDINGS 25.7), the control
-  plane matches the Android oracle; what remains for the desktop is a
-  ModemManager/D-Bus face, and voice (`voice.supported = false` until there is a UCM
-  port -- voice, unlike SMS, really does ride IMS/VoLTE).
+- **Calls and sending SMS** through ModemManager (Calls, Chatty).  SMS over MO was
+  proven through `unisoc-cpd` (FINDINGS 25.7: mind the PDU first octet); voice rides
+  IMS/VoLTE here and needs the call audio route (UCM "Voice Call", callaudiod).
 - **The CP's 300 s dump wait after an assert** (FINDINGS 30): modem_control waits for
-  a "dump complete" that only Android's CP log daemon sends.  Recovery itself is
-  automatic now (`e5-bearer-watch.timer`); the five minutes offline are not.
+  a "dump complete" that only Android's CP log daemon sends.  Recovery itself should
+  be automatic now (the AT port leaves and comes back with the channel, ModemManager
+  re-creates the modem, NetworkManager reconnects); the five minutes offline are not.
 - **Suspend is unusable** while the modem data path refuses it
   (`sipa 25220000.sipa: thread prepare suspend err`), which is why the power key
   cannot mean "suspend".
@@ -133,13 +141,13 @@ FINDINGS.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`-`0021`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`-`0023`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | audio | speaker plays through ALSA (`hw:N,3`, S16 interleaved, UCM verb HiFi / device Speaker) and PipeWire; mic as "Internal Microphone" (`hw:N,2`, mono S16); earpiece routed, not yet heard; AGDSP booted from `l_agdsp_a` by `e5-audio.service`; period events from an hrtimer |
-| baseband | `unisoc-cpd` (Rust) owns the CP on both sides (FINDINGS 25); on Linux it starts at boot with the bearer, web page on `192.168.9.1:7887` |
+| baseband | ModemManager 1.24.0+e5 (`unisoc` plugin) on `wwan0at0` (`sipc_wwan`) + `sipa_eth0`, NetworkManager `Mobile` connection (context 1, APN `cbnet`), 5G SA; CP booted by `modem_control` in the chroot; `unisoc-cpd` installed as the fallback (FINDINGS 36, 37) |
 | wifi | `sprd_wlan_combo` on the WCN chip, managed by NetworkManager (wlan0 only): station mode from Phosh's Wi-Fi menu, AP for the hotspot; scans 2.4 and 5 GHz APs; MAC is random per boot |
 | LAN | `br0` 192.168.9.1/24 = usb0 + the AP; IPv4 NAT + the bearer's public IPv6 /64 (SLAAC, stateful firewall); management ports only from the USB port |
 | hotspot | NetworkManager `Hotspot` connection (wpa_supplicant AP mode), port of `br0`, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (centre 5775) with the patched network-manager 1.52.1+e5 (trixie's computes that centre wrong); WPS off (with it the firmware-SME driver let no phone associate); a phone joins, gets 192.168.9.x from dnsmasq on br0; up at boot (autoconnect), SSID/PSK changes survive the overlay; no AP+STA concurrency |

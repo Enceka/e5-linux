@@ -74,8 +74,8 @@ channels that survive a failed boot.
 | Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
 | Bluetooth | ✅ the kernel configures the marlin3 core the way the vendor HAL does (pskey/RF/enable from `request_firmware`, core disable before the tty closes) — factory address `FC:B5:85:D0:85:9B`, scans and connects; kernel `0018`, `0021`, FINDINGS §33.3, §35. ⏳ audio profiles untested |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
-| Modem, data bearer | ✅ [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) owns the CP at boot (the Android `modem_control` runs in a chroot to start it); 5G SA registers and `e5-bearer-up` brings the bearer up on `sipa_eth0`; `e5-bearer-watch.timer` brings it back after a CP reset — FINDINGS §25, §30 |
-| Modem web page | ✅ `unisoc-cpd web` on `http://192.168.9.1:7887` (USB port only, no authentication) |
+| Modem, data | ✅ **native**: `sipc_wwan` puts the AT channel on a WWAN port (kernel `0022`, `0023`), ModemManager's `unisoc` plugin drives it (patched modemmanager, `rootfs/deb-patches/`), NetworkManager's `Mobile` connection brings the data up on `sipa_eth0` (IPv4 + IPv6); 5G SA, signal in Phosh, SMS in Chatty; the Android `modem_control` still boots the CP from a chroot — FINDINGS §36, §37. ⏳ voice calls, sending SMS |
+| Modem fallback | [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) stays installed, not enabled: `systemctl start unisoc-cpd` takes the modem back from ModemManager (and serves its page on `http://192.168.9.1:7887`) |
 | UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
 | Hotspot | ✅ NetworkManager's `Hotspot` connection (Phosh, UFI-TOOLS, `nmcli`) on 5 GHz ch149 / 80 MHz (patched network-manager, `rootfs/deb-patches/`), SSID `E5-Linux`, a port of `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) — FINDINGS §35 |
 | Audio | ✅ speaker and microphone, both confirmed in use (Amberol, GNOME Sound Recorder, the Settings sound test): speaker through ALSA (UCM `HiFi`/`Speaker`, S16 interleaved) and PipeWire, mic as the "Internal Microphone" source (DSP capture, mono S16); `e5-audio.service` boots the AGDSP off `l_agdsp_a`; kernel `0010`-`0014`, `0017`, `0019`, `0020`, FINDINGS §24.8, §33, §34. ⏳ earpiece not yet heard |
@@ -85,7 +85,7 @@ channels that survive a failed boot.
 
 | Path | Contents |
 |---|---|
-| `kernel/` | `build-linux.sh`, `e5-linux.fragment` (Linux additions on top of the device defconfig), `patches/0001-0016` (applied by `build-linux.sh`) |
+| `kernel/` | `build-linux.sh`, `e5-linux.fragment` (Linux additions on top of the device defconfig), `patches/0001-0023` (applied by `build-linux.sh`) |
 | `boot/` | `init` (initramfs), `build-boot-image.py`, `stage-modules.sh` + `module-order.{stock,extra}`, `flash-trial.sh` / `android-boot-linux.sh` (from Android), `flash-from-linux.sh` (from a running e5-linux) |
 | `rootfs/` | `build-rootfs-container.sh` (+ `rootfs-in-container.sh`, the build in a Debian arm64 container), `install-rootfs.sh`, `packages.list`, `configure-rootfs.sh`, `fetch-debian-rootfs.py`, `install-packages.sh`, `pull-wcn-firmware.sh` / `pull-audio-firmware.sh` / `extract-android-vendor.sh` (blobs from your device), `stage-unisoc-cpd.sh`, `overlay/`; the `device-*.sh` and `build-rootfs.sh`/`e5-chroot.sh` paths are the older on-device and qemu builds |
 | `tools/` | `collect-logs.sh`, `e5-telnet.py`, `e5-serial.py`, screenshot/key/touch helpers |
@@ -237,7 +237,7 @@ tar -C work -cf work/android-subset.tar android-subset
 # in the e5-linux shell (telnet 192.168.9.1, or the USB serial console), as root:
 cd /tmp && /usr/local/bin/busybox wget http://192.168.9.2:8000/android-subset.tar
 mkdir -p /opt/e5 && tar --no-same-owner -xf android-subset.tar -C /opt/e5
-mv /opt/e5/android-subset /opt/e5/android && systemctl start e5-vendor unisoc-cpd
+mv /opt/e5/android-subset /opt/e5/android && systemctl start e5-vendor e5-sipc-wwan ModemManager
 ```
 
 `--no-same-owner` matters: bionic refuses a `__properties__` tree that is not
@@ -245,7 +245,7 @@ root-owned.  Do not "fix" ownership later with `chown -R` while `e5-vendor` runs
 the chroot has `/dev`, `/proc` and `/sys` bind-mounted, and the recursion rewrites
 the live device nodes (FINDINGS §28).  Until the subset is there `e5-vendor.service`
 is skipped (`ConditionPathExists=`), `/dev/stty_nr1` returns `ENODEV` and
-`unisoc-cpd` keeps restarting.
+ModemManager finds no modem.
 
 ### 4. Boot image
 
@@ -310,12 +310,12 @@ boot/flash-from-linux.sh boot-linux-slotb.img
 | shell | `telnet 192.168.9.1` (`root`/`root`, USB port only), or the USB CDC-ACM serial console |
 | accounts | `e5`/`123456` (the phosh session autologins), `root`/`root` |
 | hotspot | SSID `E5-Linux`, WPA2 `12345678`, clients on 192.168.9.0/24 |
-| modem page | `http://192.168.9.1:7887` (`unisoc-cpd web`, USB port only) |
+| modem | ModemManager: Phosh's mobile settings, Calls, Chatty, `mmcli -m any`; data is NetworkManager's `Mobile` connection (`nmcli c up/down Mobile`); raw AT with `e5-at 'AT+CSQ'` |
 | UFI-TOOLS | `http://192.168.9.1:2333` (USB port only), `admin`; CLI `ufi-tools status`, `ufi-tools set-token` |
 | back to Android | `e5-next-boot android && systemctl reboot` |
 
 Change the passwords, the hotspot passphrase and the UFI-TOOLS token before the
-device leaves your desk.  Telnet, gotty, UFI-TOOLS and the modem page are dropped for
+device leaves your desk.  Telnet, gotty and UFI-TOOLS are dropped for
 frames arriving from the Wi-Fi side of the bridge and for anything from the uplink
 (`etc/e5/nat.nft`), so a hotspot client or the internet cannot reach them -- the USB
 cable is the management port.

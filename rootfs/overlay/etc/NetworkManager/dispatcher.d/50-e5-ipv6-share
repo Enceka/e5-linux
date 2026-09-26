@@ -1,0 +1,14 @@
+#!/bin/sh
+# Pass the mobile /64 through to the LAN whenever NetworkManager brings the
+# baseband's data interface up (docs/FINDINGS.md 37).  NetworkManager does the
+# uplink side itself -- the link-local, the router solicitation and SLAAC on
+# sipa_eth0 -- so e5-ipv6-share only moves the prefix onto br0; the address
+# can come a few seconds after "up", hence --wait, detached from the
+# dispatcher's timeout.
+[ "${DEVICE_IP_IFACE:-$1}" = sipa_eth0 ] || exit 0
+case "$2" in
+    up|dhcp6-change|reapply)
+        E5_V6_NM=1 setsid /opt/e5/e5-ipv6-share --wait </dev/null >/dev/null 2>&1 &
+        ;;
+esac
+exit 0

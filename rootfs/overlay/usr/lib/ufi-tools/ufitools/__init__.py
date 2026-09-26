@@ -9,7 +9,7 @@ replaces every Android facility with a Linux one:
 ===============  ==================================  ==========================
 Android          Linux (this package)                module
 ===============  ==================================  ==========================
-``sendat``       ``/opt/e5/e5-at`` (a shim onto unisoc-cpd)  :mod:`ufitools.at`
+``sendat``       ``/opt/e5/e5-at`` (onto ModemManager)  :mod:`ufitools.at`
 ``Build.MODEL``  ``/proc``, ``/sys``, DMI             :mod:`ufitools.sysinfo`
 ``Runtime.exec`` ``/bin/sh -c``                       :mod:`ufitools.shell`
 ``LocalSocket``  Unix domain socket / plain shell     :mod:`ufitools.shell`

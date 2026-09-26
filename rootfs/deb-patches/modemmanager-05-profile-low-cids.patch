@@ -1,0 +1,61 @@
+Description: modem-helpers: new contexts may take the ids below the first one
+ mm_3gpp_profile_list_find_best() looked for unused context ids only in the
+ gaps between defined contexts, so with just the IMS context at 11 a new one
+ went to 12.  On the Unisoc SoC modems context <cid> is routed to the SIPA
+ interface of net id <cid> - 1, and only context 1 reaches sipa_eth0, the
+ data interface; the gap search now starts below the first allowed id.
+Author: e5-linux
+Forwarded: no
+
+--- a/src/mm-modem-helpers.c
++++ b/src/mm-modem-helpers.c
+@@ -1648,7 +1648,7 @@
+ {
+     GList            *l;
+     MMBearerIpFamily  requested_ip_type;
+-    gint              prev_profile_id = 0;
++    gint              prev_profile_id;
+     gint              unused_profile_id = 0;
+     gint              max_found_profile_id = 0;
+     gint              max_allowed_profile_id = 0;
+@@ -1663,6 +1663,11 @@
+      * the profile id, as the requested profile won't have one set */
+     cmp_flags |= MM_3GPP_PROFILE_CMP_FLAGS_NO_PROFILE_ID;
+ 
++    /* The gap search starts below the first allowed id, so that the unused
++     * ids before the first defined context count too: with only an IMS
++     * context at 11, a new context takes 1, not 12. */
++    prev_profile_id = min_profile_id - 1;
++
+     /* Look for the exact PDP context we want */
+     for (l = profile_list; l; l = g_list_next (l)) {
+         MM3gppProfile    *iter_profile = l->data;
+@@ -1696,7 +1701,7 @@
+          * This logic will allow us using unused CIDs that are available in the gaps
+          * between already defined contexts.
+          */
+-        if (!unused_profile_id && prev_profile_id && ((prev_profile_id + 1) < iter_profile_id))
++        if (!unused_profile_id && ((prev_profile_id + 1) < iter_profile_id))
+             unused_profile_id = prev_profile_id + 1;
+ 
+         /* Update previous CID value to the current CID for use in the next loop,
+--- a/src/tests/test-modem-helpers.c
++++ b/src/tests/test-modem-helpers.c
+@@ -2913,6 +2913,17 @@
+         .expected_profile_id_reused      = FALSE,
+         .expected_profile_id_overwritten = TRUE
+     },
++    /* Test: first empty slot below the first defined context (Unisoc: only
++     * the IMS context at 11, and the data interface is context 1's) */
++    {
++        .apn           = "cbnet",
++        .ip_family     = MM_BEARER_IP_FAMILY_IPV4V6,
++        .cgdcont_test  = NULL,
++        .cgdcont_query = "+CGDCONT: 11,\"IPV4V6\",\"ims\",\"0.0.0.0\",0,0\r\n",
++        .expected_profile_id             = 1,
++        .expected_profile_id_reused      = FALSE,
++        .expected_profile_id_overwritten = FALSE
++    },
+     /* Test: CGDCONT? and CGDCONT=? failures, fallback to CID=1 (a.g. some Android phones) */
+     {
+         .apn           = "ac.vodafone.es",

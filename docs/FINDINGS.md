@@ -3399,3 +3399,110 @@ probe/init commands, none of them harmful.  Enabling fails on `ATZ`.  Next: a
 `unisoc` ModemManager plugin (no `ATZ`, the vendor power-up, the M-ETHER bearer with
 the static IP config of `+CGCONTRDP`), carried in Debian's source package like the
 NetworkManager fixes.
+
+## 37. Native baseband, step 2: ModemManager and NetworkManager own the modem (2026-09-26)
+
+The CP still boots under Android's `modem_control` in its chroot; everything after
+that is the stock Linux stack.  At boot `e5-sipc-wwan` loads `sipc_wwan`,
+ModemManager's `unisoc` plugin drives `wwan0at0` and `sipa_eth0`, and
+NetworkManager's `Mobile` connection brings the data up.  Phosh shows the signal,
+Calls and Chatty see the modem, and `unisoc-cpd` with `e5-bearer-up`/`-watch` is
+retired (installed, not enabled; starting `unisoc-cpd` stops `e5-sipc-wwan` and
+ModemManager through `Conflicts=`/`BindsTo=`).  Verified on a cold boot: 5G SA,
+home, signal from `+CESQ`, context 1 on `sipa_eth0`, IPv4 and IPv6 (ping, HTTP),
+the IPv6 /64 on `br0` for the LAN, and the SIM's SMS listed.
+
+### 37.1 ModemManager, patched (`rootfs/deb-patches/modemmanager-0[1-5]`)
+
+Debian's 1.24.0 rebuilt by `rootfs/build-patched-debs.sh modemmanager`, held:
+
+* **01, the `unisoc` plugin**, on the ports `77-mm-unisoc-sipc.rules` tags
+  `ID_MM_UNISOC_SIPC`.  The generic modem, except:
+  * no `ATZ`, and no `+CPMS=` at all -- a new killer: `AT+CPMS="SM","SM","SM"`,
+    which only selected the storages already in use, left the AT server silent until
+    a reboot, no assert.  The core gains `MMBroadbandModemClass.sms_storages_fixed`:
+    storage locks succeed without a command for the storages `+CPMS?` reported and
+    are refused for any other, so listing, reading, storing and deleting stay on SM.
+  * capabilities (GSM/UMTS, LTE, 5G NR) and IP families (IPv4, IPv6, IPv4v6) are
+    stated: `+GCAP` says `+CGSM` only, `+WS46=?` is unsupported, and `+CGDCONT=?`
+    lists `"IP"` only although the contexts are IPV4V6.  Without this ModemManager
+    ran CS/PS registration checks only and never saw the NR SA registration.
+  * signal from all nine `+CESQ` fields (the generic parser stops at LTE; `+CSQ`
+    answers `255,99` on NR), also from the `+CESQ` the modem sends unsolicited every
+    few seconds.  Its unsolicited `+CSQ`, `+SIND`, `+SPSLICEQUE`, `^CONN`/`^CEND` ...
+    are swallowed -- they had ended up inside replies (the model read
+    `+SPSLICEQUE:2|1,1|1 ^CONN: 11,2,2 V1.0.1-B7`).
+  * power, measured: `+CFUN=4` and `+CFUN=1` are flight mode and back with the SIM
+    kept on.  **`+CFUN=0` switches the SIM off and nothing brings it back within
+    that boot**: afterwards `AT+SFUN=2` answered "operation not allowed" or nothing,
+    `+CPIN` stayed "SIM not inserted", and a second `CFUN=0` timed out.  So power
+    down/off is `+CFUN=4`, never 0.  The CP modem_control boots is at `+CFUN: 0`
+    with the SIM off, though; from there the vendor RIL's `AT+SFUN=2` (SIM on) and
+    `AT+SFUN=4` (stack on) work, and the plugin sends them as soon as the port is
+    open, before initialization reads the SIM.
+  * the bearer: `+CGACT=1,<cid>`, `+CGDATA="M-ETHER",<cid>` (CONNECT, the port stays
+    in command mode), then `+CGCONTRDP=<cid>`: IPv4 static (no gateway -- the
+    default route goes out of the interface), IPv6 by RA with the DNS servers of the
+    dotted IPv6 line and **the network's interface identifier as the link-local
+    address**: `sipa_eth0` is `link/none`, so NetworkManager has no MAC to derive
+    one from, and without an address from the bearer IPv6 never came up.
+    Disconnect is `+CGACT=0,<cid>`.
+* **02**: the solicited `+CREG`/`+CGREG`/`+CEREG` patterns took a one-digit AcT and
+  are anchored at the end, so `+CGREG: 2,1,"0000","00246005",11` (NR on a 5G core)
+  was "Unknown registration status response" -- on any 5G modem.
+* **03**: `+CMGL` in PDU mode puts an empty line between each header and its PDU
+  here, which failed the whole listing.
+* **04**: `at_command_via_dbus` on, so `mmcli --command` works without `--debug`:
+  `/opt/e5/e5-at` (and UFI-TOOLS through it) asks ModemManager now, and refuses
+  `ATZ`, `AT&F`, `AT+CPMS=`, `AT+CFUN=0`, `AT+SFUN=3/5`.
+* **05**: new contexts may take the ids below the first defined one.  **The CP
+  routes context N to the SIPA net id N-1, and only context 1 reaches `sipa_eth0`**.
+  The CP boots with only the IMS context at 11 (unisoc-cpd defined 1 itself), so
+  ModemManager put the APN at 12: connected, addressed, and not one packet back on
+  `sipa_eth0` (none on `sipa_eth11` either, by hand).  The bearer now uses
+  `sipa_eth<cid-1>` and says so if ModemManager does not have it.
+
+`mm-modem-helpers` tests (32 programs) pass with 02, 03, 05 and a test for 05.
+
+### 37.2 Getting the ports to ModemManager in one piece
+
+* `sipc_wwan` loads long before the CP has booted, and a port that refuses to open is
+  probed once and forgotten.  `kernel/patches/0023`: the port is registered when the
+  sbuf channel comes up and removed when it goes down (a CP reset), watched once a
+  second besides `SBUF_NOTIFY_READY`.  A module reload -- the same thing as a CP reset
+  to ModemManager -- came back as a new modem and NetworkManager reconnected by itself.
+* ModemManager sees `sipa_eth0` from early boot.  Alone, it fails probing (a virtual
+  netdev has no driver for the plugin filters), and the device's probe list is reset,
+  so the AT port arriving later made a modem with no data port.
+  `78-e5-mm-sipc.rules` hands `sipa_eth0` over only while an AT port exists, and
+  re-announces it when one appears.
+* Checksum offload on `sipa_eth*` is off by `etc/systemd/network/10-e5-sipa-eth.link`
+  (unisoc-cpd did it with ethtool after each bearer).
+* NetworkManager manages `wwan0at0` (the modem device; `sipa_eth0` stays unmanaged
+  as its IP interface), `Mobile.nmconnection` in `/usr/lib/NetworkManager`, APN
+  `cbnet`, retries forever.  The dispatcher runs `e5-ipv6-share` with
+  `E5_V6_NM=1`, which leaves the uplink's IPv6 to NetworkManager and only moves the
+  /64 to `br0`.
+
+### 37.3 Two boot faults this exposed
+
+* **An ordering cycle dropped `e5-vendor` on every boot**: `e5-cp_diskserver` was
+  `Before=e5-vendor` (which is `Before=sysinit.target`) but, with the default
+  dependencies, after `sysinit.target`.  systemd deleted the `e5-vendor` start job;
+  the CP only came up because `unisoc-cpd`'s `Wants=` queued the vendor again later.
+  cp_diskserver is `After=` it now (`android-run` waits for the chroot anyway).
+* **`/dev/null`, `zero`, `full`, `random`, `urandom`, `tty` arrive mode 0660** from
+  early boot on some boots (the kernel creates them 0666; the culprit is not found
+  yet).  dbus-daemon, which drops to `messagebus`, then died with "Failed to open
+  /dev/null: Permission denied" and NetworkManager, bound to it, never started.
+  `rootfs-fixups` (before sysinit) logs and restores 0666.
+
+### 37.4 Behaviour to know
+
+* **Chatty deletes the SMS it imports** from the SIM (standard Chatty; they live in
+  its history database, `~/.purple/chatty/db/chatty-history.db`).  unisoc-cpd never
+  deleted anything.
+* The unisoc-cpd web page (`:7887`) is gone with the daemon; UFI-TOOLS keeps working
+  through `e5-at`.
+* Not yet exercised: voice calls (Calls over ModemManager; the vendor RIL's call
+  audio route), sending SMS, and a real CP reset (the module reload stands in for it).

@@ -1,31 +1,65 @@
 #!/bin/sh
-# Send an AT command through unisoc-cpd, the one process that owns the modem's
-# AT channel in the G2 shape (the e5-atd fifo client this replaces is gone with
-# e5-atd itself).
+# Send one AT command to the baseband through whoever owns its AT channel.
 #
-#   e5-at "AT+CSQ"            print the reply
-#   e5-at -t 20 "AT+SFUN=4"   accepted for compatibility; the daemon owns the
-#                             timeout (8 s), so the value is parsed and ignored
+#   e5-at "AT+CSQ"            print the reply, ending in OK or ERROR
+#   e5-at -t 20 "AT+COPS=?"   with a timeout in seconds (default 8)
 #
-# Why not open /dev/stty_nr1 here: a second reader splits replies with the owner
-# and makes the CP's PS task assert with "The queue was full" -- the whole point
-# of the daemon.  Asking it by name keeps that promise: the command goes over
-# /run/unisoc-cpd/cmd.sock and the daemon paces and serialises it.
+# The channel has exactly one owner (docs/FINDINGS.md 22, 37): ModemManager,
+# through the WWAN port of sipc_wwan, or on an image still in the unisoc-cpd
+# shape the daemon.  Both serialise and pace what they send, so this asks the
+# owner -- ModemManager's Modem.Command (mmcli --command; the E5 build serves
+# it without --debug), or the daemon's socket -- and never opens the port or
+# /dev/stty_nr1 itself: a second reader splits replies with the owner and makes
+# the CP's PS task assert with "The queue was full".
+#
+# Refused, whoever the owner: the commands after which the CP's AT server
+# answers nobody until a reboot (ATZ, AT+CPMS=...), and the ones that leave the
+# SIM undetected until a reboot (AT+CFUN=0, the SFUN=5/3 stack cycle).
 set -u
 
-have_cmd=0
+T=8
 while [ $# -gt 0 ]; do
     case "$1" in
-        -t) shift; [ $# -gt 0 ] && shift ;;
-        --) shift; have_cmd=1; break ;;
-        *) have_cmd=1; break ;;
+        -t) shift; [ $# -gt 0 ] && { T=$1; shift; } ;;
+        --) shift; break ;;
+        *) break ;;
     esac
 done
-
-if [ "$have_cmd" = 0 ] || [ $# -eq 0 ]; then
+if [ $# -eq 0 ] || [ -z "$1" ]; then
     echo "usage: e5-at [-t SECONDS] AT+COMMAND" >&2
     exit 2
 fi
+CMD=$1
 
-exec /usr/local/bin/unisoc-cpd --mode native --profiles-dir /etc/unisoc-cpd \
-    --socket /run/unisoc-cpd/cmd.sock at "$1"
+case "$(printf '%s' "$CMD" | tr '[:lower:]' '[:upper:]' | tr -d ' ')" in
+    ATZ*|AT\&F*|AT+CPMS=*|AT+CFUN=0*|AT+SFUN=3*|AT+SFUN=5*)
+        echo "e5-at: refusing '$CMD': it leaves the modem's AT server or SIM dead until a reboot" >&2
+        echo "ERROR"
+        exit 1 ;;
+esac
+
+if systemctl -q is-active ModemManager 2>/dev/null; then
+    out=$(mmcli -m any --timeout="$T" --command="$CMD" 2>&1)
+    rc=$?
+    if [ $rc -eq 0 ]; then
+        # response: '<reply>'  (ModemManager keeps the final OK to itself)
+        out=${out#response: \'}
+        printf '%s\n' "${out%\'}" | sed '/^$/d'
+        echo "OK"
+        exit 0
+    fi
+    echo "e5-at: $out" >&2
+    case "$out" in
+        *"CME ERROR"*|*"CMS ERROR"*) printf '%s\n' "$out" | grep -o '+CM[ES] ERROR: *[0-9]*' | head -1 ;;
+        *) echo "ERROR" ;;
+    esac
+    exit 1
+fi
+
+if [ -S /run/unisoc-cpd/cmd.sock ]; then
+    exec /usr/local/bin/unisoc-cpd --mode native --profiles-dir /etc/unisoc-cpd \
+        --socket /run/unisoc-cpd/cmd.sock at "$CMD"
+fi
+
+echo "e5-at: no owner of the AT channel is running (ModemManager or unisoc-cpd)" >&2
+exit 1

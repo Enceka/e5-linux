@@ -57,7 +57,10 @@ DEFAULTS: Dict[str, Any] = {
     #: dies if AT is polled hard, so they are served from a cache refreshed at
     #: most this often.  0 disables AT-derived fields entirely.
     "at_poll_interval": 60.0,
-    "mobile_data_unit": "e5-mobile-data.service",
+    #: Mobile data is this NetworkManager connection (ModemManager's modem,
+    #: docs/FINDINGS.md 37); the systemd unit is the fallback when it is empty.
+    "mobile_connection": "Mobile",
+    "mobile_data_unit": "",
     #: The hotspot is this NetworkManager connection (an AP port of br0).
     "hotspot_connection": "Hotspot",
     "wlan_interface": "wlan0",

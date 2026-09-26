@@ -1,0 +1,39 @@
+Description: modem-helpers: two-digit AcT in +CREG/+CGREG/+CEREG
+ The solicited registration regexes are anchored at the end, and their AcT
+ group took one digit: every reply with AcT 10 or more (E-UTRA or NR on a
+ 5G core, EN-DC) failed with "Unknown registration status response", e.g.
+ +CGREG: 2,1,"0000","00246005",11 on a UMS9621 camped on NR SA.
+Author: e5-linux
+Forwarded: no
+
+--- a/src/mm-modem-helpers.c	2025-04-10 09:30:25
++++ b/src/mm-modem-helpers.c	2026-09-26 17:21:32
+@@ -861,20 +861,21 @@
+     /* +CREG: <n>,<stat>,<lac>,<ci>       (GSM 07.07 solicited and some CREG=2 unsolicited) */
+     [3] = "\\+(CREG|CGREG|CEREG):\\s*([0-9]),\\s*([0-9])\\s*,\\s*([^,]*)\\s*,\\s*([^,\\s]*)",
+     [4] = "\\+(CREG|CGREG|CEREG):\\s*0*([0-9]),\\s*0*([0-9])\\s*,\\s*(\"[^,]*\")\\s*,\\s*(\"[^,\\s]*\")",
+-    /* +CREG: <stat>,<lac>,<ci>,<AcT>     (ETSI 27.007 CREG=2 unsolicited) */
+-    [5] = "\\+(CREG|CGREG|CEREG):\\s*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([0-9])",
+-    [6] = "\\+(CREG|CGREG|CEREG):\\s*0*([0-9])\\s*,\\s*(\"[^,\\s]*\")\\s*,\\s*(\"[^,\\s]*\")\\s*,\\s*0*([0-9])",
++    /* +CREG: <stat>,<lac>,<ci>,<AcT>     (ETSI 27.007 CREG=2 unsolicited)
++     * AcT has two digits from 10 on (E-UTRA and NR on a 5G core, EN-DC) */
++    [5] = "\\+(CREG|CGREG|CEREG):\\s*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([0-9]+)",
++    [6] = "\\+(CREG|CGREG|CEREG):\\s*0*([0-9])\\s*,\\s*(\"[^,\\s]*\")\\s*,\\s*(\"[^,\\s]*\")\\s*,\\s*0*([0-9]+)",
+     /* +CREG: <n>,<stat>,<lac>,<ci>,<AcT> (ETSI 27.007 solicited and some CREG=2 unsolicited) */
+-    [7] = "\\+(CREG|CGREG|CEREG):\\s*0*([0-9]),\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9])",
++    [7] = "\\+(CREG|CGREG|CEREG):\\s*0*([0-9]),\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9]+)",
+     /* +CREG: <n>,<stat>,<lac>,<ci>,<AcT?>,<something> (Samsung Wave S8500) */
+     /* '<CR><LF>+CREG: 2,1,000B,2816, B, C2816<CR><LF><CR><LF>OK<CR><LF>' */
+     [8] = "\\+(CREG|CGREG):\\s*0*([0-9]),\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*[^,\\s]*",
+     /* +CREG: <stat>,<lac>,<ci>,<AcT>,<RAC> (ETSI 27.007 v9.20 CREG=2 unsolicited with RAC) */
+-    [9] = "\\+(CREG|CGREG):\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9])\\s*,\\s*([^,\\s]*)",
++    [9] = "\\+(CREG|CGREG):\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9]+)\\s*,\\s*([^,\\s]*)",
+     /* +CEREG: <stat>,<lac>,<rac>,<ci>,<AcT>     (ETSI 27.007 v8.6 CREG=2 unsolicited with RAC) */
+-    [10] = "\\+(CEREG):\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9])",
++    [10] = "\\+(CEREG):\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9]+)",
+     /* +CEREG: <n>,<stat>,<lac>,<rac>,<ci>,<AcT> (ETSI 27.007 v8.6 CREG=2 solicited with RAC) */
+-    [11] = "\\+(CEREG):\\s*0*([0-9]),\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9])",
++    [11] = "\\+(CEREG):\\s*0*([0-9]),\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9]+)",
+     /* +C5GREG: <stat>,<lac>,<ci>,<AcT>,<Allowed_NSSAI_length>,<Allowed_NSSAI>   (ETSI 27.007 CREG=2 unsolicited) */
+     [12] = "\\+(C5GREG):\\s*([0-9]+)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([0-9]+)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)",
+     /* +C5GREG: <n>,<stat>,<lac>,<ci>,<AcT>,<Allowed_NSSAI_length>,<Allowed_NSSAI> (ETSI 27.007 solicited) */

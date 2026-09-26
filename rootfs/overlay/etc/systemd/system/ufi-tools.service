@@ -6,10 +6,10 @@ Documentation=file:///usr/share/doc/ufi-tools/README.md
 # still serves the UI.
 After=network-online.target e5-vendor.service
 Wants=network-online.target
-# The AT bridge is unisoc-cpd in the G2 shape (e5-atd is gone): ask the owner
-# through /opt/e5/e5-at, never open the tty.
-After=unisoc-cpd.service
-Wants=unisoc-cpd.service
+# AT goes through /opt/e5/e5-at, i.e. through ModemManager (docs/FINDINGS.md
+# 37).  No Wants= on the modem's owner: pulling unisoc-cpd in, as this unit
+# once did, would now stop ModemManager's AT port (e5-sipc-wwan.service).
+After=ModemManager.service
 
 [Service]
 Type=simple

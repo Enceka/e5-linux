@@ -1,0 +1,37 @@
+Description: wifi-manager: an access point is a hotspot whatever its IP setup
+ Phosh took only connections with ipv4.method=shared for the hotspot, so an AP
+ that is a port of a bridge -- the E5's "Hotspot", which shares the bridge's
+ NAT and DHCP and carries no IPv4 setting -- showed the switch off, and
+ stop_hotspot () refused to turn it off.  start_hotspot () already activates
+ any AP-mode connection; now the state follows the Wi-Fi mode as well.
+Author: e5-linux
+Forwarded: no
+
+--- a/src/wifi-manager.c
++++ b/src/wifi-manager.c
+@@ -79,6 +79,8 @@
+ is_active_connection_hotspot_master (PhoshWifiManager *self)
+ {
+   NMSettingIPConfig *ip4_setting;
++  NMSettingWireless *s_wifi;
++  const char *mode;
+   NMConnection *c;
+ 
+   if (!self->conn_dev || !self->active ||
+@@ -87,6 +89,16 @@
+   }
+ 
+   c = NM_CONNECTION (nm_active_connection_get_connection (self->active));
++
++  /* An access point is a hotspot whatever its IP setup: one that is a port of
++   * a bridge (the uplink shared by the bridge's own NAT and DHCP) carries no
++   * IPv4 setting at all.  start_hotspot () activates exactly these. */
++  s_wifi = nm_connection_get_setting_wireless (c);
++  mode = s_wifi ? nm_setting_wireless_get_mode (s_wifi) : NULL;
++  if (g_strcmp0 (mode, NM_SETTING_WIRELESS_MODE_AP) == 0 ||
++      g_strcmp0 (mode, NM_SETTING_WIRELESS_MODE_ADHOC) == 0)
++    return TRUE;
++
+   ip4_setting = nm_connection_get_setting_ip4_config (c);
+ 
+   if (ip4_setting &&

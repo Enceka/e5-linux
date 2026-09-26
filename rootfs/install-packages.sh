@@ -14,7 +14,8 @@ echo "INSTALL-DONE rc=$?"
 #   network-manager 1.52.1+e5: trixie's computes the VHT80 centre of channels
 #     149-161 wrong and the hotspot cannot run 149 at 80 MHz (FINDINGS 35.2);
 #   modemmanager 1.24.0+e5: the unisoc plugin, without which ModemManager
-#     cannot drive the baseband at all (FINDINGS 37).
+#     cannot drive the baseband at all (FINDINGS 37);
+#   phosh 0.46.0+e5: the hotspot switch recognises the bridged "Hotspot".
 ROOT="${E5_ROOT:-$HERE/../work/rootfs-build/rootfs}"
 D="$HERE/../out/debs-patched"
 install_patched() {  # <build-patched-debs.sh package> <binary packages...>
@@ -33,6 +34,7 @@ install_patched() {  # <build-patched-debs.sh package> <binary packages...>
 }
 install_patched network-manager network-manager libnm0 gir1.2-nm-1.0
 install_patched modemmanager modemmanager libmm-glib0 gir1.2-modemmanager-1.0
+install_patched phosh phosh phosh-common
 
 # The build tree is kept between builds and apt never removes a package that
 # stopped being asked for, so anything dropped from packages.list stays in the

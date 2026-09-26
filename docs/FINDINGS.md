@@ -3274,16 +3274,21 @@ the USB link never blinked.
 NM passes the bridge to wpa_supplicant, so EAPOL is handled on the port the way
 hostapd's `bridge=br0` did.  Three details it took:
 
-* **Channel 36, not 149.**  At 80 MHz wpa_supplicant failed the AP after its HT scan
-  ("Interface initialization failed"); its debug log said `VHT seg0 index 154` for
-  channel 149.  The centre comes from NetworkManager: `get_ap_params()` in 1.52
-  computes `((ch/4 - 1)/4)*16 + 10`, right for 36-144 and one off for 149-161 (154,
-  should be 155).  Upstream fixed it in 2026 (`5763b9b4`, `a0e03b12`, "supplicant:
-  fix center channel calculation"); trixie has 1.52.1.  153/161 "worked" with the same
-  bogus centre, so they were not an option either.  Channel 36 at 80 MHz: `Set freq
-  5180 (... bandwidth=80 MHz, cf1=5210 MHz)`, AP-ENABLED 3/3, and it keeps off the
-  user's own router on 149.  `keyfile` wants `channel-width=80` (an integer), not
-  `80mhz`.  20 and 40 MHz on 149 work.
+* **Channel 149 at 80 MHz needs a patched NetworkManager.**  At 80 MHz
+  wpa_supplicant failed the AP after its HT scan ("Interface initialization
+  failed"); its debug log said `VHT seg0 index 154` for channel 149.  The centre
+  comes from NetworkManager: `get_ap_params()` in 1.52 computes `((ch/4 - 1)/4)*16 +
+  10`, right for 36-144 and one off for 149-161 (154, should be 155).  Upstream fixed
+  it in 2026 (`5763b9b4`, `a0e03b12`, "supplicant: fix center channel calculation");
+  trixie has 1.52.1.  153/161 "started" with the same bogus centre.  Channel 36 at
+  80 MHz came up with the stock package (`cf1=5210`), but no phone ever associated --
+  nothing reached the driver or wpa_supplicant, as if it was not on the air -- while
+  149 is what hostapd and stock Android use.  So the fix is carried instead:
+  `rootfs/deb-patches/network-manager-vht80-center.patch` (the upstream table),
+  built into Debian's own source package by `rootfs/build-patched-debs.sh` (a
+  `debian:trixie` arm64 container, version `1.52.1-1+e51`), installed and held by
+  `install-packages.sh`.  With it: `VHT seg0 index 155`, `cf1=5775 MHz`,
+  AP-ENABLED.  `keyfile` wants `channel-width=80` (an integer), not `80mhz`.
 * **Read-only in /usr/lib.**  The overlay is copied over `/etc` at every boot, so a
   profile there would lose every SSID/password change.  NM treats
   `/usr/lib/NetworkManager/system-connections` as read-only and writes an edited

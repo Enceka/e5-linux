@@ -271,15 +271,10 @@ class SystemControl:
                 band = "bg" if int(channel) <= 14 else "a"
             else:
                 band = "bg" if hw_mode in ("g", "b") else "a"
-                channel = "6" if band == "bg" else "36"
-            # 80 MHz on 5 GHz, except from channel 149 up: NetworkManager 1.52
-            # computes a wrong VHT80 centre there and the AP fails to start.
-            if band == "bg":
-                width = "20"
-            elif int(channel) >= 149:
-                width = "40"
-            else:
-                width = "80"
+                channel = "6" if band == "bg" else "149"
+            # 80 MHz on 5 GHz (149 needs the patched network-manager, which the
+            # image carries -- docs/FINDINGS.md 35.2)
+            width = "20" if band == "bg" else "80"
             props += [("802-11-wireless.band", band), ("802-11-wireless.channel", channel),
                       ("802-11-wireless.channel-width", width)]
             applied.update({"band": band, "channel": channel, "channel_width": width})

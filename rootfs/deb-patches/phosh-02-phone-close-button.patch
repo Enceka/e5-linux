@@ -1,0 +1,23 @@
+Description: docked-manager: keep the close button in phone mode
+ Undocked, phosh set the window button layout to "appmenu:", taking away the
+ close button.  A device whose only keys are a keypad has no Escape, and its
+ back key (XF86Back) closes no GTK dialog, so a dialog such as Settings'
+ "Modem Details" could not be left at all.  Phone mode now sets
+ "appmenu:close".
+Author: e5-linux
+Forwarded: not-needed
+
+--- a/src/docked-manager.c
++++ b/src/docked-manager.c
+@@ -299,7 +299,10 @@
+   if (enable)
+     g_settings_reset (self->wm_settings, WM_KEY_LAYOUT);
+   else
+-    g_settings_set_string (self->wm_settings, WM_KEY_LAYOUT, "appmenu:");
++    /* Keep the close button: a keypad phone has no Escape, and its back key
++     * (XF86Back) closes no GTK dialog, so without it a dialog such as
++     * Settings' "Modem Details" cannot be left at all. */
++    g_settings_set_string (self->wm_settings, WM_KEY_LAYOUT, "appmenu:close");
+ 
+   /* we could bind one boolean property via g_settings_bind but that would spread
+    * mode setup over several places */

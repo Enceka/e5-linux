@@ -1,0 +1,69 @@
+Description: network: a bridged access point is a hotspot too
+ The Wi-Fi panel took only ipv4.method=shared connections for a hotspot.  An
+ access point that is a port of a bridge -- the E5's "Hotspot", sharing the
+ bridge's NAT and DHCP, with no IPv4 setting -- was not found, so turning the
+ hotspot on offered to create a new, NAT-sharing one, and the hotspot dialog
+ would have added ipv4.method=shared to it.  Such a port is now found and
+ reused, reported as the hotspot while active, and left without IPv4.
+Author: e5-linux
+Forwarded: no
+
+--- a/panels/network/cc-wifi-hotspot-dialog.c
++++ b/panels/network/cc-wifi-hotspot-dialog.c
+@@ -452,7 +452,10 @@
+       nm_connection_add_setting (self->connection, setting);
+     }
+ 
+-  if (nm_connection_get_setting_ip4_config (self->connection) == NULL)
++  /* not for a port of a bridge: the bridge does the sharing, and a port
++   * carries no IP setup */
++  if (nm_connection_get_setting_ip4_config (self->connection) == NULL &&
++      nm_setting_connection_get_master (nm_connection_get_setting_connection (self->connection)) == NULL)
+     {
+       setting = nm_setting_ip4_config_new ();
+       g_object_set (setting, "method", "shared", NULL);
+--- a/panels/network/net-device-wifi.c
++++ b/panels/network/net-device-wifi.c
+@@ -148,6 +148,21 @@
+         }
+ 
+         return TRUE;
++}
++
++/* An access point (or ad-hoc network) is a hotspot whatever its IP setup:
++ * one that is a port of a bridge shares the bridge's own NAT and DHCP and
++ * carries no IPv4 setting at all. */
++static gboolean
++connection_is_access_point (NMConnection *c)
++{
++        NMSettingWireless *sw;
++        const gchar *mode;
++
++        sw = nm_connection_get_setting_wireless (c);
++        mode = sw ? nm_setting_wireless_get_mode (sw) : NULL;
++        return g_strcmp0 (mode, NM_SETTING_WIRELESS_MODE_AP) == 0 ||
++               g_strcmp0 (mode, NM_SETTING_WIRELESS_MODE_ADHOC) == 0;
+ }
+ 
+ static gboolean
+@@ -162,7 +177,7 @@
+         if (c == NULL)
+                 return FALSE;
+ 
+-        return connection_is_shared (c);
++        return connection_is_shared (c) || connection_is_access_point (c);
+ }
+ 
+ static GBytes *
+@@ -551,6 +566,11 @@
+         if (!setting)
+                 return FALSE;
+ 
++        /* a port of a bridge has no IP setup of its own (see
++         * connection_is_access_point ()) */
++        if (nm_setting_connection_get_master (sc) != NULL)
++                return TRUE;
++
+         sip = nm_connection_get_setting_ip4_config (connection);
+         if (g_strcmp0 (nm_setting_ip_config_get_method (sip), "shared") != 0) {
+                 return FALSE;

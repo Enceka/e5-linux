@@ -1,0 +1,57 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] sprd_disp: no limit on dumb buffer creations
+
+The vendor counted DRM_IOCTL_MODE_CREATE_DUMB calls in a static that never
+went down (10, raised to 64 by 0006).  wlroots allocates a new swapchain
+whenever the output is reconfigured or comes back from blanking, so after
+enough screen-off/on cycles the panel could not be turned on again until a
+reboot.  Buffers are freed with their GEM object; dma_alloc_wc() is the
+real limit.
+
+---
+diff --git a/drivers/unisoc_platform/sprd_disp/sprd_gem.c b/drivers/unisoc_platform/sprd_disp/sprd_gem.c
+index 90abebf18..ca5c9cffd 100644
+--- a/drivers/unisoc_platform/sprd_disp/sprd_gem.c
++++ b/drivers/unisoc_platform/sprd_disp/sprd_gem.c
+@@ -14,17 +14,15 @@
+ #include "sprd_gem.h"
+ 
+ /*
+- * e5-linux: 10 is not a limit for a Linux session, it is a trap.  The counter
+- * in sprd_gem_dumb_create() is static and never goes down, wlroots' DRM
+- * allocator asks for one dumb buffer per swapchain buffer, and every session
+- * restart asks for more -- so the 11th DRM_IOCTL_MODE_CREATE_DUMB of every boot
+- * returns -EINVAL, the compositor fails its swapchain test ("gbm_bo_create
+- * failed" / "Failed to allocate buffer") and the panel stays black until the
+- * next reboot.  The buffers are freed with their GEM object, so the guard only
+- * exists to catch a leak that never releases anything: 64 still does that and
+- * leaves room for a few sessions.
++ * e5-linux: no limit on dumb buffers.  The vendor counted creations in a
++ * static that never went down and refused the 11th (later the 65th) of the
++ * boot with -EINVAL.  wlroots allocates a new swapchain -- new dumb buffers --
++ * whenever the output is reconfigured and when it comes back from blanking,
++ * so a session ran out after enough screen-off/on cycles and the panel could
++ * not be turned on again ("Failed to commit power mode change to 1") until a
++ * reboot.  The buffers are freed with their GEM object, and dma_alloc_wc()
++ * failing is the real limit.
+  */
+-#define DUMB_CREATE_TIMES_LIMIT 64
+ 
+ static const struct drm_gem_object_funcs sprd_gem_object_funcs = {
+ 	.free = sprd_gem_free_object,
+@@ -87,15 +85,8 @@ int sprd_gem_dumb_create(struct drm_file *file_priv, struct drm_device *drm,
+ 			    struct drm_mode_create_dumb *args)
+ {
+ 	struct sprd_gem_obj *sprd_gem;
+-	static u8 create_cnt;
+ 	int ret;
+ 
+-	if (create_cnt == DUMB_CREATE_TIMES_LIMIT) {
+-		DRM_ERROR("dump create times over limit\n");
+-		return -EINVAL;
+-	}
+-	create_cnt++;
+-
+ 	args->pitch = DIV_ROUND_UP(args->width * args->bpp, 8);
+ 	args->size = round_up(args->pitch * args->height, PAGE_SIZE);
+ 

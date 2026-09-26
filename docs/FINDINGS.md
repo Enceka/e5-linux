@@ -3069,3 +3069,43 @@ and the first boot with it came up with no bridge (`status=203/EXEC`).
 
 Clean boot on br2: no failed unit, userspace 21.5 s (25.1 s before -- wait-online),
 br0 = usb0 + wlan0 with the public /64, the Mac at 192.168.9.2 with IPv6.
+
+## 32. An audio DMA read that rebooted the device into Android (2026-09-26)
+
+After 5 h 50 min of an idle desktop the device rebooted and came up in Android.
+Nothing had been asked of it -- the last commands were read-only AT queries.
+pstore held the record (`dmesg-ramoops-0.enc.z`, raw deflate):
+
+    Internal error: synchronous external abort [#1]      CPU4, data-loop.0 (PipeWire)
+    pc : readl
+    sprd_dma_tx_status <- sprd_pcm_pointer [sprd_dmaengine_pcm] <- soc_pcm_pointer
+      <- snd_pcm_update_hw_ptr0 <- snd_pcm_hwsync <- snd_pcm_sync_ptr (ioctl)
+
+The PCM position is the live address register of a DMA channel in the AGCP domain,
+and reading it while the AP has no access to that domain is a bus error, not an error
+code.  The stream was open (`sprd_pcm_open` holds the domain's runtime-PM reference
+for every FE but voice/FM/HFP, FE_ST_FAST included), no system suspend was logged,
+and nothing in the 64 KB before the oops touched audio -- so what took the access away
+is still not known.  What is known is what makes it fatal: `sprd_pcm_pointer()` is
+called continuously and never asks.
+
+`kernel/patches/0016`: it asks `agdsp_can_access()` first.  That is the vendor's own
+check, exported by agdsp_pd, and it reads only always-on registers -- the AP access
+enable (`ap_access_ena` = AON APB `0x14c` mask `0x20`, i.e. 0x6490014c bit 5), AGCP
+deep sleep and the AGCP system/DSP power states in PMU APB (`0x850`, `0x860`,
+`0x544`) -- so it is safe to call at any time.  Without access the position is held
+at its last value; the event is logged rate-limited ("AGCP not accessible"), which is
+the trace to look for if it happens again.  The check's own messages are rate-limited
+too, since it now runs on every position query.
+
+**Why a panic lands in Android, while a reboot does not.**  The bootloader log after
+the crash: `panic type boot count 6`, a sysdump written to `sysdumpdb`, then
+`bootable slot 1 ... tries_remaining: 1` and `check rollback slot 1 tries: 1 ->
+Booting slot_a`.  A panic makes LK run a sysdump boot first, and that boot uses one of
+slot b's two tries, so the real boot finds one left and rolls back.  An ordinary
+`systemctl reboot` keeps Linux.  (`boot/init` sets `panic_on_oops=1` on purpose, so
+this is the designed fallback, not a fault of its own.)
+
+Trap from the same recovery: `(sleep 2; systemctl reboot) &` over the telnet helper
+never reboots -- the job dies with the session.  Run `systemctl reboot` in the
+foreground and let the connection drop.

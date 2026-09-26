@@ -1,0 +1,173 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] ASoC: sprd-dmaengine-pcm: no DMA position read while AGCP is out of reach
+
+The PCM position is the live address register of a DMA channel in the
+AGCP domain.  Read while the AP has no access to that domain it is a
+synchronous external abort: after almost six hours of an idle desktop,
+PipeWire's data-loop took one in snd_pcm_sync_ptr ->
+sprd_pcm_pointer -> sprd_dma_tx_status -> readl, with the stream open,
+and panic_on_oops rebooted the device (into Android, since LK's sysdump
+boot after a panic uses up slot b's try).
+
+sprd_pcm_pointer() now asks agdsp_can_access() first -- the vendor's own
+check, which reads only always-on AON/PMU registers (the AP access
+enable, AGCP deep sleep, the AGCP system and DSP power states) -- and
+without access holds the last position instead of touching the channel.
+agdsp_can_access() gets a NULL guard and rate-limited messages, since it
+now runs on every position query.
+
+---
+diff --git a/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c b/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
+index 2daad51e8..2abd3632a 100644
+--- a/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
++++ b/drivers/unisoc_platform/sprd_audio/agdsp_pd/agdsp_pd.c
+@@ -159,16 +159,24 @@ int agdsp_can_access(void)
+ 	int val = 0;
+ 	struct agdsp_access *dsp_ac = g_agdsp_access;
+ 
++	/*
++	 * e5-linux: sprd_pcm_pointer() asks this on every position query, so
++	 * a domain that is out of reach must not flood the log, and the
++	 * access state must not be looked up before the probe filled it in.
++	 */
++	if (!dsp_ac || !dsp_ac->agcp_ahb || !dsp_ac->pmu_apb)
++		return 0;
++
+ 	if (!dsp_ac->auto_agcp_access) {
+ 		ret = regmap_read(dsp_ac->agcp_ahb,
+ 			dsp_ac->ap_access_ena_reg, &val);
+ 		if (ret != 0) {
+-			pr_err("%s, regmap_read   AUDACCESS_APB_AGCP_CTRL error!\n",
++			pr_err_ratelimited("%s, regmap_read   AUDACCESS_APB_AGCP_CTRL error!\n",
+ 			__func__);
+ 			return 0;
+ 		}
+ 		if (!(dsp_ac->ap_access_ena_mask & val)) {
+-			pr_err("%s, AUDACCESS_APB_AGCP_ACCESS_EN not enable! value: %x\n",
++			pr_err_ratelimited("%s, AUDACCESS_APB_AGCP_ACCESS_EN not enable! value: %x\n",
+ 				__func__, val);
+ 			return 0;
+ 		}
+@@ -176,12 +184,12 @@ int agdsp_can_access(void)
+ 	ret = regmap_read(dsp_ac->pmu_apb,
+ 		dsp_ac->audcp_pmu_sleep_ctrl_reg, &val);
+ 	if (ret != 0) {
+-		pr_err("%s, regmap_read   AUDACCESS_APB_AGCP_CTRL error!\n",
++		pr_err_ratelimited("%s, regmap_read   AUDACCESS_APB_AGCP_CTRL error!\n",
+ 		__func__);
+ 		return 0;
+ 	}
+ 	if (val & dsp_ac->audcp_pmu_sleep_ctrl_deepslp_mask) {
+-		pr_err("%s, agdsp AUDACCESS_PMU_APB_AGCP_DEEP_SLEEP !value : %x\n",
++		pr_err_ratelimited("%s, agdsp AUDACCESS_PMU_APB_AGCP_DEEP_SLEEP !value : %x\n",
+ 		__func__, val);
+ 		return 0;
+ 	}
+@@ -189,14 +197,14 @@ int agdsp_can_access(void)
+ 	ret = regmap_read(dsp_ac->pmu_apb,
+ 		dsp_ac->audcp_pmu_slp_status_reg, &val);
+ 	if (ret != 0) {
+-		pr_err("%s, regmap_read AUDACCESS_REG_SYS_SLP_STATUS!\n",
++		pr_err_ratelimited("%s, regmap_read AUDACCESS_REG_SYS_SLP_STATUS!\n",
+ 		       __func__);
+ 		return 0;
+ 	}
+ 	if ((val & dsp_ac->audcp_pmu_slp_status_mask) >>
+ 		((ffs(dsp_ac->audcp_pmu_slp_status_mask)-1)) !=
+ 		WAKEUP_LOCK_STATE) {
+-		pr_err("%s, BIT_PMU_APB_AGCP_SYS_SLP_STATUS not enable! value: %x\n",
++		pr_err_ratelimited("%s, BIT_PMU_APB_AGCP_SYS_SLP_STATUS not enable! value: %x\n",
+ 		__func__, val);
+ 		return 0;
+ 	}
+@@ -204,14 +212,14 @@ int agdsp_can_access(void)
+ 	ret = regmap_read(dsp_ac->pmu_apb,
+ 		dsp_ac->audcp_pmu_pwr_status4_reg, &val);
+ 	if (ret != 0) {
+-		pr_err("%s, regmap_read AUDACCESS_REG_AGCP_DSP_STATE!\n",
++		pr_err_ratelimited("%s, regmap_read AUDACCESS_REG_AGCP_DSP_STATE!\n",
+ 		       __func__);
+ 		return 0;
+ 	}
+ 	if (((val & dsp_ac->audcp_pmu_sys_slp_state_mask)
+ 		>> (ffs(dsp_ac->audcp_pmu_sys_slp_state_mask)-1))
+ 			!= PD_WAKEUP_STATE) {
+-		pr_err("%s, AUDACCESS_BIT_AGCP_DSP_STATE not enable! value: %x\n",
++		pr_err_ratelimited("%s, AUDACCESS_BIT_AGCP_DSP_STATE not enable! value: %x\n",
+ 		__func__, val);
+ 		return 0;
+ 	}
+@@ -219,14 +227,14 @@ int agdsp_can_access(void)
+ 	ret = regmap_read(dsp_ac->pmu_apb,
+ 		dsp_ac->audcp_pmu_pwr_status3_reg, &val);
+ 	if (ret != 0) {
+-		pr_err("%s, regmap_read   AUDACCESS_REG_AGCP_SYS_STATE!\n",
++		pr_err_ratelimited("%s, regmap_read   AUDACCESS_REG_AGCP_SYS_STATE!\n",
+ 		       __func__);
+ 		return 0;
+ 	}
+ 	if (((val & dsp_ac->audcp_pmu_slp_state_mask)
+ 		>> (ffs(dsp_ac->audcp_pmu_slp_state_mask)-1))
+ 			!= PD_WAKEUP_STATE) {
+-		pr_err("%s, AUDACCESS_BIT_AGCP_SYS_STATE not enable! value: %x\n",
++		pr_err_ratelimited("%s, AUDACCESS_BIT_AGCP_SYS_STATE not enable! value: %x\n",
+ 		__func__, val);
+ 		return 0;
+ 	}
+diff --git a/sound/soc/sprd/unisoc/platform/dmaengine_pcm/sprd-dmaengine-pcm.c b/sound/soc/sprd/unisoc/platform/dmaengine_pcm/sprd-dmaengine-pcm.c
+index b89307e17..ca9e2f76b 100644
+--- a/sound/soc/sprd/unisoc/platform/dmaengine_pcm/sprd-dmaengine-pcm.c
++++ b/sound/soc/sprd/unisoc/platform/dmaengine_pcm/sprd-dmaengine-pcm.c
+@@ -696,6 +696,8 @@ struct sprd_runtime_data {
+ 	struct snd_pcm_substream *tick_substream;
+ 	u64 tick_ns;
+ 	bool ticking;
++	/* see sprd_pcm_pointer(): the position while AGCP is out of reach */
++	snd_pcm_uframes_t last_pointer;
+ };
+ 
+ /*
+@@ -2099,6 +2101,9 @@ static int sprd_pcm_trigger(struct snd_soc_component *component,
+ }
+ 
+ static int debug_pointer_log;
++/* agdsp_pd: 1 when the AP may touch the AGCP domain, read from AON/PMU only */
++extern int agdsp_can_access(void);
++
+ static snd_pcm_uframes_t sprd_pcm_pointer(struct snd_soc_component *component,
+ 				struct snd_pcm_substream *substream)
+ {
+@@ -2116,6 +2121,25 @@ static snd_pcm_uframes_t sprd_pcm_pointer(struct snd_soc_component *component,
+ 	if (rtd->interleaved)
+ 		shift = 0;
+ 	normal_dma_protect_spin_lock(substream);
++	/*
++	 * e5-linux: the position is the live address register of a DMA
++	 * channel inside the AGCP domain.  Read while the AP has no access to
++	 * that domain it is not an error code but a synchronous external abort
++	 * -- a kernel oops, which panic_on_oops turns into a reboot.  That
++	 * happened after almost six hours of an idle desktop (PipeWire's
++	 * data-loop in snd_pcm_sync_ptr, 2026-09-26) with the stream open, so
++	 * holding the domain's runtime-PM reference is not enough to rule it
++	 * out.  agdsp_can_access() reads only always-on AON/PMU registers
++	 * (the AP access enable, AGCP deep sleep and power state), so it is
++	 * safe to ask first; without access the position simply does not move.
++	 */
++	if (!agdsp_can_access()) {
++		normal_dma_protect_spin_unlock(substream);
++		dev_warn_ratelimited(g_dev,
++			"%s: AGCP not accessible, position held at %lu\n",
++			__func__, (unsigned long)rtd->last_pointer);
++		return rtd->last_pointer;
++	}
+ 	if (rtd->dma_chn[0]) {
+ 		now_pointer = sprd_pcm_dma_get_addr(rtd->dma_chn[0],
+ 					rtd->cookie[0], substream);
+@@ -2184,6 +2208,7 @@ static snd_pcm_uframes_t sprd_pcm_pointer(struct snd_soc_component *component,
+ 		x = 0;
+ 	if (debug_pointer_log)
+ 		pr_info("x out:%zx\n", (size_t)x);
++	rtd->last_pointer = x;
+ 	return x;
+ }
+ 

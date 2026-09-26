@@ -86,6 +86,11 @@ FINDINGS.
   is skipped on this board -- watch thermals under real load.  PanVK stays out of
   reach: Mesa has no Valhall v9 backend.
 
+- **Find out what takes AGCP access away under an open stream** (FINDINGS 32).  Since
+  `0016` it no longer crashes the device, but the position then freezes; look for
+  `AGCP not accessible` in the kernel log, and what powered the domain down just
+  before.
+
 ## Next (后续要做)
 
 - **An idle blank does not lock the session.**  After `idle-delay` (300 s) the panel
@@ -117,7 +122,7 @@ FINDINGS.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0015`; slot-b boot; console level 4 on the real root (FINDINGS 29) |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0016`; slot-b boot; console level 4 on the real root (FINDINGS 29) |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |

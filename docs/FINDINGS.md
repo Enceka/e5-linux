@@ -3553,7 +3553,7 @@ flight at a time (20 concurrent status calls: 2 `nmcli` runs).
   Open: call audio (neither side hears anything), and a real CP reset (the module
   reload stands in for it).
 
-## 38. The phone UI on the E5: hotspot switch, dialogs, the black panel, scale (2026-09-26)
+## 38. The phone UI on the E5: hotspot switch, dialogs, the black panel, scale, BT vs Wi-Fi (2026-09-26)
 
 * **The hotspot in Phosh and Settings.**  Both took only `ipv4.method=shared`
   connections for a hotspot, and the E5's `Hotspot` is a port of `br0` with no IPv4
@@ -3581,6 +3581,43 @@ flight at a time (20 concurrent status calls: 2 `nmcli` runs).
   cycles alone would have in time.  Kernel `0025` removes the count (buffers are
   freed with their GEM object; `dma_alloc_wc()` is the real limit).  Verified: 40
   output off/on cycles after boot, the panel on, no allocation failure.
+* **Settings turned the hotspot on four times.**  Its Wi-Fi panel connected the
+  hotspot dialog's "response" handler every time the dialog was opened, so the
+  n-th use activated the connection n times, each activation tearing down the one
+  before.  `gnome-control-center-01` connects it once, when the dialog is built.
+* **The hotspot is what wlan0 does after boot.**  `Hotspot.nmconnection` has
+  `autoconnect-priority=100`: without it a Wi-Fi network joined once from Phosh
+  took wlan0 as a station at the next boot (the driver allows one of
+  station and AP at a time, `#{ managed, AP } <= 1`).
+* **The on-screen keyboard could not be closed.**  Phosh hides it on Escape or a
+  swipe, the back key is BackSpace (section 12.1), and the swipe needs a keyboard
+  that is not in the way of the text field.  The keypad's Menu key (KEY_MENU,
+  keysym `XF86MenuKB`) was free: `phosh-03` binds it as a global accelerator
+  that toggles the keyboard, and it opens and closes it in use.
+* **BT off took Wi-Fi down, and the hotspot with it.**  "Cannot join the network"
+  after boot: the AP was up for a minute, then `sc2355_assert_cmd reason:3`,
+  `hif->cp_assert is 1`, and wlan0 answered nothing until a reboot.  The saved
+  rfkill state had the chip-level `bluetooth` switch (sprd-mtty; hci0 is the other
+  one) blocked, and systemd-rfkill restores it at boot:
+  1. The block ran `stop_marlin(MARLIN_BLUETOOTH)` with ttyBT0 open (btattach) and
+     no "core disable" sent, so it waited the 30 s CP timeout for the BT
+     thread-delete interrupt with the WCN power lock held -- the same stall as the
+     shutdown one in section 35 -- and Wi-Fi's `start_marlin` waited behind it.
+  2. bluetoothd kept using hci0, whose switch was not blocked.  Its HCI Reset went
+     down SDIO to a BT subsystem that was powered off; the transfer never
+     finished (`sdiohal_tx_thre holds xmit_lock`), and four seconds later the
+     Wi-Fi firmware, which shares the bus, asserted.
+  Kernel `0026`: a block sends the core disable first (60 ms, as on a close), and
+  ttyBT0 drops writes while BT is powered off -- hci0's commands time out, which
+  is what they should do with BT off.  Verified: booted with the switch blocked
+  (both orders of btattach and systemd-rfkill came up), blocked it live with the
+  tty open, sent HCI traffic while blocked (`dropping 4 bytes`), unblocked and
+  powered hci0 again: no assert, the AP up throughout.  The block had been saved
+  during the BT bring-up, not by the shell.
+  Still open: the vendor configuration (pskey/RF/core enable, kernel `0018`) is
+  sent once, when btattach attaches, so after any BT power cycle (rfkill, or the
+  shell's BT switch, which blocks both switches) hci0 comes back on the ROM
+  defaults with the placeholder address 27:93:31:14:22:11.
 * **Scale 0.85** after trying 1, 0.9 and 0.85 in use (the text is scaled to 1.25 in
   Settings; section 21 has the measurements).  `wlr-randr` is in the image to change
   it live; it cannot be applied while the panel is blanked.

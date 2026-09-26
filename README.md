@@ -85,7 +85,7 @@ channels that survive a failed boot.
 
 | Path | Contents |
 |---|---|
-| `kernel/` | `build-linux.sh`, `e5-linux.fragment` (Linux additions on top of the device defconfig), `patches/0001-0025` (applied by `build-linux.sh`) |
+| `kernel/` | `build-linux.sh`, `e5-linux.fragment` (Linux additions on top of the device defconfig), `patches/0001-0026` (applied by `build-linux.sh`) |
 | `boot/` | `init` (initramfs), `build-boot-image.py`, `stage-modules.sh` + `module-order.{stock,extra}`, `flash-trial.sh` / `android-boot-linux.sh` (from Android), `flash-from-linux.sh` (from a running e5-linux) |
 | `rootfs/` | `build-rootfs-container.sh` (+ `rootfs-in-container.sh`, the build in a Debian arm64 container), `install-rootfs.sh`, `packages.list`, `configure-rootfs.sh`, `fetch-debian-rootfs.py`, `install-packages.sh`, `pull-wcn-firmware.sh` / `pull-audio-firmware.sh` / `extract-android-vendor.sh` (blobs from your device), `stage-unisoc-cpd.sh`, `overlay/`; the `device-*.sh` and `build-rootfs.sh`/`e5-chroot.sh` paths are the older on-device and qemu builds |
 | `tools/` | `collect-logs.sh`, `e5-telnet.py`, `e5-serial.py`, screenshot/key/touch helpers |

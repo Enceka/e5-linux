@@ -3289,16 +3289,24 @@ hostapd's `bridge=br0` did.  Three details it took:
   `debian:trixie` arm64 container, version `1.52.1-1+e51`), installed and held by
   `install-packages.sh`.  With it: `VHT seg0 index 155`, `cf1=5775 MHz`,
   AP-ENABLED.  `keyfile` wants `channel-width=80` (an integer), not `80mhz`.
-* **Phones saw the AP and could not join.**  Nothing reached wpa_supplicant or the
-  driver (this driver does association in firmware, `device_ap_sme=1`).  The AP
-  was set up with `key_mgmt_suites=0x102`: WPA-PSK *and* WPA-PSK-SHA256, with PMF
-  disabled.  NM 1.52 (and upstream main) appends `WPA-PSK-SHA256` for
-  `key-mgmt=wpa-psk` whenever wpa_supplicant can do PMF, in AP mode too -- AKM
-  00-0F-AC:6 without MFPC, an RSN element its own comment on WPA3 transition mode
-  says not to announce with PMF off.  hostapd had advertised WPA-PSK alone.
-  `network-manager-02-ap-psk-sha256.patch` skips the SHA256 AKM for an AP with PMF
-  disabled: `key_mgmt_suites=0x2`, as under hostapd.  (The package is
-  `1.52.1-1+e5.2` now, the suffix counting the patches.)
+* **Phones saw the AP and could not join: WPS.**  Nothing reached wpa_supplicant
+  or the driver -- this driver associates in firmware (`device_ap_sme=1`), and the
+  firmware turned every station away.  The same radio, channel and bridge under
+  the old hostapd config let the phone straight in, so the two AP setups were
+  diffed from their `-dd` logs.  wpa_supplicant's AP mode had added a **WPS
+  element** to the beacon, probe response and association response
+  (`beacon_ies`/`proberesp_ies`/`assocresp_ies` = `dd .. 00 50 f2 04 ...`), which
+  hostapd never sends; it also left out the Country element and advertised every
+  HT/VHT hardware flag (VHT cap 0x01b07031 against hostapd's 0x00000020).
+  `wps-method=1` (disabled) in the profile makes NM pass `wps_disabled=1`; with
+  that alone the phone associated (`AP-STA-CONNECTED`, handshake completed, DHCP
+  192.168.9.41 on br0).  Also found on the way: NM 1.52 (and upstream main)
+  appends `WPA-PSK-SHA256` to an AP's key_mgmt whenever wpa_supplicant can do PMF,
+  even with PMF disabled -- AKM 00-0F-AC:6 without MFPC (`key_mgmt_suites=0x102`).
+  `network-manager-02-ap-psk-sha256.patch` limits such an AP to WPA-PSK (`0x2`, as
+  hostapd).  It was not what made the phone join -- that was WPS, tested after it
+  -- and is kept because that RSN element is invalid.  (The package is
+  `1.52.1-1+e5.2`, the suffix counting the patches.)
 * **Read-only in /usr/lib.**  The overlay is copied over `/etc` at every boot, so a
   profile there would lose every SSID/password change.  NM treats
   `/usr/lib/NetworkManager/system-connections` as read-only and writes an edited

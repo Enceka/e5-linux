@@ -41,6 +41,11 @@ proto=rsn
 pairwise=ccmp
 group=ccmp
 pmf=1
+# No WPS.  wpa_supplicant's AP mode adds a WPS element to the beacon, probe and
+# association responses unless told otherwise, and this driver associates in
+# firmware (device SME): with that element every phone saw E5-Linux and none
+# could join -- nothing ever reached wpa_supplicant.  hostapd never sent one.
+wps-method=1
 psk=12345678
 
 [bridge-port]

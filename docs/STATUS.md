@@ -142,7 +142,7 @@ FINDINGS.
 | baseband | `unisoc-cpd` (Rust) owns the CP on both sides (FINDINGS 25); on Linux it starts at boot with the bearer, web page on `192.168.9.1:7887` |
 | wifi | `sprd_wlan_combo` on the WCN chip, managed by NetworkManager (wlan0 only): station mode from Phosh's Wi-Fi menu, AP for the hotspot; scans 2.4 and 5 GHz APs; MAC is random per boot |
 | LAN | `br0` 192.168.9.1/24 = usb0 + the AP; IPv4 NAT + the bearer's public IPv6 /64 (SLAAC, stateful firewall); management ports only from the USB port |
-| hotspot | NetworkManager `Hotspot` connection (wpa_supplicant AP mode), port of `br0`, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (centre 5775) with the patched network-manager 1.52.1+e5 (trixie's computes that centre wrong); up at boot (autoconnect), SSID/PSK changes survive the overlay; no AP+STA concurrency |
+| hotspot | NetworkManager `Hotspot` connection (wpa_supplicant AP mode), port of `br0`, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (centre 5775) with the patched network-manager 1.52.1+e5 (trixie's computes that centre wrong); WPS off (with it the firmware-SME driver let no phone associate); a phone joins, gets 192.168.9.x from dnsmasq on br0; up at boot (autoconnect), SSID/PSK changes survive the overlay; no AP+STA concurrency |
 | bluetooth | configured by the kernel like the vendor HAL (0018: pskey/RF/enable; 0021: core disable on close); factory address `FC:B5:85:D0:85:9B`, manufacturer 0x01ec; scans, connects, power-cycles; audio profiles untested |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |

@@ -374,6 +374,13 @@ if [ -n "$rootdir" ]; then
             fi
         done
 
+        # A rootfs built in Docker carried an empty /.dockerenv, which makes
+        # systemd-detect-virt say "docker" and skip every unit with
+        # ConditionVirtualization=!container (ModemManager, systemd-timesyncd,
+        # systemd-pstore, ...).  The build drops it now; this is for a rootfs
+        # that still has it.
+        rm -f /newroot/.dockerenv
+
         # Retired: the hostapd hotspot (e5-hotspot, its retry timer, its start
         # script and configs) gave way to NetworkManager's "Hotspot" connection.
         # The overlay no longer carries them, but a rootfs that predates that

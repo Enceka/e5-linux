@@ -170,6 +170,8 @@ nautilus
 amberol
 showtime
 gnome-sound-recorder
+# output scale/transform changes in a running phoc session (wlr-output-management)
+wlr-randr
 # phone: GNOME Calls (dialer, call history), Chatty (SMS; also XMPP/Matrix via
 # libpurple) and Contacts, the phosh set, over modemmanager -- replaced by the
 # patched build with the unisoc plugin (install-packages.sh), run allowlist-only

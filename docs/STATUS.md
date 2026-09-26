@@ -19,9 +19,11 @@ FINDINGS.
      `snd-soc-sprd-codec-ump9620` (0014), `agdsp_pd` (0010 without its retry).  A
      fresh rootfs gets them from `out_linux` via `configure-rootfs.sh`, which now
      holds the current build.
-  2. **Capture does not work**: the capture DMA never moves (hw_ptr stays 0,
-     `arecord` EIO), on FE_NORMAL_AP01 and on the DSP capture FE alike.  The UCM
-     profile has no capture device until it does.
+  2. **Mic and earpiece are routed, not yet heard** (FINDINGS 33): the DSP capture FE
+     gives an "Internal Microphone" source, and UCM has Earpiece.  Still to do: a
+     voice test into the mic (GNOME Sound Recorder), and listening to the earpiece
+     (`alsaucm -c hw:0 set _verb HiFi set _disdev Speaker set _enadev Earpiece`).
+     The AP capture FE (hw:N,0) still stalls after one period.
   3. `VBC_*_DEV_CHANGE=TYPE_SPK` fails at boot (the DSP is not answering yet at
      that point); Android plays with both at `TYPE_INIT`, so the route leaves them
      alone.  Revisit only if a scene switch needs them.
@@ -40,6 +42,9 @@ FINDINGS.
   page answers on `http://192.168.9.1:7887` (USB port only; no auth).  The page
   is slow on first open: the daemon serves one request at a time (2-6 s each) and the
   page fires about seven at once.
+- **Bluetooth: configured natively since 2026-09-26** (FINDINGS 33.3, kernel 0018:
+  factory address, manufacturer 0x01ec).  Pairing, A2DP and HFP are untested; the two
+  older problems below predate the configuration and need re-checking with it.
 - **Bluetooth: the attach race and the dead scans (open, 2026-09-18).**
   `docs/FINDINGS.md` section 8.7.  What works: the controller initialises, `hci0`
   comes up with the chip's own BD address, bluez reports `Powered: yes`, and scans
@@ -58,12 +63,8 @@ FINDINGS.
      nothing while the adapter still reads `UP RUNNING`, and the init sequence
      right after an attach *is* answered.  Wi-Fi on the same chip keeps working at
      the same moment.
-  The vendor BT configuration Android's HAL uses is in the image
-  (`bt_configure_pskey.ini`, `bt_configure_rf.ini` in `rootfs/overlay/lib/firmware/`),
-  but nothing reads it yet -- Android's BT HAL is what sends it to the chip.  First
-  step is still the clean-boot test (fresh boot, one attach, scan immediately, then
-  again after ten minutes idle) to decide whether the death is our attach sequence
-  or the chip's state.
+  (The vendor configuration these were measured without is sent by the kernel
+  now; re-test before chasing either.)
 - **Shutdown time is unmeasured since NetworkManager went (2026-09-20).**  The last
   measurement (FINDINGS 23) had everything stopped in 1.3 s and then ~32 s of NM
   waiting on WCN device teardown; NM is no longer installed, so measure again before
@@ -122,7 +123,7 @@ FINDINGS.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0016`; slot-b boot; console level 4 on the real root (FINDINGS 29) |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |

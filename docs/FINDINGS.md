@@ -764,8 +764,9 @@ support, so this firmware advertises hold/sniff/park and then refuses to enable
 them.  `hci_req_cmd_complete()` turns that status into a request error -- and the
 request is the one that brings the controller up, so a controller that answers
 `0x12` here can never be powered on, with the controller sitting there fully
-initialized.  Android never meets this: Bluedroid does not send this command at
-all, so the firmware was never asked.
+initialized.  (Correction, 2026-09-26: Android sends it too -- the btsnoop log of
+its BT start has `0x080f` answered with status 0x12 -- and Gabeldorsche simply does
+not treat that answer as fatal.)
 
 `kernel/patches/0008` (`3bd2464a8`) makes that one command non-fatal: it warns
 (`Bluetooth: hci0: controller rejected the default link policy (0x12)`) and clears
@@ -3109,3 +3110,67 @@ this is the designed fallback, not a fault of its own.)
 Trap from the same recovery: `(sleep 2; systemctl reboot) &` over the telnet helper
 never reboots -- the job dies with the session.  Run `systemctl reboot` in the
 foreground and let the connection drop.
+
+## 33. Microphone, earpiece and Bluetooth, from the device's own Android (2026-09-26)
+
+One Android boot supplied the references (kept in `work/android-ref/`, not in the
+repo): the HAL route table `/odm/etc/audio_route.xml`, the parameter XMLs, the eight
+`/odm/firmware/bt_configure_*.ini`, a btsnoop log and the vendor HAL's logcat.
+
+### 33.1 Capture: two routing controls nobody had set
+
+With the codec side alone (mic, bias, PGA, ADC switches) both capture front ends
+streamed and returned `EIO`: the DMA never moved.  The route table's
+`be_switch/codec_c` and `vbc_iis_mux/only_codec_c` add what was missing --
+`ag_iis1_ext_sel_v2 = aud_4ad_iis0_ad0` (the codec ADC into the AGCP's IIS1) and
+`VBC_MUX_ADC0/1/2_IIS_PORT_SEL`; with them FE_CAPTURE_DSP (hw:N,2) delivers.
+`devices/main_mic` sets `ADD0_DATA_MIC13` and inverts the ADC LRCLK: in stereo MIC1 is
+the left channel and the right one is the unpowered MIC3 ADC pinned at -32768 (the
+pinned channel moves with the LRCLK setting, which is how that was told apart); a mono
+open returns MIC1 alone.  Gains from `audio_params/sprd`: ADC 6
+(`adc1_capture_volume`), VBC ADC0 DG 0x11 (`Music/Handsfree/Record`).
+
+The DSP capture scene writes 16-bit samples whatever hw_params say: opened `S24_LE`
+-- which PipeWire picks when the DAI offers it -- each 32-bit word held two samples
+(`0xf9530021`) and the recording was noise at -0.5 dBFS.  `kernel/patches/0017` offers
+S16_LE only.  Result: an "Internal Microphone" PipeWire source (mono, S16) with a
+plausible level.  A speaker-to-mic tone never showed up in the capture, noise did;
+the DSP capture scene's echo cancellation is the likely reason, and a voice test is
+still to be done.  The AP capture FE (hw:N,0) still stalls after one period.
+
+### 33.2 Earpiece
+
+`devices/handset`: the receiver hangs off the HPL driver (`HPL EAR Sel = EAR`,
+`EAR_HPL Mixer DACHPL`, `Earpiece Function`, `VBC_MIXER1_DAC0 = HALF_ADD`,
+`DAHP OS D = 5`).  As a UCM device conflicting with Speaker the EAR/RCV DAPM path
+powers up during playback and the aw87xxx goes Off.  Not yet confirmed by ear.
+
+### 33.3 Bluetooth: the vendor configuration the HAL sends first
+
+The btsnoop log starts at HCI Reset; the vendor HAL (`bt_chip_vendor`,
+`marlin3_lite`, chip id `2/Marlin3Lite_AB_0x2355B001/1`, which selects the `.xpe.ini`
+pair) sends before it, and only logcat and the kernel's mtty dumps show it:
+
+    0xfca0  pskey, 176 bytes   (answer: firmware node 5256, 2015-04-26)
+    0xfca2  RF, 252 bytes
+    0xfca1  00 00 01           core enable
+    0xfcb0/1/2                 super-SSP enable and keys (not reproduced)
+
+The payloads are the ini fields little-endian in file order, each value L/values bytes
+per `/L=` block (rf.ini's BR/EDR channel powers share one block), zero-padded; the
+pskey carries the factory address from `/mnt/vendor/btmac.txt`.
+`tools/sprd-bt-config.py` rebuilds them byte for byte against the logged prefixes.
+Linux's btattach sent none of it, which is why the controller had a placeholder
+address and manufacturer 0.
+
+A userspace prototype (send the three, then attach the same fd to N_HCI) proved it:
+factory address, manufacturer 0x01ec, scans work.  The native form is
+`kernel/patches/0018`: hci_uart's setup recognises the `ttyBT` transport and sends them,
+payloads via `request_firmware` (`sprd/marlin3lite_{pskey,rf}.bin`, written into the
+overlay by `pull-wcn-firmware.sh`).  hci_uart is built in, so this is the first Image
+since 0009 (`work/Image-bt1`, sha256 `03787d59...`; `#4`).  The stock btattach is
+unchanged.  Pairing and audio profiles are not tested yet.
+
+Trap from the prototype: `HCIUARTSETPROTO`/`HCIUARTSETFLAGS` take their argument by
+value; passed a pointer (Python's `fcntl.ioctl(fd, op, struct.pack(...))`) they fail
+with `EPROTONOSUPPORT`/`EINVAL`.

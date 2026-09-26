@@ -3497,12 +3497,53 @@ Debian's 1.24.0 rebuilt by `rootfs/build-patched-debs.sh modemmanager`, held:
   /dev/null: Permission denied" and NetworkManager, bound to it, never started.
   `rootfs-fixups` (before sysinit) logs and restores 0666.
 
-### 37.4 Behaviour to know
+### 37.4 Sending SMS and calls
+
+* **MO SMS: the service centre has to be written once per boot.**  Until then
+  every `+CMGS` answered `+CMS ERROR: 313` ("SIM failure") -- from ModemManager,
+  and from unisoc-cpd's exact sequence replayed on the port with ModemManager
+  stopped; with the SMSC in the PDU or not, national or international
+  destination, GSM7 or UCS2, `CSCS` GSM or UCS2, `+CGSMS` 2 or 3, voice- or
+  data-centric (`+CEUS`).  `AT+CSCA="<smsc>",145` with the very value `+CSCA?`
+  reported (what unisoc-cpd's "re-arm the SMS surface" did, FINDINGS 25.7 of
+  its tree) and the next submit went through, and every submit after it,
+  ModemManager's included.  The plugin writes the SMSC back (verbatim, in
+  whatever charset it read it) right after setting up the SMS format;
+  verified from a fresh boot, delivered.
+* Also measured on the way: `+CIREG` reports registration (`1`) with no
+  capability bits at all, before and after `+CEUS=1` -- this CP does not fill
+  them in, so they say nothing about IMS SMS or voice.
+* **MO VoLTE call through ModemManager**: `ATD<n>;` answers `+CDU: 1` before
+  its `OK`, which ModemManager took for a failed dial ("Unhandled response
+  '+CDU:1'") while the CP placed the call anyway.  With `+CDU:` swallowed:
+  dialing, ringing-out (followed by ModemManager's `+CLCC` polling, every 2 s),
+  hang-up.  The call reports `^DSCI:`, `+SPCALLEXTINFO:`, `+CLCCS:`, `+ECIND:`,
+  `+SIND:` along the way, all swallowed.  There is no audio yet: nothing routes
+  the codec into the CP's voice path (unisoc-cpd never had it either:
+  `voice.supported = false`, the far end heard silence).
+* `sipc_wwan` (kernel `0024`) drops the `<LF>` ModemManager puts after every
+  command on a non-tty port: the vendor RIL ends commands with `<CR>` only,
+  and after `AT+CMGS=<n><CR>` the `<LF>` would be the PDU's first byte.  (It
+  was not what the 313 was.)
+
+### 37.5 UFI-TOOLS piled up hundreds of nmcli
+
+The web page polls its status once a second, and every status ran two or three
+`nmcli` (the hotspot, and since the mobile-data toggle moved to NetworkManager,
+one more).  When NetworkManager was slow to answer, `run_shell`'s timeout killed
+the `sh` wrapper but not the `nmcli` under it: load average 635, 1.2 of 1.4 GiB
+used, telnet and the web page unresponsive, the shell only reachable over the
+USB serial console.  `run_shell` now kills the whole process group on timeout,
+and `SystemControl` reuses a read-only `nmcli` answer for 3 s with one query in
+flight at a time (20 concurrent status calls: 2 `nmcli` runs).
+
+### 37.6 Behaviour to know
 
 * **Chatty deletes the SMS it imports** from the SIM (standard Chatty; they live in
   its history database, `~/.purple/chatty/db/chatty-history.db`).  unisoc-cpd never
   deleted anything.
 * The unisoc-cpd web page (`:7887`) is gone with the daemon; UFI-TOOLS keeps working
   through `e5-at`.
-* Not yet exercised: voice calls (Calls over ModemManager; the vendor RIL's call
-  audio route), sending SMS, and a real CP reset (the module reload stands in for it).
+* Not yet exercised: incoming calls and SMS under ModemManager, Calls and
+  Chatty's own send/dial (only `mmcli` so far), call audio, and a real CP reset
+  (the module reload stands in for it).

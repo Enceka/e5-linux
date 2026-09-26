@@ -44,9 +44,11 @@ FINDINGS.
   static from `+CGCONTRDP`, IPv6 SLAAC, the /64 passed to `br0`).  Phosh shows the
   signal, Chatty lists the SIM's SMS (and deletes them from the SIM once imported),
   UFI-TOOLS reads ModemManager and toggles the `Mobile` connection, `e5-at` goes
-  through `mmcli --command`.  Still open: voice calls (and their audio route),
-  sending SMS from Chatty, a real CP reset (a module reload recovers).  The CP boot
-  is still `modem_control` in the chroot.
+  through `mmcli --command`.  Sending SMS works (the plugin writes the SMSC back
+  once per boot, FINDINGS 37.4) and outgoing VoLTE calls ring out and hang up;
+  still open: call audio (nothing routes the codec into the CP's voice path),
+  incoming calls/SMS and the Calls/Chatty UIs under ModemManager, a real CP reset
+  (a module reload recovers).  The CP boot is still `modem_control` in the chroot.
 - **`/dev/null` and friends come up 0660 on some boots** (FINDINGS 37.3):
   `rootfs-fixups` restores 0666 and logs it ("rootfs-fixups: /dev/null was mode
   660"); the culprit is not found.
@@ -141,7 +143,7 @@ FINDINGS.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`-`0023`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`-`0024`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |

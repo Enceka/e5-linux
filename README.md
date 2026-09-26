@@ -74,7 +74,7 @@ channels that survive a failed boot.
 | Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
 | Bluetooth | ✅ the kernel configures the marlin3 core the way the vendor HAL does (pskey/RF/enable from `request_firmware`, core disable before the tty closes) — factory address `FC:B5:85:D0:85:9B`, scans and connects; kernel `0018`, `0021`, FINDINGS §33.3, §35. ⏳ audio profiles untested |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
-| Modem, data | ✅ **native**: `sipc_wwan` puts the AT channel on a WWAN port (kernel `0022`, `0023`), ModemManager's `unisoc` plugin drives it (patched modemmanager, `rootfs/deb-patches/`), NetworkManager's `Mobile` connection brings the data up on `sipa_eth0` (IPv4 + IPv6); 5G SA, signal in Phosh, SMS in Chatty; the Android `modem_control` still boots the CP from a chroot — FINDINGS §36, §37. ⏳ voice calls, sending SMS |
+| Modem, data | ✅ **native**: `sipc_wwan` puts the AT channel on a WWAN port (kernel `0022`, `0023`), ModemManager's `unisoc` plugin drives it (patched modemmanager, `rootfs/deb-patches/`), NetworkManager's `Mobile` connection brings the data up on `sipa_eth0` (IPv4 + IPv6); 5G SA, signal in Phosh, SMS in Chatty; the Android `modem_control` still boots the CP from a chroot — FINDINGS §36, §37; SMS send/receive, outgoing VoLTE calls ring out. ⏳ call audio (the far end hears silence) |
 | Modem fallback | [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) stays installed, not enabled: `systemctl start unisoc-cpd` takes the modem back from ModemManager (and serves its page on `http://192.168.9.1:7887`) |
 | UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
 | Hotspot | ✅ NetworkManager's `Hotspot` connection (Phosh, UFI-TOOLS, `nmcli`) on 5 GHz ch149 / 80 MHz (patched network-manager, `rootfs/deb-patches/`), SSID `E5-Linux`, a port of `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) — FINDINGS §35 |
@@ -85,7 +85,7 @@ channels that survive a failed boot.
 
 | Path | Contents |
 |---|---|
-| `kernel/` | `build-linux.sh`, `e5-linux.fragment` (Linux additions on top of the device defconfig), `patches/0001-0023` (applied by `build-linux.sh`) |
+| `kernel/` | `build-linux.sh`, `e5-linux.fragment` (Linux additions on top of the device defconfig), `patches/0001-0024` (applied by `build-linux.sh`) |
 | `boot/` | `init` (initramfs), `build-boot-image.py`, `stage-modules.sh` + `module-order.{stock,extra}`, `flash-trial.sh` / `android-boot-linux.sh` (from Android), `flash-from-linux.sh` (from a running e5-linux) |
 | `rootfs/` | `build-rootfs-container.sh` (+ `rootfs-in-container.sh`, the build in a Debian arm64 container), `install-rootfs.sh`, `packages.list`, `configure-rootfs.sh`, `fetch-debian-rootfs.py`, `install-packages.sh`, `pull-wcn-firmware.sh` / `pull-audio-firmware.sh` / `extract-android-vendor.sh` (blobs from your device), `stage-unisoc-cpd.sh`, `overlay/`; the `device-*.sh` and `build-rootfs.sh`/`e5-chroot.sh` paths are the older on-device and qemu builds |
 | `tools/` | `collect-logs.sh`, `e5-telnet.py`, `e5-serial.py`, screenshot/key/touch helpers |

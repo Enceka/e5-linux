@@ -1,0 +1,50 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] sipc: sipc_wwan: commands end at <CR>
+
+ModemManager ends every command it writes to a non-tty port with
+<CR><LF>; the CP takes the <LF> as input for whatever follows -- after
+AT+CMGS=<n><CR>, the first byte of the PDU.  Drop a <LF> that directly
+follows a write's closing <CR>, as the vendor RIL never sends one.
+
+---
+diff --git a/drivers/unisoc_platform/modem/sipc/sipc_wwan.c b/drivers/unisoc_platform/modem/sipc/sipc_wwan.c
+index ea9b57035..9a81ab09e 100644
+--- a/drivers/unisoc_platform/modem/sipc/sipc_wwan.c
++++ b/drivers/unisoc_platform/modem/sipc/sipc_wwan.c
+@@ -28,6 +28,12 @@
+  * back to back for minutes; its RIL and unisoc-cpd space them.  tx_gap_ms
+  * enforces a minimum gap between writes, so no client has to know.
+  *
++ * Commands end at <CR>, as the vendor RIL sends them.  ModemManager ends
++ * everything it writes to a non-tty port with <CR><LF>, and the CP would take
++ * the <LF> as input for whatever comes next -- after AT+CMGS=<n><CR>, the
++ * first byte of the PDU.  A <LF> right after a write's closing <CR> is
++ * dropped; payloads (a PDU ends in Ctrl-Z) are left alone.
++ *
+  * The port exists only while the channel is up.  At boot the module loads
+  * well before the CP has booted, and a port that refuses to open (the channel
+  * is not READY yet) is a port ModemManager probes once, fails and forgets.
+@@ -237,14 +243,23 @@ static int sipc_wwan_write(struct sipc_wwan *sw, struct sk_buff *skb,
+ 	return 0;
+ }
+ 
++static void sipc_wwan_trim_lf(struct sk_buff *skb)
++{
++	if (skb->len >= 2 && skb->data[skb->len - 1] == '\n' &&
++	    skb->data[skb->len - 2] == '\r')
++		skb_trim(skb, skb->len - 1);
++}
++
+ static int sipc_wwan_tx(struct wwan_port *port, struct sk_buff *skb)
+ {
++	sipc_wwan_trim_lf(skb);
+ 	/* AT commands are short; a full 2 KiB ring drains within a second */
+ 	return sipc_wwan_write(wwan_port_get_drvdata(port), skb, HZ);
+ }
+ 
+ static int sipc_wwan_tx_blocking(struct wwan_port *port, struct sk_buff *skb)
+ {
++	sipc_wwan_trim_lf(skb);
+ 	return sipc_wwan_write(wwan_port_get_drvdata(port), skb, -1);
+ }
+ 

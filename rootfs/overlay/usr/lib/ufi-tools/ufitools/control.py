@@ -24,6 +24,8 @@ import shlex
 import shutil
 import socket
 import struct
+import time
+import threading
 from typing import Any, Dict, List, Optional
 
 from .shell import ShellResult, run_shell, systemctl, unit_active
@@ -126,8 +128,15 @@ def _dhcp_range_hint(address: str) -> tuple:
 class SystemControl:
     """Every write this project performs on the local device."""
 
+    #: How long a read-only nmcli answer is reused.  The web UI polls its
+    #: status once a second and each status runs several queries; NetworkManager
+    #: answering them one by one is what once piled hundreds of nmcli up.
+    NMCLI_CACHE_SECONDS = 3.0
+
     def __init__(self, app):
         self.app = app
+        self._nmcli_lock = threading.Lock()
+        self._nmcli_cache: Dict[str, tuple] = {}
 
     @property
     def config(self):
@@ -190,7 +199,19 @@ class SystemControl:
         return str(self.config.get("hotspot_connection") or "Hotspot")
 
     def _nmcli(self, args: str, timeout: float = 15.0) -> ShellResult:
-        return run_shell("nmcli %s" % args, timeout=timeout)
+        read_only = args.startswith(("-t ", "-s -t "))
+        if not read_only:
+            with self._nmcli_lock:
+                self._nmcli_cache.clear()
+            return run_shell("nmcli %s" % args, timeout=timeout)
+        # one query in flight at a time; callers arriving meanwhile get its answer
+        with self._nmcli_lock:
+            hit = self._nmcli_cache.get(args)
+            if hit and time.monotonic() - hit[0] < self.NMCLI_CACHE_SECONDS:
+                return hit[1]
+            result = run_shell("nmcli %s" % args, timeout=timeout)
+            self._nmcli_cache[args] = (time.monotonic(), result)
+            return result
 
     def hotspot_active(self) -> bool:
         out = self._nmcli("-t -f NAME connection show --active", timeout=5.0).content

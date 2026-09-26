@@ -67,23 +67,31 @@ def run_shell(command: str, timeout: float = DEFAULT_TIMEOUT, cwd: Optional[str]
     if env:
         run_env.update({k: str(v) for k, v in env.items()})
     try:
-        completed = subprocess.run(
+        proc = subprocess.Popen(
             [SHELL, "-c", command],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             cwd=cwd,
             env=run_env,
-            timeout=timeout,
             start_new_session=True,
         )
-    except subprocess.TimeoutExpired as exc:
-        partial = (exc.stdout or b"").decode("utf-8", "replace")
-        return ShellResult(False, partial + "\n[超时 %ss]" % timeout, 124)
     except OSError as exc:
         return ShellResult(False, "执行失败: %s" % exc, 1)
-    output = completed.stdout.decode("utf-8", "replace")
-    return ShellResult(completed.returncode == 0, output, completed.returncode)
+    try:
+        stdout, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # the whole session: killing only the shell left its children (nmcli)
+        # running, and a UI polling once a second piled hundreds of them up
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        stdout, _ = proc.communicate()
+        partial = (stdout or b"").decode("utf-8", "replace")
+        return ShellResult(False, partial + "\n[超时 %ss]" % timeout, 124)
+    output = stdout.decode("utf-8", "replace")
+    return ShellResult(proc.returncode == 0, output, proc.returncode)
 
 
 def run_shell_ok(command: str, timeout: float = 10.0) -> str:

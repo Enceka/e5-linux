@@ -791,8 +791,8 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.h b/src/plugins/unisoc
 +#endif /* MM_BROADBAND_BEARER_UNISOC_H */
 diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/mm-broadband-modem-unisoc.c
 --- a/src/plugins/unisoc/mm-broadband-modem-unisoc.c	1970-01-01 08:00:00
-+++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c	2026-09-26 19:44:18
-@@ -0,0 +1,784 @@
++++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c	2026-09-26 21:39:07
+@@ -0,0 +1,1125 @@
 +/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 +/*
 + * This program is free software; you can redistribute it and/or modify
@@ -815,7 +815,9 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 + *    +CGDCONT=? lists "IP" only although its contexts are IPV4V6.
 + *  - signal from +CESQ, NR fields included; +CSQ answers 255 ("unknown") on
 + *    NR.  The modem also sends +CSQ and +CESQ unsolicited every few seconds:
-+ *    +CESQ updates the signal quality, +CSQ is swallowed.
++ *    +CESQ updates the signal quality, +CSQ is swallowed.  The LTE SINR, which
++ *    +CESQ lacks, and the cell info (serving and neighbour cells) come from
++ *    the vendor engineering-mode query +SPENGMD.
 + *  - SMS submit needs the service centre written once per boot: until
 + *    AT+CSCA="<smsc>",<type> is sent (with the very value +CSCA? reports),
 + *    every +CMGS answers "+CMS ERROR: 313", whoever sends it and however the
@@ -857,6 +859,7 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +typedef struct {
 +    gdouble lte_rsrq;
 +    gdouble lte_rsrp;
++    gdouble lte_sinr;
 +    gdouble nr_rsrq;
 +    gdouble nr_rsrp;
 +    gdouble nr_sinr;
@@ -912,6 +915,7 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +    for (i = 0; i < G_N_ELEMENTS (v); i++)
 +        v[i] = (i < g_strv_length (f)) ? (guint) strtoul (g_strstrip (f[i]), NULL, 10) : 255;
 +
++    out->lte_sinr = CESQ_NONE; /* not in +CESQ: from +SPENGMD */
 +    out->lte_rsrq = v[4] <= 34  ? -20.0 + v[4] * 0.5 : CESQ_NONE;
 +    out->lte_rsrp = v[5] <= 97  ? -141.0 + v[5]      : CESQ_NONE;
 +    out->nr_rsrq  = v[6] <= 127 ? -43.0 + v[6] * 0.5 : CESQ_NONE;
@@ -1000,6 +1004,314 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +}
 +
 +/*****************************************************************************/
++/* Cell info (Modem interface), from the engineering-mode query +SPENGMD.
++ *
++ * AT+SPENGMD=0,<page>,<item> answers one line of fields separated by "-",
++ * each field a number or a ","-separated list; a negative number simply
++ * follows its separator ("-9963--1209" is -9963 and -1209).  Levels are in
++ * hundredths of a dB(m).  The pages read here:
++ *
++ *   0,14,1  NR serving cell: 0 band, 1 NR-ARFCN, 2 PCI, 3 RSRP, 4 RSRQ,
++ *           7 bandwidth (MHz), 8 gNB id, 9 NCI (low 32 bits), 15 SINR
++ *   0,14,2  NR neighbours, one list per field: band, NR-ARFCN, PCI, RSRP,
++ *           RSRQ, SINR
++ *   0,6,0   LTE serving cell: 0 band, 1 EARFCN, 2 PCI, 3 RSRP, 4 RSRQ,
++ *           7 bandwidth (0-5: 1.4, 3, 5, 10, 15, 20 MHz), 10 eNB id,
++ *           11 cell id, 29 TAC
++ *   0,0,6   LTE physical layer: 2 SINR (for the Signal interface: an LTE
++ *           cell info has no SINR)
++ *   0,6,6   LTE neighbours, one field per cell: EARFCN, PCI, RSRP, RSRQ, ...
++ *
++ * A RAT the modem is not on answers zeros.  Measured on NR SA: the NCI
++ * matches the 36-bit one +C5GREG reports once the gNB id's upper bits are
++ * put back (gNB id << 12, a 24-bit gNB id).  The LTE pages follow the layout
++ * UFI's own firmware tools read them with, and have not been seen on LTE
++ * here (the handset camps on NR SA).
++ */
++
++typedef enum {
++    SPENGMD_NR_SERVING,
++    SPENGMD_NR_NEIGHBOURS,
++    SPENGMD_LTE_SERVING,
++    SPENGMD_LTE_NEIGHBOURS,
++    SPENGMD_LAST
++} SpengmdPage;
++
++static const gchar *spengmd_commands[SPENGMD_LAST] = {
++    [SPENGMD_NR_SERVING]     = "+SPENGMD=0,14,1",
++    [SPENGMD_NR_NEIGHBOURS]  = "+SPENGMD=0,14,2",
++    [SPENGMD_LTE_SERVING]    = "+SPENGMD=0,6,0",
++    [SPENGMD_LTE_NEIGHBOURS] = "+SPENGMD=0,6,6",
++};
++
++typedef struct {
++    guint  page;
++    gchar *replies[SPENGMD_LAST];
++} CellInfoContext;
++
++static void
++cell_info_context_free (CellInfoContext *ctx)
++{
++    guint i;
++
++    for (i = 0; i < SPENGMD_LAST; i++)
++        g_free (ctx->replies[i]);
++    g_free (ctx);
++}
++
++/* The "-"-separated fields of a +SPENGMD reply */
++static GStrv
++spengmd_fields (const gchar *reply)
++{
++    GPtrArray   *fields;
++    GString     *cur;
++    gboolean     value_start = TRUE;
++    const gchar *p;
++
++    if (!reply)
++        return NULL;
++    while (*reply == '\r' || *reply == '\n' || *reply == ' ')
++        reply++;
++    if (!*reply)
++        return NULL;
++
++    fields = g_ptr_array_new ();
++    cur = g_string_new (NULL);
++    for (p = reply; *p && *p != '\r' && *p != '\n'; p++) {
++        if (*p == '-' && !value_start) {
++            g_ptr_array_add (fields, g_string_free (cur, FALSE));
++            cur = g_string_new (NULL);
++            value_start = TRUE;
++            continue;
++        }
++        g_string_append_c (cur, *p);
++        value_start = (*p == ',');
++    }
++    g_ptr_array_add (fields, g_string_free (cur, FALSE));
++    g_ptr_array_add (fields, NULL);
++    return (GStrv) g_ptr_array_free (fields, FALSE);
++}
++
++/* Value <i> of field <n> */
++static gboolean
++spengmd_value (GStrv f, guint n, guint i, gint64 *out)
++{
++    g_auto(GStrv) list = NULL;
++    gchar        *end = NULL;
++
++    if (!f || n >= g_strv_length (f))
++        return FALSE;
++    list = g_strsplit (f[n], ",", -1);
++    if (i >= g_strv_length (list) || !list[i][0])
++        return FALSE;
++    *out = g_ascii_strtoll (list[i], &end, 10);
++    return end && *end == '\0';
++}
++
++static guint
++spengmd_count (GStrv f, guint n)
++{
++    g_auto(GStrv) list = NULL;
++
++    if (!f || n >= g_strv_length (f))
++        return 0;
++    list = g_strsplit (f[n], ",", -1);
++    return g_strv_length (list);
++}
++
++static void
++cell_info_list_free (GList *list)
++{
++    g_list_free_full (list, g_object_unref);
++}
++
++static MMCellInfo *
++nr_cell_new (gboolean serving, gint64 arfcn, gint64 pci, gint64 rsrp, gint64 rsrq)
++{
++    MMCellInfo       *info;
++    g_autofree gchar *pci_str = NULL;
++
++    info = mm_cell_info_nr5g_new_from_dictionary (NULL);
++    mm_cell_info_set_serving (info, serving);
++    mm_cell_info_nr5g_set_nrarfcn (MM_CELL_INFO_NR5G (info), (guint) arfcn);
++    pci_str = g_strdup_printf ("%X", (guint) pci);
++    mm_cell_info_nr5g_set_physical_ci (MM_CELL_INFO_NR5G (info), pci_str);
++    mm_cell_info_nr5g_set_rsrp (MM_CELL_INFO_NR5G (info), rsrp / 100.0);
++    mm_cell_info_nr5g_set_rsrq (MM_CELL_INFO_NR5G (info), rsrq / 100.0);
++    return info;
++}
++
++static MMCellInfo *
++lte_cell_new (gboolean serving, gint64 earfcn, gint64 pci, gint64 rsrp, gint64 rsrq)
++{
++    MMCellInfo       *info;
++    g_autofree gchar *pci_str = NULL;
++
++    info = mm_cell_info_lte_new_from_dictionary (NULL);
++    mm_cell_info_set_serving (info, serving);
++    mm_cell_info_lte_set_earfcn (MM_CELL_INFO_LTE (info), (guint) earfcn);
++    pci_str = g_strdup_printf ("%X", (guint) pci);
++    mm_cell_info_lte_set_physical_ci (MM_CELL_INFO_LTE (info), pci_str);
++    mm_cell_info_lte_set_rsrp (MM_CELL_INFO_LTE (info), rsrp / 100.0);
++    mm_cell_info_lte_set_rsrq (MM_CELL_INFO_LTE (info), rsrq / 100.0);
++    return info;
++}
++
++static GList *
++cell_info_build (CellInfoContext *ctx)
++{
++    g_auto(GStrv) nr = spengmd_fields (ctx->replies[SPENGMD_NR_SERVING]);
++    g_auto(GStrv) nrn = spengmd_fields (ctx->replies[SPENGMD_NR_NEIGHBOURS]);
++    g_auto(GStrv) lte = spengmd_fields (ctx->replies[SPENGMD_LTE_SERVING]);
++    g_auto(GStrv) lten = spengmd_fields (ctx->replies[SPENGMD_LTE_NEIGHBOURS]);
++    GList        *list = NULL;
++    gboolean      have_lte = FALSE;
++    gint64        band, arfcn, pci, rsrp, rsrq, v, w;
++    guint         i, n;
++
++    if (spengmd_value (lte, 0, 0, &band) && band > 0 &&
++        spengmd_value (lte, 1, 0, &arfcn) && spengmd_value (lte, 2, 0, &pci) &&
++        spengmd_value (lte, 3, 0, &rsrp) && spengmd_value (lte, 4, 0, &rsrq)) {
++        static const guint lte_mhz10[] = { 14, 30, 50, 100, 150, 200 };
++        MMCellInfo       *info;
++
++        info = lte_cell_new (TRUE, arfcn, pci, rsrp, rsrq);
++        mm_cell_info_lte_set_serving_cell_type (MM_CELL_INFO_LTE (info), MM_SERVING_CELL_TYPE_PCELL);
++        if (spengmd_value (lte, 7, 0, &v) && v >= 0 && v < (gint64) G_N_ELEMENTS (lte_mhz10))
++            mm_cell_info_lte_set_bandwidth (MM_CELL_INFO_LTE (info), lte_mhz10[v] * 100000);
++        if (spengmd_value (lte, 10, 0, &v) && spengmd_value (lte, 11, 0, &w) && v > 0) {
++            g_autofree gchar *ci = g_strdup_printf ("%X", (guint) ((v << 8) | (w & 0xff)));
++
++            mm_cell_info_lte_set_ci (MM_CELL_INFO_LTE (info), ci);
++        }
++        if (spengmd_value (lte, 29, 0, &v) && v > 0) {
++            g_autofree gchar *tac = g_strdup_printf ("%X", (guint) v);
++
++            mm_cell_info_lte_set_tac (MM_CELL_INFO_LTE (info), tac);
++        }
++        list = g_list_append (list, info);
++        have_lte = TRUE;
++    }
++
++    if (spengmd_value (nr, 0, 0, &band) && band > 0 &&
++        spengmd_value (nr, 1, 0, &arfcn) && spengmd_value (nr, 2, 0, &pci) &&
++        spengmd_value (nr, 3, 0, &rsrp) && spengmd_value (nr, 4, 0, &rsrq)) {
++        MMCellInfo *info;
++
++        info = nr_cell_new (TRUE, arfcn, pci, rsrp, rsrq);
++        /* NR under an LTE anchor is EN-DC's secondary cell group */
++        mm_cell_info_nr5g_set_serving_cell_type (MM_CELL_INFO_NR5G (info),
++                                                 have_lte ? MM_SERVING_CELL_TYPE_PSCELL : MM_SERVING_CELL_TYPE_PCELL);
++        if (spengmd_value (nr, 15, 0, &v))
++            mm_cell_info_nr5g_set_sinr (MM_CELL_INFO_NR5G (info), v / 100.0);
++        if (spengmd_value (nr, 7, 0, &v) && v > 0)
++            mm_cell_info_nr5g_set_bandwidth (MM_CELL_INFO_NR5G (info), (guint) (v * 1000000));
++        if (spengmd_value (nr, 9, 0, &v) && v > 0) {
++            guint64           nci = (guint64) v & 0xffffffff;
++            g_autofree gchar *ci = NULL;
++
++            /* the upper 4 of the 36 bits, from a 24-bit gNB id */
++            if (spengmd_value (nr, 8, 0, &w) && w > 0 && ((((guint64) w << 12) & 0xfffff000) == (nci & 0xfffff000)))
++                nci |= ((guint64) w << 12) & G_GUINT64_CONSTANT (0xf00000000);
++            ci = g_strdup_printf ("%" G_GINT64_MODIFIER "X", nci);
++            mm_cell_info_nr5g_set_ci (MM_CELL_INFO_NR5G (info), ci);
++        }
++        list = g_list_append (list, info);
++    }
++
++    /* the serving cell shows up among the neighbours too; that is kept, as
++     * the modem reports it */
++    n = spengmd_count (nrn, 1);
++    for (i = 0; i < n; i++) {
++        MMCellInfo *info;
++
++        if (!spengmd_value (nrn, 1, i, &arfcn) || !spengmd_value (nrn, 2, i, &pci) ||
++            !spengmd_value (nrn, 3, i, &rsrp) || !spengmd_value (nrn, 4, i, &rsrq) ||
++            (arfcn == 0 && pci == 0 && rsrp == 0))
++            continue;
++        info = nr_cell_new (FALSE, arfcn, pci, rsrp, rsrq);
++        if (spengmd_value (nrn, 5, i, &v))
++            mm_cell_info_nr5g_set_sinr (MM_CELL_INFO_NR5G (info), v / 100.0);
++        list = g_list_append (list, info);
++    }
++
++    for (i = 0; lten && lten[i]; i++) {
++        MMCellInfo *info;
++
++        if (!spengmd_value (lten, i, 0, &arfcn) || !spengmd_value (lten, i, 1, &pci) ||
++            !spengmd_value (lten, i, 2, &rsrp) || !spengmd_value (lten, i, 3, &rsrq) ||
++            (arfcn == 0 && pci == 0 && rsrp == 0))
++            continue;
++        info = lte_cell_new (FALSE, arfcn, pci, rsrp, rsrq);
++        list = g_list_append (list, info);
++    }
++
++    return list;
++}
++
++static GList *
++modem_get_cell_info_finish (MMIfaceModem  *self,
++                            GAsyncResult  *res,
++                            GError       **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void cell_info_step (GTask *task);
++
++static void
++spengmd_ready (MMBaseModem  *self,
++               GAsyncResult *res,
++               GTask        *task)
++{
++    CellInfoContext  *ctx = g_task_get_task_data (task);
++    const gchar      *response;
++    g_autoptr(GError) error = NULL;
++
++    response = mm_base_modem_at_command_finish (self, res, &error);
++    if (response)
++        ctx->replies[ctx->page] = g_strdup (response);
++    else
++        mm_obj_dbg (self, "no reply to AT%s: %s", spengmd_commands[ctx->page], error->message);
++    ctx->page++;
++    cell_info_step (task);
++}
++
++static void
++cell_info_step (GTask *task)
++{
++    CellInfoContext *ctx = g_task_get_task_data (task);
++    GList           *list;
++
++    if (ctx->page < SPENGMD_LAST) {
++        mm_base_modem_at_command (MM_BASE_MODEM (g_task_get_source_object (task)),
++                                  spengmd_commands[ctx->page], 3, FALSE,
++                                  (GAsyncReadyCallback) spengmd_ready, task);
++        return;
++    }
++
++    list = cell_info_build (ctx);
++    if (!list)
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                                 "No cell info in the +SPENGMD replies");
++    else
++        g_task_return_pointer (task, list, (GDestroyNotify) cell_info_list_free);
++    g_object_unref (task);
++}
++
++static void
++modem_get_cell_info (MMIfaceModem        *self,
++                     GAsyncReadyCallback  callback,
++                     gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    g_task_set_task_data (task, g_new0 (CellInfoContext, 1), (GDestroyNotify) cell_info_context_free);
++    cell_info_step (task);
++}
++
++/*****************************************************************************/
 +/* Extended signal (Signal interface) */
 +
 +static gboolean
@@ -1026,6 +1338,8 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +            mm_signal_set_rsrp (*lte, c->lte_rsrp);
 +            if (c->lte_rsrq != CESQ_NONE)
 +                mm_signal_set_rsrq (*lte, c->lte_rsrq);
++            if (c->lte_sinr != CESQ_NONE)
++                mm_signal_set_snr (*lte, c->lte_sinr);
 +        }
 +    }
 +    if (nr5g) {
@@ -1052,6 +1366,22 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +}
 +
 +static void
++lte_phy_ready (MMBaseModem  *self,
++               GAsyncResult *res,
++               GTask        *task)
++{
++    Cesq          *c = g_task_get_task_data (task);
++    g_auto(GStrv)  f = NULL;
++    gint64         sinr;
++
++    f = spengmd_fields (mm_base_modem_at_command_finish (self, res, NULL));
++    if (spengmd_value (f, 2, 0, &sinr))
++        c->lte_sinr = sinr / 100.0;
++    g_task_return_pointer (task, g_memdup2 (c, sizeof (Cesq)), g_free);
++    g_object_unref (task);
++}
++
++static void
 +cesq_values_ready (MMBaseModem  *self,
 +                   GAsyncResult *res,
 +                   GTask        *task)
@@ -1063,8 +1393,17 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +    if (!cesq_query_finish (self, res, c, &error)) {
 +        g_free (c);
 +        g_task_return_error (task, error);
-+    } else
-+        g_task_return_pointer (task, c, g_free);
++        g_object_unref (task);
++        return;
++    }
++    /* the LTE SINR, which +CESQ does not have */
++    if (c->lte_rsrp != CESQ_NONE) {
++        g_task_set_task_data (task, c, g_free);
++        mm_base_modem_at_command (self, "+SPENGMD=0,0,6", 3, FALSE,
++                                  (GAsyncReadyCallback) lte_phy_ready, task);
++        return;
++    }
++    g_task_return_pointer (task, c, g_free);
 +    g_object_unref (task);
 +}
 +
@@ -1538,6 +1877,8 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +    iface->load_supported_ip_families_finish = modem_load_supported_ip_families_finish;
 +    iface->load_signal_quality = modem_load_signal_quality;
 +    iface->load_signal_quality_finish = modem_load_signal_quality_finish;
++    iface->get_cell_info = modem_get_cell_info;
++    iface->get_cell_info_finish = modem_get_cell_info_finish;
 +    iface->modem_power_up = modem_power_up;
 +    iface->modem_power_up_finish = modem_power_finish;
 +    iface->modem_power_down = modem_power_down;

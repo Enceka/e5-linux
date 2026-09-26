@@ -117,6 +117,94 @@ def _mm_network_type(techs: str) -> str:
     return ""
 
 
+#: The web UI's names for the serving cell, per RAT.
+_NR_FIELDS = {"band": "Nr_bands", "fcn": "Nr_fcn", "pci": "Nr_pci", "cell_id": "Nr_cell_id",
+              "bandwidth": "Nr_bands_widths", "rsrp": "Z5g_rsrp", "rsrq": "nr_rsrq",
+              "snr": "Nr_snr"}
+_LTE_FIELDS = {"band": "Lte_bands", "fcn": "Lte_fcn", "pci": "Lte_pci", "cell_id": "Lte_cell_id",
+               "bandwidth": "Lte_bands_widths", "rsrp": "lte_rsrp", "rsrq": "lte_rsrq",
+               "snr": "Lte_snr"}
+
+#: LTE downlink EARFCN ranges (36.101 table 5.7.3-1): one band each.
+_LTE_BANDS = (
+    (1, 0, 599), (2, 600, 1199), (3, 1200, 1949), (4, 1950, 2399), (5, 2400, 2649),
+    (7, 2750, 3449), (8, 3450, 3799), (12, 5010, 5179), (13, 5180, 5279), (14, 5280, 5379),
+    (17, 5730, 5849), (18, 5850, 5999), (19, 6000, 6149), (20, 6150, 6449), (21, 6450, 6599),
+    (25, 8040, 8689), (26, 8690, 9039), (28, 9210, 9659), (29, 9660, 9769), (30, 9770, 9869),
+    (32, 9920, 10359), (34, 36200, 36349), (38, 37750, 38249), (39, 38250, 38649),
+    (40, 38650, 39649), (41, 39650, 41589), (42, 41590, 43589), (43, 43590, 45589),
+    (46, 46790, 54539), (48, 55240, 56739), (66, 66436, 67335), (71, 68586, 68935),
+)
+
+#: NR downlink NR-ARFCN ranges (38.101-1/-2 table 5.4.2.3-1).  NR bands overlap;
+#: the first match wins, and the bands used in China come first (n78 before
+#: n77, n41 before n90, n28 before the US 700 MHz bands) -- the same order as
+#: the patched Settings' modem details.
+_NR_BANDS = (
+    (78, 620000, 653333), (79, 693334, 733333), (41, 499200, 537999), (28, 151600, 160600),
+    (1, 422000, 434000), (3, 361000, 376000), (5, 173800, 178800), (8, 185000, 192000),
+    (7, 524000, 538000), (20, 158200, 164200), (38, 514000, 524000), (39, 376000, 384000),
+    (40, 460000, 480000), (34, 402000, 405000), (2, 386000, 398000), (25, 386000, 399000),
+    (66, 422000, 440000), (65, 422000, 440000), (70, 399000, 404000), (71, 123400, 130400),
+    (12, 145800, 149200), (13, 149200, 151200), (14, 151600, 153600), (18, 172000, 175000),
+    (26, 171800, 178800), (29, 143400, 145600), (30, 470000, 472000), (46, 743334, 795000),
+    (48, 636667, 646666), (50, 286400, 303400), (51, 285400, 286400), (53, 496700, 499000),
+    (74, 295000, 303600), (77, 620000, 680000), (90, 499200, 538000), (96, 795000, 875000),
+    (257, 2054166, 2104165), (258, 2016667, 2070832), (260, 2229166, 2279165),
+    (261, 2070833, 2084999),
+)
+
+
+def _band(table, channel: int) -> str:
+    for band, first, last in table:
+        if first <= channel <= last:
+            return str(band)
+    return ""
+
+
+def _level(value: str) -> str:
+    """A dB/dBm level as the UI shows it: one decimal, none when whole."""
+    number = float(value)
+    return str(int(number)) if number == int(number) else "%.1f" % number
+
+
+def _parse_mm_cell(text: str) -> Dict[str, Any]:
+    """One entry of ``mmcli --get-cell-info``: "cell type: 5gnr, serving: yes, ..."."""
+    fields = {}
+    for part in text.split(","):
+        key, sep, value = part.partition(":")
+        if sep:
+            fields[key.strip()] = value.strip()
+    kind = fields.get("cell type")
+    if kind not in ("5gnr", "lte"):
+        return {}
+    nr = kind == "5gnr"
+    fcn = fields.get("nrarfcn" if nr else "earfcn", "")
+    try:
+        channel = int(fcn)
+    except ValueError:
+        return {}
+    cell: Dict[str, Any] = {"nr": nr, "serving": fields.get("serving") == "yes", "fcn": fcn,
+                            "band": _band(_NR_BANDS if nr else _LTE_BANDS, channel)}
+    # ModemManager reports the PCI in hexadecimal; networks quote it in decimal
+    try:
+        cell["pci"] = str(int(fields.get("physical ci", ""), 16))
+    except ValueError:
+        cell["pci"] = ""
+    cell["cell_id"] = fields.get("ci", "")
+    try:
+        hz = int(fields.get("bandwidth", ""))
+        cell["bandwidth"] = "%gMHz" % (hz / 1e6) if hz else ""
+    except ValueError:
+        cell["bandwidth"] = ""
+    for key, name in (("rsrp", "rsrp"), ("rsrq", "rsrq"), ("snr", "sinr")):
+        try:
+            cell[key] = _level(fields[name])
+        except (KeyError, ValueError):
+            cell[key] = ""
+    return cell
+
+
 def modemmanager_snapshot() -> Dict[str, str]:
     """The fields :func:`derive` produces, read from ModemManager."""
     modem = _mmcli("-m", "any").get("modem", {})
@@ -143,21 +231,37 @@ def modemmanager_snapshot() -> Dict[str, str]:
         raw["imsi"] = _mm_value(props.get("imsi"))
         raw["iccid"] = _mm_value(props.get("iccid"))
 
-    # extended signal: ModemManager polls it only once a refresh rate is set
+    # extended signal: ModemManager polls it only once a refresh rate is set.
+    # NR and LTE each keep their own fields (EN-DC has both).
     signal = _mmcli("-m", "any", "--signal-get").get("modem", {}).get("signal", {})
     if not _mm_value((signal.get("refresh") or {}).get("rate")) or \
             _mm_value((signal.get("refresh") or {}).get("rate")) == "0":
         _mmcli("-m", "any", "--signal-setup=60")
-    for tech in ("5g", "lte"):
+    for tech, names in (("5g", _NR_FIELDS), ("lte", _LTE_FIELDS)):
         block = signal.get(tech) or {}
-        rsrp = _mm_value(block.get("rsrp"))
-        if rsrp:
-            raw["lte_rsrp"] = str(int(float(rsrp)))
-            raw["Z5g_rsrp"] = raw["lte_rsrp"]
-            rsrq = _mm_value(block.get("rsrq"))
-            if rsrq:
-                raw["lte_rsrq"] = "%.1f" % float(rsrq)
-            break
+        for key in ("rsrp", "rsrq", "snr"):
+            value = _mm_value(block.get(key))
+            if value:
+                raw[names[key]] = _level(value)
+
+    # the serving and neighbour cells (ModemManager's cell info)
+    cells = _mmcli("-m", "any", "--get-cell-info").get("modem", {}).get("generic", {})
+    neighbours = []
+    for text in cells.get("cell-info") or []:
+        cell = _parse_mm_cell(text)
+        if not cell:
+            continue
+        if cell["serving"]:
+            names = _NR_FIELDS if cell["nr"] else _LTE_FIELDS
+            for key in ("band", "fcn", "pci", "cell_id", "bandwidth", "rsrp", "rsrq", "snr"):
+                if cell.get(key):
+                    raw[names[key]] = cell[key]
+        else:
+            neighbours.append({"band": ("N" if cell["nr"] else "B") + cell["band"] if cell["band"] else "",
+                               "earfcn": cell["fcn"], "pci": cell["pci"], "rsrp": cell["rsrp"],
+                               "rsrq": cell["rsrq"], "sinr": cell.get("snr", "")})
+    if neighbours:
+        raw["neighbor_cells"] = json.dumps(neighbours)
 
     for path in generic.get("bearers") or []:
         bearer = _mmcli("-b", path).get("bearer", {})
@@ -168,7 +272,7 @@ def modemmanager_snapshot() -> Dict[str, str]:
         break
 
     out = {key: value for key, value in raw.items() if value}
-    bar = _signal_bar(out.get("lte_rsrp", ""))
+    bar = _signal_bar(out.get("Z5g_rsrp", "") or out.get("lte_rsrp", ""))
     if bar:
         out["network_signalbar"] = bar
     return out

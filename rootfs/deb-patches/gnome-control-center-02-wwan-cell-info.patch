@@ -1,0 +1,552 @@
+Description: wwan: the modem details show the serving and neighbour cells
+ Modem Details showed the operator, the access technology and a signal
+ percentage, nothing of the cell the modem is on.  Two groups are added,
+ filled in from ModemManager's cell info every few seconds while the dialog
+ is shown: the serving cell -- band, channel, PCI, cell id, TAC, bandwidth,
+ RSRP, RSRQ, SINR -- and the neighbour cells.  ModemManager reports the
+ channel, not the band: the band is looked up from it (NR bands overlap; the
+ ones used in China win), the TAC of an NR cell comes from the 3GPP location,
+ and an LTE cell's SINR from the Signal interface.
+Author: e5-linux
+Forwarded: no
+
+--- a/panels/wwan/cc-wwan-device.h
++++ b/panels/wwan/cc-wwan-device.h
+@@ -145,6 +145,7 @@
+ gboolean       cc_wwan_device_is_nm_device            (CcWwanDevice        *self,
+                                                        GObject             *nm_device);
+ const gchar   *cc_wwan_device_get_path                (CcWwanDevice        *self);
++MMObject      *cc_wwan_device_get_mm_object           (CcWwanDevice        *self);
+ CcWwanData    *cc_wwan_device_get_data                (CcWwanDevice        *self);
+ gboolean       cc_wwan_device_pin_valid               (const gchar         *password,
+                                                        MMModemLock          lock);
+--- a/panels/wwan/cc-wwan-device.c
++++ b/panels/wwan/cc-wwan-device.c
+@@ -1437,6 +1437,14 @@
+   g_return_val_if_fail (CC_IS_WWAN_DEVICE (self), "");
+ 
+   return mm_object_get_path (self->mm_object);
++}
++
++MMObject *
++cc_wwan_device_get_mm_object (CcWwanDevice *self)
++{
++  g_return_val_if_fail (CC_IS_WWAN_DEVICE (self), NULL);
++
++  return self->mm_object;
+ }
+ 
+ CcWwanData *
+--- a/panels/wwan/cc-wwan-details-dialog.c
++++ b/panels/wwan/cc-wwan-details-dialog.c
+@@ -26,6 +26,7 @@
+ #define G_LOG_DOMAIN "cc-wwan-details-dialog"
+ 
+ #include <config.h>
++#include <string.h>
+ #include <glib/gi18n.h>
+ #include <libmm-glib.h>
+ 
+@@ -51,6 +52,14 @@
+   GtkLabel     *own_numbers;
+   GtkLabel     *signal_strength;
+ 
++  GtkWidget    *cell_group;
++  GtkGrid      *cell_grid;
++  GtkWidget    *neighbour_group;
++  GtkGrid      *neighbour_grid;
++  GtkSizeGroup *label_size_group;
++  guint         cell_info_timeout_id;
++  GCancellable *cell_info_cancellable;
++
+   CcWwanDevice *device;
+ };
+ 
+@@ -148,9 +157,414 @@
+   str = cc_wwan_device_get_identifier (self->device);
+   if (str)
+     gtk_label_set_label (self->device_identifier, str);
++}
++
++/*
++ * The serving and neighbour cells, from ModemManager's cell info, refreshed
++ * every few seconds while the dialog is shown.  ModemManager reports the
++ * channel number, not the band: an LTE EARFCN belongs to one band, an
++ * NR-ARFCN is a frequency, and several NR bands cover the same range.  Those
++ * overlaps are resolved in the order below: the bands in use in China first
++ * (n78 before n77, n41 before n90, n28 before the US 700 MHz bands), then the
++ * others.
++ */
++
++#define CELL_INFO_INTERVAL_S 5
++
++typedef struct {
++  guint band;
++  guint first;
++  guint last;
++} ChannelRange;
++
++/* 36.101 table 5.7.3-1, downlink */
++static const ChannelRange lte_bands[] = {
++  {  1,     0,   599 }, {  2,   600,  1199 }, {  3,  1200,  1949 }, {  4,  1950,  2399 },
++  {  5,  2400,  2649 }, {  7,  2750,  3449 }, {  8,  3450,  3799 }, { 12,  5010,  5179 },
++  { 13,  5180,  5279 }, { 14,  5280,  5379 }, { 17,  5730,  5849 }, { 18,  5850,  5999 },
++  { 19,  6000,  6149 }, { 20,  6150,  6449 }, { 21,  6450,  6599 }, { 25,  8040,  8689 },
++  { 26,  8690,  9039 }, { 28,  9210,  9659 }, { 29,  9660,  9769 }, { 30,  9770,  9869 },
++  { 32,  9920, 10359 }, { 34, 36200, 36349 }, { 38, 37750, 38249 }, { 39, 38250, 38649 },
++  { 40, 38650, 39649 }, { 41, 39650, 41589 }, { 42, 41590, 43589 }, { 43, 43590, 45589 },
++  { 46, 46790, 54539 }, { 48, 55240, 56739 }, { 66, 66436, 67335 }, { 71, 68586, 68935 },
++};
++
++/* 38.101-1 table 5.4.2.3-1 and 38.101-2 table 5.4.2.3-1, downlink, in the
++ * order overlaps are resolved in */
++static const ChannelRange nr_bands[] = {
++  {  78,  620000,  653333 }, {  79,  693334,  733333 }, {  41,  499200,  537999 },
++  {  28,  151600,  160600 }, {   1,  422000,  434000 }, {   3,  361000,  376000 },
++  {   5,  173800,  178800 }, {   8,  185000,  192000 }, {   7,  524000,  538000 },
++  {  20,  158200,  164200 }, {  38,  514000,  524000 }, {  39,  376000,  384000 },
++  {  40,  460000,  480000 }, {  34,  402000,  405000 }, {   2,  386000,  398000 },
++  {  25,  386000,  399000 }, {  66,  422000,  440000 }, {  65,  422000,  440000 },
++  {  70,  399000,  404000 }, {  71,  123400,  130400 }, {  12,  145800,  149200 },
++  {  13,  149200,  151200 }, {  14,  151600,  153600 }, {  18,  172000,  175000 },
++  {  26,  171800,  178800 }, {  29,  143400,  145600 }, {  30,  470000,  472000 },
++  {  46,  743334,  795000 }, {  48,  636667,  646666 }, {  50,  286400,  303400 },
++  {  51,  285400,  286400 }, {  53,  496700,  499000 }, {  74,  295000,  303600 },
++  {  77,  620000,  680000 }, {  90,  499200,  538000 }, {  96,  795000,  875000 },
++  { 257, 2054166, 2104165 }, { 258, 2016667, 2070832 }, { 260, 2229166, 2279165 },
++  { 261, 2070833, 2084999 },
++};
++
++static guint
++band_for_channel (const ChannelRange *ranges,
++                  gsize               n_ranges,
++                  guint               channel)
++{
++  gsize i;
++
++  for (i = 0; i < n_ranges; i++)
++    if (channel >= ranges[i].first && channel <= ranges[i].last)
++      return ranges[i].band;
++  return 0;
++}
++
++/* ModemManager reports the PCI in hexadecimal; networks quote it in decimal */
++static gchar *
++pci_to_decimal (const gchar *pci)
++{
++  gchar *end = NULL;
++  guint64 value;
++
++  if (!pci || !*pci)
++    return NULL;
++  value = g_ascii_strtoull (pci, &end, 16);
++  if (!end || *end)
++    return NULL;
++  return g_strdup_printf ("%" G_GUINT64_FORMAT, value);
++}
++
++static void
++grid_clear (CcWwanDetailsDialog *self,
++            GtkGrid             *grid)
++{
++  GtkWidget *child;
++
++  while ((child = gtk_widget_get_first_child (GTK_WIDGET (grid))))
++    {
++      if (gtk_widget_has_css_class (child, "dim-label"))
++        gtk_size_group_remove_widget (self->label_size_group, child);
++      gtk_grid_remove (grid, child);
++    }
++}
++
++static void
++grid_add_row (CcWwanDetailsDialog *self,
++              GtkGrid             *grid,
++              gint                *row,
++              const gchar         *title,
++              const gchar         *value)
++{
++  GtkWidget *label;
++
++  if (!value || !*value)
++    return;
++
++  label = gtk_label_new (title);
++  gtk_label_set_xalign (GTK_LABEL (label), 1.0);
++  gtk_widget_add_css_class (label, "dim-label");
++  gtk_size_group_add_widget (self->label_size_group, label);
++  gtk_grid_attach (grid, label, 0, *row, 1, 1);
++
++  label = gtk_label_new (value);
++  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
++  gtk_label_set_selectable (GTK_LABEL (label), TRUE);
++  gtk_grid_attach (grid, label, 1, *row, 1, 1);
++
++  (*row)++;
++}
++
++static gchar *
++format_level (gdouble value,
++              const gchar *unit)
++{
++  if (value == -G_MAXDOUBLE)
++    return NULL;
++  return g_strdup_printf ("%.1f %s", value, unit);
++}
++
++static gchar *
++format_bandwidth (guint hz)
++{
++  if (hz == G_MAXUINT || hz == 0)
++    return NULL;
++  if (hz % 1000000 == 0)
++    return g_strdup_printf ("%u MHz", hz / 1000000);
++  return g_strdup_printf ("%.1f MHz", hz / 1000000.0);
++}
++
++typedef struct {
++  gboolean     nr;
++  gchar       *band;
++  guint        channel;
++  gchar       *pci;
++  const gchar *ci;
++  const gchar *tac;
++  guint        bandwidth;
++  gdouble      rsrp;
++  gdouble      rsrq;
++  gdouble      sinr;
++} CellRow;
++
++static void
++cell_row_clear (CellRow *c)
++{
++  g_free (c->band);
++  g_free (c->pci);
++}
++
++static gboolean
++cell_row_from_info (MMCellInfo *info,
++                    CellRow    *c)
++{
++  memset (c, 0, sizeof (*c));
++  c->sinr = -G_MAXDOUBLE;
++
++  switch (mm_cell_info_get_cell_type (info))
++    {
++    case MM_CELL_TYPE_LTE:
++      {
++        MMCellInfoLte *lte = MM_CELL_INFO_LTE (info);
++        guint band;
++
++        c->channel = mm_cell_info_lte_get_earfcn (lte);
++        band = band_for_channel (lte_bands, G_N_ELEMENTS (lte_bands), c->channel);
++        c->band = band ? g_strdup_printf ("B%u", band) : NULL;
++        c->pci = pci_to_decimal (mm_cell_info_lte_get_physical_ci (lte));
++        c->ci = mm_cell_info_lte_get_ci (lte);
++        c->tac = mm_cell_info_lte_get_tac (lte);
++        c->bandwidth = mm_cell_info_lte_get_bandwidth (lte);
++        c->rsrp = mm_cell_info_lte_get_rsrp (lte);
++        c->rsrq = mm_cell_info_lte_get_rsrq (lte);
++        return TRUE;
++      }
++
++    case MM_CELL_TYPE_5GNR:
++      {
++        MMCellInfoNr5g *nr = MM_CELL_INFO_NR5G (info);
++        guint band;
++
++        c->nr = TRUE;
++        c->channel = mm_cell_info_nr5g_get_nrarfcn (nr);
++        band = band_for_channel (nr_bands, G_N_ELEMENTS (nr_bands), c->channel);
++        c->band = band ? g_strdup_printf ("n%u", band) : NULL;
++        c->pci = pci_to_decimal (mm_cell_info_nr5g_get_physical_ci (nr));
++        c->ci = mm_cell_info_nr5g_get_ci (nr);
++        c->tac = mm_cell_info_nr5g_get_tac (nr);
++        c->bandwidth = mm_cell_info_nr5g_get_bandwidth (nr);
++        c->rsrp = mm_cell_info_nr5g_get_rsrp (nr);
++        c->rsrq = mm_cell_info_nr5g_get_rsrq (nr);
++        c->sinr = mm_cell_info_nr5g_get_sinr (nr);
++        return TRUE;
++      }
++
++    default:
++      return FALSE;
++    }
+ }
+ 
+ static void
++cell_info_show (CcWwanDetailsDialog *self,
++                GList               *cells,
++                const gchar         *location_tac)
++{
++  MMModemSignal *signal;
++  GList *l;
++  guint n_serving = 0;
++  gint row = 0, nrow = 0;
++
++  grid_clear (self, self->cell_grid);
++  grid_clear (self, self->neighbour_grid);
++
++  for (l = cells; l; l = l->next)
++    if (mm_cell_info_get_serving (l->data))
++      n_serving++;
++
++  signal = mm_object_peek_modem_signal (cc_wwan_device_get_mm_object (self->device));
++
++  for (l = cells; l; l = l->next)
++    {
++      MMCellInfo *info = l->data;
++      CellRow c;
++
++      if (!mm_cell_info_get_serving (info) || !cell_row_from_info (info, &c))
++        continue;
++
++      {
++        /* EN-DC has an LTE and an NR serving cell: name the RAT per row */
++        const gchar *rat = n_serving > 1 ? (c.nr ? "NR " : "LTE ") : "";
++        g_autofree gchar *channel = g_strdup_printf ("%u", c.channel);
++        g_autofree gchar *bandwidth = format_bandwidth (c.bandwidth);
++        g_autofree gchar *rsrp = format_level (c.rsrp, "dBm");
++        g_autofree gchar *rsrq = format_level (c.rsrq, "dB");
++        g_autofree gchar *sinr = NULL;
++        g_autofree gchar *t = NULL;
++
++        /* an LTE cell info carries no SINR; the Signal interface does */
++        if (c.sinr == -G_MAXDOUBLE && !c.nr && signal)
++          {
++            g_autoptr(MMSignal) lte = mm_modem_signal_get_lte (signal);
++
++            if (lte)
++              c.sinr = mm_signal_get_snr (lte);
++          }
++        sinr = format_level (c.sinr, "dB");
++
++#define ROW(title, value) \
++        do { g_free (t); t = g_strconcat (rat, title, NULL); grid_add_row (self, self->cell_grid, &row, t, value); } while (0)
++        ROW (_("Band"), c.band);
++        ROW (c.nr ? "NR-ARFCN" : "EARFCN", channel);
++        ROW ("PCI", c.pci);
++        ROW (_("Cell ID"), c.ci);
++        ROW ("TAC", c.tac ? c.tac : location_tac);
++        ROW (_("Bandwidth"), bandwidth);
++        ROW ("RSRP", rsrp);
++        ROW ("RSRQ", rsrq);
++        ROW ("SINR", sinr);
++#undef ROW
++      }
++      cell_row_clear (&c);
++    }
++
++  for (l = cells; l; l = l->next)
++    {
++      MMCellInfo *info = l->data;
++      g_autofree gchar *title = NULL;
++      g_autofree gchar *value = NULL;
++      CellRow c;
++
++      if (mm_cell_info_get_serving (info) || !cell_row_from_info (info, &c))
++        continue;
++
++      title = g_strdup_printf ("%s %u / PCI %s", c.band ? c.band : "", c.channel,
++                               c.pci ? c.pci : "?");
++      if (c.sinr != -G_MAXDOUBLE)
++        value = g_strdup_printf ("%.1f dBm, %.1f dB", c.rsrp, c.sinr);
++      else
++        value = g_strdup_printf ("%.1f dBm", c.rsrp);
++      grid_add_row (self, self->neighbour_grid, &nrow, g_strstrip (title), value);
++      cell_row_clear (&c);
++    }
++
++  gtk_widget_set_visible (self->cell_group, row > 0);
++  gtk_widget_set_visible (self->neighbour_group, nrow > 0);
++}
++
++typedef struct {
++  CcWwanDetailsDialog *self;
++  GList               *cells;
++} CellInfoRefresh;
++
++static void
++cell_info_refresh_free (CellInfoRefresh *r)
++{
++  g_list_free_full (r->cells, g_object_unref);
++  g_object_unref (r->self);
++  g_free (r);
++}
++
++/* The TAC of an NR cell is not in its cell info: the 3GPP location has it */
++static void
++location_3gpp_ready (MMModemLocation *location,
++                     GAsyncResult    *res,
++                     CellInfoRefresh *r)
++{
++  g_autoptr(MMLocation3gpp) loc = NULL;
++  g_autoptr(GError) error = NULL;
++  g_autofree gchar *tac = NULL;
++
++  loc = mm_modem_location_get_3gpp_finish (location, res, &error);
++  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    {
++      cell_info_refresh_free (r);
++      return;
++    }
++  if (loc && mm_location_3gpp_get_tracking_area_code (loc))
++    tac = g_strdup_printf ("%lX", mm_location_3gpp_get_tracking_area_code (loc));
++
++  cell_info_show (r->self, r->cells, tac);
++  cell_info_refresh_free (r);
++}
++
++static void
++cell_info_ready (MMModem         *modem,
++                 GAsyncResult    *res,
++                 CellInfoRefresh *r)
++{
++  g_autoptr(GError) error = NULL;
++  MMModemLocation *location;
++
++  r->cells = mm_modem_get_cell_info_finish (modem, res, &error);
++  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    {
++      cell_info_refresh_free (r);
++      return;
++    }
++  if (error)
++    g_debug ("No cell info: %s", error->message);
++
++  location = mm_object_peek_modem_location (cc_wwan_device_get_mm_object (r->self->device));
++  if (r->cells && location)
++    {
++      mm_modem_location_get_3gpp (location, r->self->cell_info_cancellable,
++                                  (GAsyncReadyCallback) location_3gpp_ready, r);
++      return;
++    }
++
++  cell_info_show (r->self, r->cells, NULL);
++  cell_info_refresh_free (r);
++}
++
++static gboolean
++cell_info_refresh (gpointer user_data)
++{
++  CcWwanDetailsDialog *self = user_data;
++  CellInfoRefresh *r;
++  MMModem *modem;
++
++  modem = mm_object_peek_modem (cc_wwan_device_get_mm_object (self->device));
++  if (!modem)
++    return G_SOURCE_CONTINUE;
++
++  r = g_new0 (CellInfoRefresh, 1);
++  r->self = g_object_ref (self);
++  mm_modem_get_cell_info (modem, self->cell_info_cancellable,
++                          (GAsyncReadyCallback) cell_info_ready, r);
++  return G_SOURCE_CONTINUE;
++}
++
++static void
++cell_info_stop (CcWwanDetailsDialog *self)
++{
++  g_clear_handle_id (&self->cell_info_timeout_id, g_source_remove);
++  g_cancellable_cancel (self->cell_info_cancellable);
++  g_clear_object (&self->cell_info_cancellable);
++}
++
++static void
++cc_wwan_details_dialog_map (GtkWidget *widget)
++{
++  CcWwanDetailsDialog *self = CC_WWAN_DETAILS_DIALOG (widget);
++
++  GTK_WIDGET_CLASS (cc_wwan_details_dialog_parent_class)->map (widget);
++
++  cell_info_stop (self);
++  self->cell_info_cancellable = g_cancellable_new ();
++  cell_info_refresh (self);
++  self->cell_info_timeout_id = g_timeout_add_seconds (CELL_INFO_INTERVAL_S, cell_info_refresh, self);
++}
++
++static void
++cc_wwan_details_dialog_unmap (GtkWidget *widget)
++{
++  cell_info_stop (CC_WWAN_DETAILS_DIALOG (widget));
++
++  GTK_WIDGET_CLASS (cc_wwan_details_dialog_parent_class)->unmap (widget);
++}
++
++static void
+ cc_wwan_details_dialog_set_property (GObject      *object,
+                                      guint         prop_id,
+                                      const GValue *value,
+@@ -196,6 +610,7 @@
+ {
+   CcWwanDetailsDialog *self = CC_WWAN_DETAILS_DIALOG (object);
+ 
++  cell_info_stop (self);
+   g_clear_object (&self->device);
+ 
+   G_OBJECT_CLASS (cc_wwan_details_dialog_parent_class)->dispose (object);
+@@ -210,6 +625,8 @@
+   object_class->set_property = cc_wwan_details_dialog_set_property;
+   object_class->constructed  = cc_wwan_details_dialog_constructed;
+   object_class->dispose = cc_wwan_details_dialog_dispose;
++  widget_class->map = cc_wwan_details_dialog_map;
++  widget_class->unmap = cc_wwan_details_dialog_unmap;
+ 
+   properties[PROP_DEVICE] =
+     g_param_spec_object ("device",
+@@ -233,6 +650,11 @@
+   gtk_widget_class_bind_template_child (widget_class, CcWwanDetailsDialog, operator_name);
+   gtk_widget_class_bind_template_child (widget_class, CcWwanDetailsDialog, own_numbers);
+   gtk_widget_class_bind_template_child (widget_class, CcWwanDetailsDialog, signal_strength);
++  gtk_widget_class_bind_template_child (widget_class, CcWwanDetailsDialog, cell_group);
++  gtk_widget_class_bind_template_child (widget_class, CcWwanDetailsDialog, cell_grid);
++  gtk_widget_class_bind_template_child (widget_class, CcWwanDetailsDialog, neighbour_group);
++  gtk_widget_class_bind_template_child (widget_class, CcWwanDetailsDialog, neighbour_grid);
++  gtk_widget_class_bind_template_child (widget_class, CcWwanDetailsDialog, label_size_group);
+ }
+ 
+ static void
+--- a/panels/wwan/cc-wwan-details-dialog.ui
++++ b/panels/wwan/cc-wwan-details-dialog.ui
+@@ -140,6 +140,32 @@
+                   </object>
+                 </child>
+ 
++              </object>
++            </child>
++          </object>
++        </child>
++
++        <!-- Serving and neighbour cells, filled in from the modem's cell info -->
++        <child>
++          <object class="AdwPreferencesGroup" id="cell_group">
++            <property name="title" translatable="yes">Serving Cell</property>
++            <property name="visible">False</property>
++            <child>
++              <object class="GtkGrid" id="cell_grid">
++                <property name="row-spacing">9</property>
++                <property name="column-spacing">6</property>
++              </object>
++            </child>
++          </object>
++        </child>
++        <child>
++          <object class="AdwPreferencesGroup" id="neighbour_group">
++            <property name="title" translatable="yes">Neighbour Cells</property>
++            <property name="visible">False</property>
++            <child>
++              <object class="GtkGrid" id="neighbour_grid">
++                <property name="row-spacing">9</property>
++                <property name="column-spacing">6</property>
+               </object>
+             </child>
+           </object>
+@@ -264,7 +290,7 @@
+     </child>
+ 
+   </template>
+-  <object class="GtkSizeGroup">
++  <object class="GtkSizeGroup" id="label_size_group">
+     <property name="mode">horizontal</property>
+     <widgets>
+       <widget name="carrier_label"/>

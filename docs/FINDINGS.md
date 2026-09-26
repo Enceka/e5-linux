@@ -3618,6 +3618,33 @@ flight at a time (20 concurrent status calls: 2 `nmcli` runs).
   sent once, when btattach attaches, so after any BT power cycle (rfkill, or the
   shell's BT switch, which blocks both switches) hci0 comes back on the ROM
   defaults with the placeholder address 27:93:31:14:22:11.
+* **The hotspot still could not be joined: P2P.**  With `0026` the firmware no
+  longer asserted, the AP beaconed (seen from a Mac at -40 dBm) and still nobody
+  got in: the Mac's CoreWLAN join failed (`-3938`), a phone the same, and nothing
+  reached the host -- no `EVT_NEW_STATION` from the firmware, no event in
+  wpa_supplicant's debug log.  An open AP, 2.4 GHz channel 6 and 149 at 20 MHz
+  failed the same way, and so did a freshly powered chip.  hostapd on the same
+  radio, channel and bridge let the Mac straight in (`AP-STA-CONNECTED`, DHCP
+  on br0), also with wpa_supplicant's exact HT40/VHT80 capabilities, and after
+  an AP-mode scan (with or without a WPS element in it).  A wpa_supplicant of its
+  own, outside NetworkManager, joined the Mac with `p2p_disabled=1` and failed
+  without it: the difference is the **P2P Device** wpa_supplicant adds next to
+  wlan0 whenever the driver offers P2P (NetworkManager's instance always does).
+  While it exists this firmware -- which answers an AP's authentication and
+  association itself -- answers no station.  Deleting the device once the AP is
+  up does not bring it back.  Kernel `0027`: the driver offers station and AP
+  only (no P2P-GO/client/device, and no interface combinations: cfg80211 rejects
+  a one-interface combination and allows one interface at a time without any).
+  Verified after a clean boot, BT on: the Mac joins `Hotspot` under
+  NetworkManager and gets 192.168.9.64 from dnsmasq.  The phone join that
+  section 35 records was probably made before the BT attach and NM's P2P device
+  were both in place; the `0026` analysis above stands, but it was not the whole
+  story.
+  Seen on the way, not fixed: the band tables list the HT MCS rates (6.5-130
+  Mbps) as legacy bitrates, so every beacon carries an Extended Supported Rates
+  element whose values from 65 Mbps up overflow into the basic-rate bit
+  (`82 9c d0 ea` read as basic 1, 14, 40, 53 Mbps).  Clients tolerate it (hostapd
+  builds the same element), but it is wrong.
 * **Scale 0.85** after trying 1, 0.9 and 0.85 in use (the text is scaled to 1.25 in
   Settings; section 21 has the measurements).  `wlr-randr` is in the image to change
   it live; it cannot be applied while the panel is blanked.

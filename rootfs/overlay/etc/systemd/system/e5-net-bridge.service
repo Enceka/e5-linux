@@ -1,10 +1,10 @@
 [Unit]
 Description=E5 LAN bridge: usb0 and the hotspot on br0 (192.168.9.1/24)
 Documentation=file:///opt/e5/net-bridge.sh
-# Before everything that serves the LAN.  hostapd has to find br0 already there
-# (it places wlan0 in it itself), dnsmasq serves br0, and the management
-# services bind to its addresses.
-Before=network.target dnsmasq.service e5-hotspot.service unisoc-cpd-web.service e5-telnetd.service
+# Before everything that serves the LAN.  NetworkManager has to find br0 there to
+# attach the hotspot to it, dnsmasq serves br0, and the management services bind
+# to its addresses.
+Before=network.target dnsmasq.service NetworkManager.service unisoc-cpd-web.service e5-telnetd.service
 Wants=network.target
 
 [Service]

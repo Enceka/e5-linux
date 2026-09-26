@@ -2,14 +2,14 @@
 Description=dnsmasq (DHCP + DNS for the Wi-Fi hotspot and the USB LAN)
 Documentation=man:dnsmasq(8)
 # Shipped by the overlay because only dnsmasq-base (the binary) is guaranteed:
-# the systemd unit lives in the full dnsmasq package, and the hotspot's start
-# script restarts "dnsmasq", so a device without it hands out no leases at all
-# (clients associate and then sit there -- "cannot connect to the wifi").
+# the systemd unit lives in the full dnsmasq package, and a device without it
+# hands out no leases at all (clients associate and then sit there -- "cannot
+# connect to the wifi").
 #
 # Enabled at boot: it is the DHCP + DNS server for the management LAN too, and
-# that has to be there before anyone logs in over it.  The config uses
-# bind-dynamic, so the AP's wlan0 may appear later; hotspot-start.sh restarts it
-# once the AP is up anyway.
+# that has to be there before anyone logs in over it.  It serves br0, which
+# exists before it starts; the hotspot's clients arrive through the same bridge
+# whenever NetworkManager brings the AP up.
 After=network.target
 [Service]
 Type=simple

@@ -17,7 +17,7 @@ SPA。它的价值在**接口**，不在 Android。本移植保留接口，替�
 | | 处置 |
 |---|---|
 | **厂商协议层**：`goform` 反向代理、`AD` 防篡改签名、会话 Cookie、`zreq` 工具、厂商 `goformId` | **已删除**。E5 不是中兴设备，没有厂商后台可连；本移植不模拟它。 |
-| **前端字段词表**：状态块轮询的 38 个字段名、Wi-Fi/客户端面板的数据形状 | **保留**，但值全部来自本机 `/proc`、`/sys`、systemd、hostapd、modem。这是一层命名翻译，不是厂商协议。 |
+| **前端字段词表**：状态块轮询的 38 个字段名、Wi-Fi/客户端面板的数据形状 | **保留**，但值全部来自本机 `/proc`、`/sys`、systemd、NetworkManager、modem。这是一层命名翻译，不是厂商协议。 |
 
 也就是说：`/api/goform/...` 这个路径名还在（前端硬编码了它），但它不再转发给任何厂商后台，
 而是由本机的读取映射（`ufitools/uifields.py`）与动作路由（`ufitools/api/ui_compat.py`）直接作答，
@@ -30,7 +30,7 @@ SPA。它的价值在**接口**，不在 Android。本移植保留接口，替�
 | `sendat`（`service call …IToolControl`） | `/opt/e5/e5-at`（E5 的 `e5-atd` 持有的 fifo） | `at.py` |
 | `DeviceInfo`（`/proc`、`/sys`） | 同一批内核接口，逐字段同形 | `sysinfo.py` |
 | `NetworkStatsManager` | 采样 `/sys/class/net/*/statistics/*_bytes`，按日累计并算速率 | `traffic.py` |
-| 厂商 `goform` 控制 | systemd / hostapd / dnsmasq / sysfs | `control.py` |
+| 厂商 `goform` 控制 | systemd / NetworkManager / dnsmasq / nftables / sysfs | `control.py` |
 | 厂商状态字段 | 本机真实数据的只读映射 | `uifields.py` |
 | 厂商后台登录握手 | 仅登录用的本地兼容（无会话、无签名） | `api/ui_compat.py` |
 | 厂商基带信号字段 | 只读 AT 命令的**缓存快照**（默认 60 秒一次） | `modem.py` |
@@ -109,10 +109,10 @@ ufi_req -X POST -e /api/linux/hotspot -d '{"ssid":"E5-Lab","psk":"abcdefgh","cha
 | 蜂窝信号 / 运营商 / 网络制式 / IMEI / IMSI / ICCID | ✅ | 只读 AT，60 秒缓存（`at_poll_interval`） |
 | 日/月流量统计与实时速率 | ✅ | 网卡计数器按日累计，速率由相邻采样差算得 |
 | 数据连接开关 | ✅ | `systemctl start/stop e5-mobile-data.service` |
-| Wi-Fi 热点开关 | ✅ | `systemctl start/stop e5-hotspot.service` |
-| 改热点 SSID / 密码 / 信道 / 最大接入数 / 隐藏 SSID | ✅ | 写入 `<data_dir>/hostapd-managed.conf` 并重启热点 |
+| Wi-Fi 热点开关 | ✅ | `nmcli connection up/down Hotspot`（与 Phosh 的热点同一个连接） |
+| 改热点 SSID / 密码 / 信道 / 隐藏 SSID | ✅ | `nmcli connection modify Hotspot ...`，热点开着时重新拉起；NetworkManager 的 AP 模式没有最大接入数 |
 | 接入设备列表（含主机名、IP、MAC） | ✅ | `iw station dump` + `ip neigh` + dnsmasq 租约合并 |
-| 黑白名单（按 MAC） | ✅ | 写 hostapd MAC 列表并重启热点 |
+| 黑白名单（按 MAC） | ✅ | nftables bridge 表 `e5acl` 过滤 wlan0 进来的帧（能关联，但流量过不了网桥）；规则存在 `<data_dir>/hotspot-acl.nft`，启动时重新加载 |
 | 重启 / 关机 | ✅ | `systemctl reboot` / `poweroff` |
 | 定时重启 | ✅ | 后台调度线程按 `restart_time` 执行 |
 | 性能模式 | ✅ | 写 cpufreq `scaling_governor` |
@@ -150,12 +150,12 @@ ufi_req -X POST -e /api/linux/hotspot -d '{"ssid":"E5-Lab","psk":"abcdefgh","cha
 
 也可以关掉：`ui_shim = false`。此时前端原样提供（登录会因缺少厂商后台而不可用，只有原生 API 可用）。
 
-### 热点配置为什么写进数据目录
+### 热点的改动为什么能扛过重启
 
-E5-LINUX 的 initramfs overlay 每次启动都会覆盖 `/etc`，因此 `/etc/hostapd/e5.conf` 这种
-**在 baked overlay 里**的文件改了等于没改。本移植把改动写到 `<data_dir>/hostapd-managed.conf`，
-并（当 `/opt/e5/hotspot-start.sh` 存在时）写一个指过去的 `e5-hotspot.service.d` drop-in；
-这两条路径都不在 overlay 里，所以能扛过重启。
+E5-LINUX 的 initramfs overlay 每次启动都会覆盖 `/etc`，所以 baked overlay 里的文件改了等于没改。
+热点连接因此以只读方式放在 `/usr/lib/NetworkManager/system-connections/Hotspot.nmconnection`；
+`nmcli connection modify`（本工具、Phosh 或 GNOME 设置）改动后，NetworkManager 会把改过的副本写到
+`/etc/NetworkManager/system-connections/`，这个文件不在 overlay 里，重启后仍然生效并覆盖只读原件。
 
 ---
 
@@ -175,7 +175,8 @@ E5-LINUX 的 initramfs overlay 每次启动都会覆盖 `/etc`，因此 `/etc/ho
 | `at_command` | `/opt/e5/e5-at {cmd}` | E5 的 AT 客户端（由 `e5-atd` 转发） |
 | `at_poll_interval` | `60` | modem 派生态的刷新间隔（秒）；0 = 完全不用 AT |
 | `mobile_data_unit` | `e5-mobile-data.service` | 蜂窝数据控制目标 |
-| `hotspot_unit` | `e5-hotspot.service` | 热点控制目标 |
+| `hotspot_connection` | `Hotspot` | 热点对应的 NetworkManager 连接 |
+| `lan_interface` | `br0` | LAN 网桥：路由地址与客户端的邻居表 |
 | `wlan_interface` | `wlan0` | 热点网卡（也用于客户端列表） |
 | `hotspot_conf` / `hotspot_conf_2g` / `hotspot_conf_5g` | `/etc/hostapd/e5.conf` | 热点基线配置 |
 | `dnsmasq_conf` | `/etc/dnsmasq.d/e5-hotspot.conf` | 只读，用于展示 DHCP 地址池 |

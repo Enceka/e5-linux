@@ -1,12 +1,17 @@
 [Unit]
 Description=E5 Bluetooth: attach the WCN controller on /dev/ttyBT0
 After=e5-vendor.service
+# Stopped after bluetoothd, never alongside it: bluetoothd powers the adapter
+# off on its way out, and that power-off is when the kernel sends the BT core
+# its disable (btsprd, kernel/patches/0021).  Killed first, btattach closed
+# ttyBT with the core still enabled, stop_marlin waited 30 s for the CP with
+# the WCN power lock held, and Wi-Fi's teardown -- NetworkManager's at
+# shutdown -- hung behind it.  Start order is unaffected in practice: this is
+# Type=simple, so bluetoothd waits for the exec, not for the controller, and a
+# wedged BT core still cannot hold up the boot (the lesson of
+# e5-mobile-data.service, which once left the device with no session).
+Before=bluetooth.service
 ConditionPathExists=/dev/ttyBT0
-# The tty appears during the module pass in the initramfs, and bluetoothd
-# hot-plugs adapters whenever they show up, so this does not have to be ordered
-# against bluetooth.service.  Not being ordered against it is the point: a
-# wedged BT core then cannot hold up the boot (the same lesson as
-# e5-mobile-data.service, which used to leave the device with no session).
 
 [Service]
 Type=simple

@@ -58,11 +58,11 @@ DEFAULTS: Dict[str, Any] = {
     #: most this often.  0 disables AT-derived fields entirely.
     "at_poll_interval": 60.0,
     "mobile_data_unit": "e5-mobile-data.service",
-    "hotspot_unit": "e5-hotspot.service",
+    #: The hotspot is this NetworkManager connection (an AP port of br0).
+    "hotspot_connection": "Hotspot",
     "wlan_interface": "wlan0",
-    "hotspot_conf": "/etc/hostapd/e5.conf",
-    "hotspot_conf_2g": "/etc/hostapd/e5-2g.conf",
-    "hotspot_conf_5g": "/etc/hostapd/e5.conf",
+    #: The LAN bridge: the router address and the clients' neighbour entries.
+    "lan_interface": "br0",
     "hotspot_band": "5g",
     "dnsmasq_conf": "/etc/dnsmasq.d/e5-hotspot.conf",
     "traffic_interfaces": "",

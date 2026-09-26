@@ -1,10 +1,10 @@
 #!/bin/sh
 # One LAN for the USB port and the hotspot: br0, 192.168.9.1/24.
 #
-# usb0 (the NCM gadget) is enslaved here; wlan0 is not -- hostapd owns it and
-# places it in the bridge itself (bridge=br0 in etc/hostapd/*.conf), which it
-# only does when br0 already exists when it starts.  hotspot-start.sh waits for
-# this unit's bridge, and checks afterwards that the port is really there.
+# usb0 (the NCM gadget) is enslaved here; wlan0 is not -- NetworkManager owns it
+# and makes it a port of br0 when it brings the "Hotspot" connection up
+# (/usr/lib/NetworkManager/system-connections).  NM sees br0 as configured by
+# someone else ("connected (externally)") and leaves its addresses alone.
 #
 # Built with ip, not systemd-networkd: networkd's rtnl requests time out on
 # this SoC's sprd pseudo-interfaces, and a bridge it failed to finish was an

@@ -3245,3 +3245,90 @@ Trap from this session: `busybox devmem` on an AGCP register (MCDT, DMA) while t
 domain is not accessible is the same synchronous external abort as 32 -- it rebooted
 the device into Android once.  Only read those while a stream is running, or use the
 driver's own dumps (`/proc/asound/card0/{vbc,sprd-codec}`, `debug_pointer_log`).
+
+## 35. Wi-Fi under NetworkManager, the hotspot as a bridge port, and the 30 s BT close (2026-09-26)
+
+Plan A of the Phosh integration: NetworkManager owns `wlan0` -- station mode from
+Phosh's Wi-Fi menu and the hotspot -- and nothing else.  The LAN (`br0` = `usb0` +
+the AP, 192.168.9.1/24) stays with `e5-net-bridge`, the bearer with `e5-bearer-up`
+and `unisoc-cpd`, DHCP/DNS/RA with dnsmasq, filtering with `nat.nft`.  hostapd,
+`e5-hotspot`, its retry timer and `hotspot-start.sh` are retired.
+
+### 35.1 NetworkManager confined to wlan0
+
+`etc/NetworkManager/conf.d/50-e5.conf`: `unmanaged-devices=*,except:interface-name:
+wlan0,except:interface-name:br0`, `dns=none`/`rc-manager=unmanaged` (resolv.conf is
+the bearer's), connectivity checks off, no default wired profiles.  `br0` is left
+managed on purpose: NM finds it configured by someone else and runs it as
+"connected (externally)" -- its addresses untouched -- which is what lets NM attach
+the AP to it.  That also answers the old NM trouble (FINDINGS 26): it never sees
+`sipa_dummy0`, and `NetworkManager-wait-online` is a no-op drop-in anyway.  Started
+live behind a dead-man switch (roll back to hostapd unless confirmed within 60 s);
+the USB link never blinked.
+
+### 35.2 The hotspot profile
+
+`Hotspot` (`usr/lib/NetworkManager/system-connections/Hotspot.nmconnection`): mode
+`ap`, SSID `E5-Linux`, WPA2-PSK, `master=br0`/`slave-type=bridge`, no IP settings --
+NM passes the bridge to wpa_supplicant, so EAPOL is handled on the port the way
+hostapd's `bridge=br0` did.  Three details it took:
+
+* **Channel 36, not 149.**  At 80 MHz wpa_supplicant failed the AP after its HT scan
+  ("Interface initialization failed"); its debug log said `VHT seg0 index 154` for
+  channel 149.  The centre comes from NetworkManager: `get_ap_params()` in 1.52
+  computes `((ch/4 - 1)/4)*16 + 10`, right for 36-144 and one off for 149-161 (154,
+  should be 155).  Upstream fixed it in 2026 (`5763b9b4`, `a0e03b12`, "supplicant:
+  fix center channel calculation"); trixie has 1.52.1.  153/161 "worked" with the same
+  bogus centre, so they were not an option either.  Channel 36 at 80 MHz: `Set freq
+  5180 (... bandwidth=80 MHz, cf1=5210 MHz)`, AP-ENABLED 3/3, and it keeps off the
+  user's own router on 149.  `keyfile` wants `channel-width=80` (an integer), not
+  `80mhz`.  20 and 40 MHz on 149 work.
+* **Read-only in /usr/lib.**  The overlay is copied over `/etc` at every boot, so a
+  profile there would lose every SSID/password change.  NM treats
+  `/usr/lib/NetworkManager/system-connections` as read-only and writes an edited
+  profile to `/etc/NetworkManager/system-connections`, which shadows it and is not
+  in the overlay.  `boot/init` chmods the shipped keyfile 0600: the image builder
+  packs every overlay file a+r, and NM ignores a keyfile others can read.
+* **Up at boot.**  `autoconnect=true`, like the hostapd hotspot; with equal
+  priority NM restores whichever of the hotspot and a joined network was used last,
+  and its autoconnect retries replace the retry timer for the WCN's refused first
+  beacon.
+
+UFI-TOOLS drives the same profile through `nmcli` (`control.py`): status, up/down,
+SSID/PSK/auth/channel/hidden via `connection modify` (an active hotspot is brought
+up again), and the MAC allow/deny list -- which NM's AP mode lacks -- as an nftables
+bridge filter on frames entering from `wlan0` (`table bridge e5acl`, reloaded at
+start-up).  Two UFI-TOOLS bugs surfaced on the way: the web UI sends the password
+base64-encoded and the backend had stored that string as the passphrase, and the
+"broadcast SSID" box was inverted on save.
+
+**Phosh's switch.**  Phosh (0.46 and main) starts the first AP-mode profile from its
+hotspot switch -- ours -- but `is_active_connection_hotspot_master()` only counts an
+active connection with `ipv4.method=shared`.  A bridge port has no IP settings, so
+the switch reads off while the hotspot runs and cannot stop it.  Not solved here.
+
+### 35.3 The 21 s shutdown was the BT core, not NetworkManager
+
+With NM, a reboot sat 21 s in "NetworkManager/wpa_supplicant: State 'final-sigterm'
+timed out ... Processes still around after final SIGKILL" -- both in the kernel.
+The WCN log had the chain: bluetoothd exits, btattach closes `ttyBT` ->
+`stop_marlin [MARLIN_BLUETOOTH]` -> `MEM_PD: marlin bt state:1` and nothing more;
+then Wi-Fi's `stop_marlin [MARLIN_WIFI] wait for lock release`.  The BT close waits
+for the CP's thread-delete interrupt (`bt_close_completion`, `CP_TIMEROUT` 30 s)
+holding `power_lock`, and Wi-Fi's teardown needs the same lock.  This is also what
+FINDINGS 23 measured and blamed on NM, and why `e5-bt-attach` always ended in
+"final-sigterm timed out".
+
+Android's dmesg shows the HAL sending `01 A1 FC 03 00 00 00` -- 0xfca1 with `00 00
+00`, the counterpart of the `00 00 01` enable from 0018 -- 25 ms before
+`mtty_close`, and `cp bt delete thread ok` 17 ms after it.  `kernel/patches/0021`
+sends that from `mtty_close()` itself, before `stop_marlin()`.  First tried from the
+HCI driver's `hdev->shutdown` at adapter power-off (with a non-persistent setup to
+re-configure at power-on): that left the controller dead -- with the tty still open
+the CP no longer answered the next pskey (`0xfca0 tx timeout`).  The disable belongs
+right before the tty goes, as the HAL has it.  Also `e5-bt-attach` is now
+`Before=bluetooth.service`, so bluetoothd has powered the adapter off before
+btattach is killed.  Result: `cp bt delete thread ok` at once, NM stopped in under a
+second, the whole shutdown 2.7 s, and the USB link gone 8 s after `systemctl
+reboot` (35 s before); BT power-off/on from bluetoothctl still works.  0021 is in a
+module (`sprdbt_tty`, initramfs), so the kernel stays `#4`.

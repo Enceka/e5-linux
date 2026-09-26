@@ -69,10 +69,16 @@ FINDINGS.
      the same moment.
   (The vendor configuration these were measured without is sent by the kernel
   now; re-test before chasing either.)
-- **Shutdown time is unmeasured since NetworkManager went (2026-09-20).**  The last
-  measurement (FINDINGS 23) had everything stopped in 1.3 s and then ~32 s of NM
-  waiting on WCN device teardown; NM is no longer installed, so measure again before
-  believing either number.
+- **Shutdown: 2.7 s (2026-09-26, FINDINGS 35).**  The ~20-30 s that used to be blamed
+  on NetworkManager was the BT core being closed without its disable command:
+  `stop_marlin(MARLIN_BLUETOOTH)` waited 30 s with the WCN power lock held and
+  Wi-Fi's teardown queued behind it.  `kernel/patches/0021` sends the disable from
+  `mtty_close`; the USB link now drops 8 s after `systemctl reboot`.
+- **Phosh's hotspot switch does not see the bridged hotspot as on.**  It starts the
+  `Hotspot` connection (the first AP-mode profile), but only counts a connection
+  with `ipv4.method=shared` as a hotspot, and a bridge port has no IP settings, so
+  the switch shows off and cannot stop it (Phosh 0.46 and main, `wifi-manager.c`
+  `is_active_connection_hotspot_master`).  UFI-TOOLS and `nmcli` control it fine.
 - **The hotspot needs one real client check over the bridge.**  usb0 and the AP are
   one LAN since 2026-09-26 (`br0`, FINDINGS 31): a phone associated and got
   192.168.9.41 plus a SLAAC address in the bearer's /64 during the live change, and
@@ -127,17 +133,17 @@ FINDINGS.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`, `0020`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`-`0021`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
 | audio | speaker plays through ALSA (`hw:N,3`, S16 interleaved, UCM verb HiFi / device Speaker) and PipeWire; mic as "Internal Microphone" (`hw:N,2`, mono S16); earpiece routed, not yet heard; AGDSP booted from `l_agdsp_a` by `e5-audio.service`; period events from an hrtimer |
 | baseband | `unisoc-cpd` (Rust) owns the CP on both sides (FINDINGS 25); on Linux it starts at boot with the bearer, web page on `192.168.9.1:7887` |
-| wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs; MAC is random per boot |
+| wifi | `sprd_wlan_combo` on the WCN chip, managed by NetworkManager (wlan0 only): station mode from Phosh's Wi-Fi menu, AP for the hotspot; scans 2.4 and 5 GHz APs; MAC is random per boot |
 | LAN | `br0` 192.168.9.1/24 = usb0 + the AP; IPv4 NAT + the bearer's public IPv6 /64 (SLAAC, stateful firewall); management ports only from the USB port |
-| hotspot | `hostapd` 2.10, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (VHT80, centre 155), a client reported 80 MHz; no AP+STA concurrency |
-| bluetooth | attaches and scans (LE + BR/EDR have both found devices), but an attach can fail unrecoverably and the chip later stops answering scan commands; BD address is the chip's default |
+| hotspot | NetworkManager `Hotspot` connection (wpa_supplicant AP mode), port of `br0`, `AP-ENABLED` on 5 GHz ch36 at 80 MHz (centre 5210) -- not ch149: NM 1.52 computes that VHT80 centre wrong; up at boot (autoconnect), SSID/PSK changes survive the overlay; no AP+STA concurrency |
+| bluetooth | configured by the kernel like the vendor HAL (0018: pskey/RF/enable; 0021: core disable on close); factory address `FC:B5:85:D0:85:9B`, manufacturer 0x01ec; scans, connects, power-cycles; audio profiles untested |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |

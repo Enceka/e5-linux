@@ -72,13 +72,13 @@ channels that survive a failed boot.
 | Re-arm from inside Linux (`e5-boot-ok`) | ✅ verified, `misc` byte-compared |
 | Touch panel under Linux | ✅ **works** — `tlsc6x_touch` on `event1`, udev tags it `ID_INPUT_TOUCHSCREEN=1`, and phoc takes its events |
 | Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
-| Bluetooth | ⏳ **open** — the controller attaches and `hci0` comes up (`e5-bt-attach.service` holds `/dev/ttyBT0`), bluez reports `Powered: yes`, and scans have found devices (7 LE, 4 BR/EDR); but one attach can fail and never recover, and after repeated BT power cycles the chip stops answering the scan commands (`0x2041`/`0x2042 tx timeout`), so a scan can come up empty. Pairing/connecting untested (one settings-app attempt: `Page Timeout`). BD address is the chip's default, not the factory MAC -- docs/STATUS.md "open" list and docs/FINDINGS.md section 8.7 |
+| Bluetooth | ✅ the kernel configures the marlin3 core the way the vendor HAL does (pskey/RF/enable from `request_firmware`, core disable before the tty closes) — factory address `FC:B5:85:D0:85:9B`, scans and connects; kernel `0018`, `0021`, FINDINGS §33.3, §35. ⏳ audio profiles untested |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
 | Modem, data bearer | ✅ [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) owns the CP at boot (the Android `modem_control` runs in a chroot to start it); 5G SA registers and `e5-bearer-up` brings the bearer up on `sipa_eth0`; `e5-bearer-watch.timer` brings it back after a CP reset — FINDINGS §25, §30 |
 | Modem web page | ✅ `unisoc-cpd web` on `http://192.168.9.1:7887` (USB port only, no authentication) |
 | UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
-| Hotspot | ✅ `hostapd` on 5 GHz ch149 / 80 MHz, SSID `E5-Linux`, on `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) |
-| Audio | ✅ speaker through ALSA (UCM `HiFi`/`Speaker`) and PipeWire; `e5-audio.service` boots the AGDSP off `l_agdsp_a`; kernel `0010`-`0014`, FINDINGS §24.8. ⏳ no capture |
+| Hotspot | ✅ NetworkManager's `Hotspot` connection (Phosh, UFI-TOOLS, `nmcli`) on 5 GHz ch36 / 80 MHz, SSID `E5-Linux`, a port of `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) — FINDINGS §35 |
+| Audio | ✅ speaker through ALSA (UCM `HiFi`/`Speaker`) and PipeWire, mic as "Internal Microphone"; `e5-audio.service` boots the AGDSP off `l_agdsp_a`; kernel `0010`-`0014`, `0017`, `0019`, `0020`, FINDINGS §24.8, §33, §34. ⏳ earpiece not yet heard |
 | Idle load | ✅ load average ~0 at idle (it read 6+ from vendor threads in `D` and synchronous console output) — kernel `0015`, FINDINGS §29 |
 
 ## Repository layout
@@ -204,7 +204,7 @@ rootfs/install-rootfs.sh out/rootfs.ext4    # push in 1 GiB chunks, verify, publ
 
 `build-rootfs-container.sh` installs `rootfs/packages.list` (phosh -- the only session
 since 2026-09-19, Plasma Mobile and its X11 are no longer in the list --,
-`hostapd`/`iw` for the hotspot, `nftables` for NAT, pipewire, ...)
+NetworkManager/`wpasupplicant` for Wi-Fi and the hotspot, `nftables` for NAT, pipewire, ...)
 into a Debian trixie arm64 tree, copies `rootfs/overlay/` over it, stages the audio
 modules from `out_linux/` (so build the kernel first), creates the `e5` user, enables
 the units and packs the result.  The image is **8 GiB by default**

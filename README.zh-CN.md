@@ -65,13 +65,13 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 | 在 Linux 内重新设定 slot（`e5-boot-ok`） | ✅ 已验证，`misc` 逐字节比对 |
 | Linux 下触摸屏 | ✅ **可用**——`tlsc6x_touch` 位于 `event1`，udev 标记为 `ID_INPUT_TOUCHSCREEN=1`，phoc 接收其事件 |
 | Wi-Fi | ✅ **已在设备上验证**——WCN 芯片上的 `sprd_wlan_combo` + `wcn_bsp`，开箱即可扫描 2.4 GHz 与 5 GHz AP（需要 initramfs overlay 中的固件以及厂商的 *user* 构建变体）；docs/FINDINGS.md 第 8.5–8.6 节 |
-| 蓝牙 | ⏳ **未解决**——控制器可接入，`hci0` 可启动（`e5-bt-attach.service` 持有 `/dev/ttyBT0`），bluez 报告 `Powered: yes`，扫描曾发现设备（7 个 LE、4 个 BR/EDR）；但一次接入失败后可能无法恢复，且多次 BT 电源循环后芯片不再响应扫描命令（`0x2041`/`0x2042 tx timeout`），扫描可能为空。配对/连接未测试（一次设置应用尝试结果为 `Page Timeout`）。BD 地址为芯片默认值而非出厂 MAC——见 docs/STATUS.md 的未解决列表与 docs/FINDINGS.md 第 8.7 节 |
+| 蓝牙 | ✅ 内核按厂商 HAL 的方式配置 marlin3 核心（经 `request_firmware` 发送 pskey/RF/启用，关闭 tty 前发送核心禁用）——出厂地址 `FC:B5:85:D0:85:9B`，可扫描、可连接；内核补丁 `0018`、`0021`，FINDINGS §33.3、§35。⏳ 音频 profile 未测试 |
 | 会话时长 | ✅ 已修复：约 295 秒的静默重启来自 PMIC 看门狗；加载负责喂狗的 sprd_pmic_wdt.ko 后，会话可持续运行 10 分钟以上——docs/FINDINGS.md 第 9 节 |
 | 基带、数据承载 | ✅ [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) 在开机时接管 CP（由在 chroot 中运行的 Android `modem_control` 启动 CP）；5G SA 注册成功，`e5-bearer-up` 在 `sipa_eth0` 上建立承载；CP 复位后由 `e5-bearer-watch.timer` 恢复——FINDINGS §25、§30 |
 | 基带 Web 页面 | ✅ `unisoc-cpd web` 位于 `http://192.168.9.1:7887`（仅限 USB 端口访问，无认证） |
 | UFI-TOOLS（Linux 移植版） | ✅ `http://<设备>:2333`，修改前登录口令为 `admin` |
-| 热点 | ✅ `hostapd`，5 GHz 149 信道 / 80 MHz，SSID `E5-Linux`，与 USB 端口同在 `br0`；IPv4 经 NAT 走承载，承载的公网 IPv6 /64 通过 SLAAC 分配给所有局域网客户端（带状态防火墙） |
-| 音频 | ✅ 扬声器可通过 ALSA（UCM `HiFi`/`Speaker`）与 PipeWire 播放；`e5-audio.service` 从 `l_agdsp_a` 启动 AGDSP；内核补丁 `0010`–`0014`，FINDINGS §24.8。⏳ 录音不可用 |
+| 热点 | ✅ NetworkManager 的 `Hotspot` 连接（Phosh、UFI-TOOLS、`nmcli` 均可控制），5 GHz 36 信道 / 80 MHz，SSID `E5-Linux`，作为 `br0` 的端口与 USB 端口同网；IPv4 经 NAT 走承载，承载的公网 IPv6 /64 通过 SLAAC 分配给所有局域网客户端（带状态防火墙）——FINDINGS §35 |
+| 音频 | ✅ 扬声器可通过 ALSA（UCM `HiFi`/`Speaker`）与 PipeWire 播放，麦克风为 “Internal Microphone”；`e5-audio.service` 从 `l_agdsp_a` 启动 AGDSP；内核补丁 `0010`–`0014`、`0017`、`0019`、`0020`，FINDINGS §24.8、§33、§34。⏳ 听筒尚未实听 |
 | 空闲负载 | ✅ 空闲时负载均值约为 0（此前因厂商内核线程处于 `D` 状态及同步控制台输出而读数在 6 以上）——内核补丁 `0015`，FINDINGS §29 |
 
 ## 仓库结构
@@ -186,7 +186,7 @@ rootfs/install-rootfs.sh out/rootfs.ext4    # 以 1 GiB 分块推送、校验、
 ```
 
 `build-rootfs-container.sh` 将 `rootfs/packages.list` 中的软件包（phosh——自 2026-09-19 起的唯一
-会话，Plasma Mobile 及其 X11 已从列表中移除；热点所需的 `hostapd`/`iw`、NAT 所需的 `nftables`、
+会话，Plasma Mobile 及其 X11 已从列表中移除；Wi-Fi 与热点所需的 NetworkManager/`wpasupplicant`、NAT 所需的 `nftables`、
 pipewire 等）安装到 Debian trixie arm64 目录树中，覆盖 `rootfs/overlay/`，从 `out_linux/` 中
 放入音频模块（因此需先构建内核），创建 `e5` 用户，启用各服务单元，并打包输出。镜像**默认大小为
 8 GiB**（可用 `E5_IMG_MIB=N` 覆盖）：该 loop 文件是设备上唯一可写的文件系统，若打包为恰好容纳

@@ -97,7 +97,7 @@ const getData = async (data = new URLSearchParams({})) => {
     return await res.json()
 }
 
-// 动作下发：action 名由后端路由到 systemd / hostapd / sysfs。
+// 动作下发：action 名由后端路由到 systemd / NetworkManager / sysfs。
 // 第一个参数保留给调用方传“登录结果”，这里只用来判断是否已授权。
 const postData = async (session, data = {}) => {
     if (!session) {

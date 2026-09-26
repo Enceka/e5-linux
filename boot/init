@@ -347,6 +347,11 @@ if [ -n "$rootdir" ]; then
             chown -R 1000:1000 /newroot/home/e5 2>/dev/null
             chmod 0644 /newroot/home/e5/.bash_profile 2>/dev/null
         fi
+        # The other way round for NetworkManager: it ignores a connection
+        # keyfile that group or others can read ("insecure permissions"), and the
+        # image builder packs every overlay file a+r -- the Hotspot profile would
+        # simply not exist.
+        chmod 0600 /newroot/usr/lib/NetworkManager/system-connections/*.nmconnection 2>/dev/null
 
         # systemd considers a unit enabled only when a *.wants/ link points at it,
         # and neither the image builder (boot/build-boot-image.py packs files and
@@ -360,7 +365,7 @@ if [ -n "$rootdir" ]; then
                      e5-net-bridge.service \
                      unisoc-cpd.service unisoc-cpd-web.service e5-bearer-up.service \
                      e5-regdb-load.service \
-                     e5-hotspot.service e5-telnetd.service e5-gadget-guard.service \
+                     e5-telnetd.service e5-gadget-guard.service \
                      e5-fixups.service e5-nat.service; do
             if [ -f "/newroot/etc/systemd/system/$unit" ]; then
                 mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
@@ -369,8 +374,30 @@ if [ -n "$rootdir" ]; then
             fi
         done
 
+        # Retired: the hostapd hotspot (e5-hotspot, its retry timer, its start
+        # script and configs) gave way to NetworkManager's "Hotspot" connection.
+        # The overlay no longer carries them, but a rootfs that predates that
+        # still has the files and the links, and hostapd would fight
+        # NetworkManager for wlan0.
+        rm -f /newroot/etc/systemd/system/e5-hotspot.service \
+              /newroot/etc/systemd/system/e5-hotspot-retry.timer \
+              /newroot/etc/systemd/system/multi-user.target.wants/e5-hotspot.service \
+              /newroot/etc/systemd/system/timers.target.wants/e5-hotspot-retry.timer \
+              /newroot/opt/e5/hotspot-start.sh \
+              /newroot/etc/hostapd/e5.conf /newroot/etc/hostapd/e5-5g.conf
+        # NetworkManager comes from its package, so its unit is in /lib and the
+        # package enabled it; linked here as well for a rootfs where a build
+        # stage once purged it (rootfs/install-packages.sh used to).
+        if [ -f /newroot/lib/systemd/system/NetworkManager.service ]; then
+            mkdir -p /newroot/etc/systemd/system/multi-user.target.wants
+            ln -sf /lib/systemd/system/NetworkManager.service \
+                /newroot/etc/systemd/system/multi-user.target.wants/NetworkManager.service
+            ln -sf /lib/systemd/system/NetworkManager.service \
+                /newroot/etc/systemd/system/dbus-org.freedesktop.NetworkManager.service
+        fi
+
         # Timers go to timers.target, not multi-user.target.
-        for timer in e5-hotspot-retry.timer e5-bearer-watch.timer; do
+        for timer in e5-bearer-watch.timer; do
             if [ -f "/newroot/etc/systemd/system/$timer" ]; then
                 mkdir -p /newroot/etc/systemd/system/timers.target.wants
                 ln -sf "/etc/systemd/system/$timer" \

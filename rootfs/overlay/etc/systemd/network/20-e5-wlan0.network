@@ -1,5 +1,6 @@
-# networkd leaves wlan0 alone: it is a port of br0, placed there by hostapd
-# (bridge=br0), and br0 holds the addresses (opt/e5/net-bridge.sh).  Kept, not
+# networkd leaves wlan0 alone: NetworkManager owns it (the "Hotspot" AP, a port
+# of br0, or a Wi-Fi network joined from Phosh), and br0 holds the LAN
+# addresses (opt/e5/net-bridge.sh).  Kept, not
 # deleted, for the same reason as 10-e5-usb0.network.
 [Match]
 Name=wlan0

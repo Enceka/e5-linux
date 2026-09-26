@@ -3289,6 +3289,16 @@ hostapd's `bridge=br0` did.  Three details it took:
   `debian:trixie` arm64 container, version `1.52.1-1+e51`), installed and held by
   `install-packages.sh`.  With it: `VHT seg0 index 155`, `cf1=5775 MHz`,
   AP-ENABLED.  `keyfile` wants `channel-width=80` (an integer), not `80mhz`.
+* **Phones saw the AP and could not join.**  Nothing reached wpa_supplicant or the
+  driver (this driver does association in firmware, `device_ap_sme=1`).  The AP
+  was set up with `key_mgmt_suites=0x102`: WPA-PSK *and* WPA-PSK-SHA256, with PMF
+  disabled.  NM 1.52 (and upstream main) appends `WPA-PSK-SHA256` for
+  `key-mgmt=wpa-psk` whenever wpa_supplicant can do PMF, in AP mode too -- AKM
+  00-0F-AC:6 without MFPC, an RSN element its own comment on WPA3 transition mode
+  says not to announce with PMF off.  hostapd had advertised WPA-PSK alone.
+  `network-manager-02-ap-psk-sha256.patch` skips the SHA256 AKM for an AP with PMF
+  disabled: `key_mgmt_suites=0x2`, as under hostapd.  (The package is
+  `1.52.1-1+e5.2` now, the suffix counting the patches.)
 * **Read-only in /usr/lib.**  The overlay is copied over `/etc` at every boot, so a
   profile there would lose every SSID/password change.  NM treats
   `/usr/lib/NetworkManager/system-connections` as read-only and writes an edited

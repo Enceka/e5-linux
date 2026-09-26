@@ -1,0 +1,17 @@
+diff --git a/src/core/supplicant/nm-supplicant-config.c b/src/core/supplicant/nm-supplicant-config.c
+index 64db45e..4410c6f 100644
+--- a/src/core/supplicant/nm-supplicant-config.c
++++ b/src/core/supplicant/nm-supplicant-config.c
+@@ -1001,7 +1001,11 @@ nm_supplicant_config_add_setting_wireless_security(NMSupplicantConfig
+     } else if (nm_streq(key_mgmt, "wpa-psk")) {
+         if (pmf != NM_SETTING_WIRELESS_SECURITY_PMF_REQUIRED)
+             g_string_append(key_mgmt_conf, "WPA-PSK");
+-        if (_get_capability(priv, NM_SUPPL_CAP_TYPE_PMF))
++        /* An AP advertising AKM 00-0F-AC:6 must also set MFPC; with PMF
++         * disabled it would announce an RSN element that stations and
++         * firmware-SME drivers reject (as for WPA3 transition mode below). */
++        if (_get_capability(priv, NM_SUPPL_CAP_TYPE_PMF)
++            && (!is_ap || pmf != NM_SETTING_WIRELESS_SECURITY_PMF_DISABLE))
+             g_string_append(key_mgmt_conf, " WPA-PSK-SHA256");
+         if (!is_ap && _get_capability(priv, NM_SUPPL_CAP_TYPE_FT))
+             g_string_append(key_mgmt_conf, " FT-PSK");

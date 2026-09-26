@@ -184,10 +184,10 @@ set_routes() {
     command -v alsaucm >/dev/null 2>&1 || { echo "no alsaucm; install alsa-utils" >&2; return 1; }
     card=$(awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null)
     [ -n "$card" ] || { echo "no sprdphone card" >&2; return 1; }
-    if alsaucm -c "hw:$card" set _verb HiFi set _enadev Speaker; then
-        echo "audio route: UCM HiFi/Speaker on card $card"
+    if alsaucm -c "hw:$card" set _verb HiFi set _enadev Speaker set _enadev Mic; then
+        echo "audio route: UCM HiFi/Speaker+Mic on card $card"
     else
-        echo "  UCM HiFi/Speaker failed on card $card (alsa-ucm-conf installed?)" >&2
+        echo "  UCM HiFi/Speaker+Mic failed on card $card (alsa-ucm-conf installed?)" >&2
         return 1
     fi
 }

@@ -1,0 +1,14 @@
+#!/bin/sh
+# E5: the modem's data interface, sipa_eth0, exists from early boot, long
+# before the AT port does (sipc_wwan registers it once the CP is up), and
+# ModemManager would fail a device that has nothing but a net port and then
+# forget the port for good.  modemmanager.common holds sipa_eth* back until an
+# AT port exists (openwrt/patches/modemmanager-package-sipa-eth.patch); this
+# reports it when the AT port appears.
+[ "$ACTION" = add ] || exit 0
+case "$DEVNAME" in wwan*at*) ;; *) exit 0 ;; esac
+[ -e /sys/class/net/sipa_eth0 ] || exit 0
+. /usr/share/ModemManager/modemmanager.common
+mm_report_event add sipa_eth0 net /sys/devices/virtual/net/sipa_eth0 &&
+	mm_log "info" "add network interface sipa_eth0 (with $DEVNAME): event processed"
+exit 0

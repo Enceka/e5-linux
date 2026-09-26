@@ -1,0 +1,44 @@
+#!/bin/sh
+# E5 first boot: the hotspot, as the Debian image's "Hotspot" (docs/FINDINGS.md
+# 35, 38): 5 GHz channel 149 at 80 MHz, WPA2-PSK/CCMP, no PMF, no WPS, a port
+# of br-lan.  The SSID and the key are the ones Debian uses on this device
+# (/etc/e5/install.conf, openwrt/install.sh); without a key the radio stays
+# disabled rather than open.
+# Fails (and runs again at the next boot) while there is no radio to configure.
+E5_WIFI_SSID=E5-Linux E5_WIFI_KEY= E5_WIFI_CHANNEL=149
+[ -f /etc/e5/install.conf ] && . /etc/e5/install.conf
+# once: a reinstall keeps the configuration (openwrt/device-install.sh),
+# and what the user changed since stays as it is
+[ -f /etc/e5/configured.wireless ] && exit 0
+
+uci -q get wireless.radio0 >/dev/null || wifi config
+uci -q get wireless.radio0 >/dev/null || exit 1
+
+uci -q batch <<UCI
+set wireless.radio0.band='5g'
+set wireless.radio0.channel='${E5_WIFI_CHANNEL}'
+set wireless.radio0.htmode='VHT80'
+set wireless.radio0.country='CN'
+set wireless.radio0.cell_density='0'
+set wireless.default_radio0=wifi-iface
+set wireless.default_radio0.device='radio0'
+set wireless.default_radio0.mode='ap'
+set wireless.default_radio0.network='lan'
+set wireless.default_radio0.ifname='wlan0'
+set wireless.default_radio0.ieee80211w='0'
+set wireless.default_radio0.wps_pushbutton='0'
+UCI
+uci set wireless.default_radio0.ssid="$E5_WIFI_SSID"
+if [ -n "$E5_WIFI_KEY" ]; then
+	uci set wireless.default_radio0.encryption='psk2+ccmp'
+	uci set wireless.default_radio0.key="$E5_WIFI_KEY"
+	uci set wireless.radio0.disabled='0'
+	# (wifi config writes the interface disabled as well as the radio)
+	uci set wireless.default_radio0.disabled='0'
+else
+	uci set wireless.default_radio0.encryption='psk2+ccmp'
+	uci set wireless.radio0.disabled='1'
+fi
+uci commit wireless
+mkdir -p /etc/e5 && touch /etc/e5/configured.wireless
+exit 0

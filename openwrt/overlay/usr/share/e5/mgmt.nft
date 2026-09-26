@@ -1,0 +1,11 @@
+# Frames for the device itself that arrive from a Wi-Fi port of br-lan may not
+# reach telnet (23): it is for the USB port.  SSH and LuCI are reachable from
+# both, as on any OpenWrt router.  (table bridge e5mgmt on Debian, etc/e5/nat.nft)
+table bridge e5mgmt
+delete table bridge e5mgmt
+table bridge e5mgmt {
+    chain input {
+        type filter hook input priority filter; policy accept;
+        iifname != "usb0" ether type { ip, ip6 } tcp dport 23 counter drop
+    }
+}

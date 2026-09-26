@@ -1,0 +1,16 @@
+# E5: the USB port (usb0, an NCM gadget) joins br-lan here, not through
+# netifd.  usb0 must never go down: NCM then loses its framing with the host
+# ("Wrong NTH SIGN" for every frame), and this vendor kernel's NCM function,
+# fed frames it cannot parse, overwrote kernel memory -- a task_struct full of
+# NCM headers, and a panic in the scheduler (2026-09-27, with usb0 as a netifd
+# bridge port: netifd takes its ports down and up).  So netifd owns an empty
+# bridge (bridge_empty, 90-e5) and usb0 is in no configuration of its; adding
+# a port to a bridge, or taking it out, leaves the port's link alone (Debian
+# does the same, opt/e5/net-bridge.sh).
+[ "$ACTION" = ifup ] && [ "$INTERFACE" = lan ] || exit 0
+[ -e /sys/class/net/usb0 ] && [ -e /sys/class/net/br-lan ] || exit 0
+# the initramfs put 192.168.77.1 on usb0 itself; it is br-lan's now
+ip -4 addr flush dev usb0
+echo 1 > /proc/sys/net/ipv6/conf/usb0/disable_ipv6
+[ -e /sys/class/net/br-lan/brif/usb0 ] || ip link set usb0 master br-lan
+logger -t e5 "usb0 in br-lan"

@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+# The management LAN's telnet (e5-telnetd.service on Debian), for recovery
+# next to SSH.  Only from the USB port: a bridge-level rule keeps it off the
+# Wi-Fi port of br-lan, where the IP layer cannot tell the two apart.
+START=50
+USE_PROCD=1
+
+start_service() {
+	nft -f /usr/share/e5/mgmt.nft 2>&1 | logger -t e5-telnetd
+	procd_open_instance
+	procd_set_param command /usr/bin/telnetd -F -p 23 -l /bin/login
+	procd_set_param respawn 3600 3 0
+	procd_close_instance
+}

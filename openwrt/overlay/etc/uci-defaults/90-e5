@@ -1,0 +1,112 @@
+#!/bin/sh
+# E5 first boot: the network the Debian image has (docs/FINDINGS.md 31, 35, 37).
+#
+#  * lan: br-lan with the USB port (usb0) and the hotspot, 192.168.9.1/24, and
+#    192.168.77.1 as a second address -- the initramfs's rescue subnet, which a
+#    host may still hold a lease for; DHCP .10-.200, the USB host (the gadget's
+#    host_addr) always at .2, without a default route from us (it has its own
+#    uplink), as dnsmasq on Debian does it;
+#  * wan: the baseband through ModemManager (its unisoc plugin; the modem's
+#    device id is the uid the plugin's rules give it), IPv4 and IPv6;
+#  * IPv6 for the LAN: the carrier gives the bearer a /64 and no prefix
+#    delegation, but routes the whole /64 to the device and announces it
+#    autonomous, not on-link -- so the /64 moves to the LAN (what
+#    opt/e5/e5-ipv6-share does on Debian): the proto's dhcpv6 interface
+#    extends it (RFC 7278, extendprefix), lan takes it (ip6assign 64), and
+#    odhcpd sends the RA -- SLAAC, DNS from us.  Not a relay: odhcpd cannot
+#    relay NDP over sipa_eth0, a raw-IP device without a link layer
+#    (PACKET_ADD_MEMBERSHIP fails, and so does every proxied advertisement);
+#  * the rest of the settings Debian carries: host name, time zone, and
+#    root's password where there is none yet (root/root,
+#    as the Debian image; change it with passwd).
+# openwrt/install.sh leaves the carrier's APN in /etc/e5/install.conf (the one
+# the Debian image uses on this device).
+E5_APN=
+[ -f /etc/e5/install.conf ] && . /etc/e5/install.conf
+# once: a reinstall keeps the configuration (openwrt/device-install.sh),
+# and what the user changed since stays as it is
+[ -f /etc/e5/configured.network ] && exit 0
+
+uci -q batch <<UCI
+set system.@system[0].hostname='E5'
+set system.@system[0].zonename='Asia/Shanghai'
+set system.@system[0].timezone='CST-8'
+# the WCN driver prints a line every 5 s; 64 KiB of log is gone in minutes
+set system.@system[0].log_size='2048'
+
+set network.lan.proto='static'
+delete network.lan.ipaddr
+delete network.lan.netmask
+add_list network.lan.ipaddr='192.168.9.1/24'
+add_list network.lan.ipaddr='192.168.77.1/24'
+set network.lan.ip6assign='64'
+
+delete network.wan
+delete network.wan6
+set network.wan=interface
+set network.wan.proto='modemmanager'
+set network.wan.device='unisoc-sipc'
+set network.wan.apn='${E5_APN}'
+set network.wan.iptype='ipv4v6'
+set network.wan.metric='10'
+set network.wan.signalrate='30'
+# the attach bearer with the data APN: context 1 is both on this modem, and
+# the only one routed to sipa_eth0 -- the default (an empty initial bearer,
+# written at every connect) left the APN's context on another id, which has
+# no interface ("No network interface for PDP context")
+set network.wan.init_epsbearer='default'
+# one uplink: the IPv6 default route for everything, not only for sources in
+# the bearer's /64 (the router's own traffic did not match it)
+set network.wan.sourcefilter='0'
+
+set dhcp.lan.start='10'
+set dhcp.lan.limit='191'
+set dhcp.lan.leasetime='12h'
+set dhcp.lan.ra='server'
+set dhcp.lan.dhcpv6='server'
+set dhcp.lan.ndp='disabled'
+delete dhcp.lan.ra_flags
+add_list dhcp.lan.ra_flags='other-config'
+delete dhcp.wan6
+set dhcp.usb_host=host
+set dhcp.usb_host.name='usb-host'
+set dhcp.usb_host.mac='02:50:00:00:e5:02'
+set dhcp.usb_host.ip='192.168.9.2'
+set dhcp.usb_host.tag='usbhost'
+set dhcp.usbhost=tag
+add_list dhcp.usbhost.dhcp_option='3'
+UCI
+
+# the armsr default bridges eth0.  Here netifd's bridge has no ports of its
+# own: the hotspot joins it through /etc/config/wireless (91-e5-wireless), and
+# the USB port through /etc/hotplug.d/iface/10-e5-usb0 -- never as a netifd
+# port, which netifd takes down and up, and usb0 must not go down (see there).
+# It keeps usb0's address, as br0 on Debian, so the host's ARP entry holds.
+dev=$(uci -q show network | sed -n "s/^network\.\(@device\[[0-9]*\]\)\.name='br-lan'$/\1/p" | head -1)
+if [ -n "$dev" ]; then
+	uci -q delete network.$dev.ports
+	uci set network.$dev.bridge_empty='1'
+	[ -e /sys/class/net/usb0/address ] && uci set network.$dev.macaddr="$(cat /sys/class/net/usb0/address)"
+fi
+
+# the wan zone: the bearer and the IPv6 interface ModemManager's proto adds
+zone=$(uci -q show firewall | sed -n "s/^firewall\.\(@zone\[[0-9]*\]\)\.name='wan'$/\1/p" | head -1)
+if [ -n "$zone" ]; then
+	uci -q delete firewall.$zone.network
+	uci add_list firewall.$zone.network='wan'
+	uci add_list firewall.$zone.network='wan_6'
+fi
+
+# this kernel has no conntrack helpers, and fw4 loads its ruleset in one
+# piece: one "ct helper" rule it cannot take and there is no firewall (and no
+# NAT) at all
+uci -q set firewall.@defaults[0].auto_helper='0'
+
+uci commit system
+uci commit network
+uci commit dhcp
+uci commit firewall
+
+grep -q '^root::' /etc/shadow && printf 'root\nroot\n' | passwd root >/dev/null 2>&1
+mkdir -p /etc/e5 && touch /etc/e5/configured.network
+exit 0

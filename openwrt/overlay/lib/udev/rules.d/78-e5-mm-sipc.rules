@@ -1,0 +1,11 @@
+# E5 (OpenWrt): ModemManager has no udev here and reads its rules files itself
+# (the generic kernel device backend), one action per rule: the last item.
+# The two ports its unisoc plugin tags (77-mm-unisoc-sipc.rules) are the
+# modem; every tty is left alone: the raw AT channel /dev/stty_nr1 (probing
+# it would collide with sipc_wwan's port on the same channel), the USB serial
+# console ttyGS0 and the Bluetooth tty ttyBT0.  On Debian,
+# --filter-policy=allowlist-only and its own 78-e5-mm-sipc.rules do the same.
+ACTION!="add|change|move|bind", GOTO="e5_mm_sipc_end"
+SUBSYSTEM=="tty", ENV{ID_MM_DEVICE_IGNORE}="1"
+ENV{ID_MM_UNISOC_SIPC}=="1", ENV{ID_MM_DEVICE_PROCESS}="1"
+LABEL="e5_mm_sipc_end"

@@ -3690,3 +3690,73 @@ TAC is not in its cell info either; the 3GPP location has it.
 * **Scale 0.85** after trying 1, 0.9 and 0.85 in use (the text is scaled to 1.25 in
   Settings; section 21 has the measurements).  `wlr-randr` is in the image to change
   it live; it cannot be applied while the panel is blanked.
+
+## 39. OpenWrt next to Debian (2026-09-27)
+
+`openwrt/` builds OpenWrt 25.12.5 (armsr/armv8, musl) as a second system in the
+same root image, the way mu300-linux offers OpenWrt next to Ubuntu; its README has
+the layout.  What the E5 needed on the way:
+
+* **Booting a directory of the image.**  `boot/init` `pick_root` reads
+  `e5linux/boot-os` (and `boot-os-next`, removed as it is read: one boot) and
+  switches to `/openwrt` in the image instead of the image's top level.  Debian's
+  overlay is applied only when the root is Debian.  The Wi-Fi/BT firmware and the
+  Android vendor subset stay the Debian root's: the initramfs binds them into the
+  new root **before** `switch_root`.  A bind in OpenWrt's preinit came too late --
+  the WCN driver's firmware request was already pending, fell through to the sysfs
+  fallback, and procd has no loader answering it at that point.  The preinit hook
+  stays as an idempotent fallback.
+* **usb0 must never go down.**  netifd builds its bridge by taking the port down
+  and up, and on the NCM function that loses the framing with the host
+  ("configfs-gadget gadget: Wrong NTH SIGN" for every frame).  Once it went further:
+  memory corruption, a kernel panic, and -- the trial slot not re-armed yet -- the
+  device came back in Android (recovered with the `misc` block from adb, section
+  24.5).  netifd now owns an empty `br-lan` (`bridge_empty`), and a hotplug script
+  enslaves usb0 into it without touching its link state
+  (`overlay/etc/hotplug.d/iface/10-e5-usb0`).
+* **`CONFIG_BRIDGE_VLAN_FILTERING`.**  netifd sends `IFLA_BR_VLAN_FILTERING` with
+  every bridge it creates, and a kernel without the option rejects the whole
+  request: no `br-lan` at all.  Added to `kernel/e5-linux.fragment` (`Image` #8);
+  Debian is unaffected.
+* **procd makes device nodes 0600** where udev makes them 0660 root:root.  The
+  vendor daemons drop to uid system with group root, and `modem_control` failed on
+  `/dev/chsys` ("Permission denied"): no CP.  The build changes procd's default in
+  `hotplug.json` to 0660.
+* **fw4 loads its ruleset in one piece**, and this kernel has no conntrack helpers:
+  one `ct helper set` rule it cannot take and there was no firewall and no NAT.
+  `auto_helper=0`.
+* **ModemManager without udev.**  OpenWrt's MM package ships its own rules parser
+  and hotplug glue.  The parser takes one action per rule (the unisoc rules are
+  one assignment per rule now, in `modemmanager-01` too), and the hotplug scripts
+  drop virtual netdevs, which `sipa_eth0` is:
+  `openwrt/patches/modemmanager-package-sipa-eth.patch` reports it once an AT port
+  exists (as `78-e5-mm-sipc.rules` does on Debian).  `wan` is `proto
+  modemmanager` on `unisoc-sipc` (`ID_MM_PHYSDEV_UID`).
+* **The proto's IPv4 route.**  The bearer has no gateway (`AT+CGCONTRDP` gives
+  none, section 37), and the proto added a default route only via one:
+  `modemmanager-package-ipv4-no-gateway.patch` adds a device route instead.
+* **The initial EPS bearer.**  OpenWrt's proto sets the initial EPS bearer at every
+  connect (to an empty APN unless `init_epsbearer` says otherwise).  The empty
+  one went to context 1, so the data APN went to 2 -- `sipa_eth1`, nothing on
+  `sipa_eth0` (section 37.1, 05) -- hence `init_epsbearer=default` (the data APN
+  as the attach APN, context 1 for both).  But ModemManager stores the initial
+  bearer by modifying the profile at its context id, and after a CP boot there is
+  only context 11: "Profile '1' not found", and the proto blocks restarts after
+  that error -- no WAN until someone intervened.  `modemmanager-06`: a profile set
+  by an id that is not defined yet is created with that id (`+CGDCONT=<cid>,...`
+  defines as well as changes).  Verified from a fresh install: context 1 created
+  as `cbnet`, IPv4 and IPv6 up on the first connect.
+* **IPv6 for the LAN.**  odhcpd's relay mode cannot work on this uplink:
+  `sipa_eth0` is a raw-IP device (type 65534, NOARP), `PACKET_ADD_MEMBERSHIP`
+  fails on it and so does every proxied NDP message.  As on Debian (section 30)
+  the /64 moves to the LAN: the proto's dhcpv6 interface already extends the RA
+  prefix (`extendprefix`, RFC 7278), `lan` takes it (`ip6assign 64`), odhcpd
+  sends the RA (SLAAC, stateless DHCPv6 for DNS).  Verified: a USB host with an
+  address from the prefix fetches over HTTPS, and the server sees that address.
+* **Wi-Fi**: `wifi config` writes the interface disabled as well as the radio;
+  the first-boot script enables both.  hostapd (wpad-basic-mbedtls) brings up
+  the AP on 5 GHz ch149/80 MHz, WPA2-PSK, and a phone joins and gets its lease.
+  The "Out of memory (-12)" and "Not supported (-95)" lines hostapd's setup logs
+  are harmless.
+* A test trap: a host whose DNS answers with a VPN's fake IPs (`2001:2::/..`)
+  cannot test IPv6 through the E5 with its own resolver -- ask the E5's dnsmasq.

@@ -1,0 +1,117 @@
+#!/bin/bash
+# Build OpenWrt's modemmanager package with the E5's unisoc plugin.
+#
+#   openwrt/build-modemmanager.sh        -> out/openwrt/modemmanager-*.apk
+#
+# OpenWrt 25.12 ships ModemManager 1.24.0, the version rootfs/deb-patches/
+# modemmanager-0[1-6]-*.patch are written against, so the Debian image and the
+# OpenWrt one run the same plugin (docs/FINDINGS.md 37).  The patches go into
+# the feed package's patches/ after OpenWrt's own (0001-0004, which they stack
+# on cleanly), and patches/modemmanager-package-*.patch adjusts the package's
+# OpenWrt glue (its hotplug helpers drop virtual netdevs, and sipa_eth0 is one).
+#
+# Built natively on arm64, from OpenWrt's source tree at the release tag: the
+# release SDK exists only as an x86_64 program, which Docker on an arm64 host
+# can run only emulated -- far too slow (hours, for glib2 alone).  The
+# buildroot builds its cross toolchain on any host, so it is set up exactly as
+# the release was built -- the tag, the feeds pinned in the release's
+# feeds.buildinfo, its config.buildinfo -- and the package comes out for the
+# same toolchain (gcc, musl) as the repository's packages it is installed with.
+#
+# The tree lives in the Docker volume e5-openwrt-src and is kept between runs:
+# the first run builds the host tools and the toolchain (tens of minutes), a
+# later one only ModemManager.  `docker volume rm e5-openwrt-src` starts over.
+#
+# Configuration: no QMI, MBIM or QRTR (this modem speaks AT only, and without
+# them the package does not pull libqmi/libmbim/libqrtr in); AT commands over
+# D-Bus on, as in the Debian build (mmcli --command, e5-at).
+#
+# The release is OpenWrt's plus 900 (1.24.0-r11 -> r911): the repository's
+# package never looks newer, so `apk upgrade` does not replace this one with a
+# modemmanager that has no unisoc plugin.
+set -euo pipefail
+VER=${E5_WRT_VER:-25.12.5}
+HERE="$(cd "$(dirname "$0")" && pwd)"
+TOP="$(cd "$HERE/.." && pwd)"
+WORK="$TOP/work/openwrt"
+OUT="$TOP/out/openwrt"
+URL=https://downloads.openwrt.org/releases/$VER/targets/armsr/armv8
+mkdir -p "$WORK" "$OUT"
+
+for f in config.buildinfo feeds.buildinfo; do
+    curl -fsSL -o "$WORK/$f" "$URL/$f"
+done
+
+# the source patches, numbered after OpenWrt's own
+rm -rf "$WORK/patches" && mkdir -p "$WORK/patches/src" "$WORK/patches/pkg"
+n=900
+for p in "$TOP"/rootfs/deb-patches/modemmanager-0*.patch; do
+    cp "$p" "$WORK/patches/src/$n-e5-$(basename "$p" | sed 's/^modemmanager-//')"
+    n=$((n + 1))
+done
+cp "$HERE"/patches/modemmanager-package-*.patch "$WORK/patches/pkg/"
+
+docker run --rm --platform linux/arm64 -v e5-openwrt-src:/build \
+    -v "$WORK":/work:ro -v "$OUT":/out -e VER="$VER" \
+    -e JOBS="${E5_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}" \
+    debian:trixie bash -euc '
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq --no-install-recommends build-essential ca-certificates clang file flex bison \
+    gawk gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync swig unzip wget \
+    xz-utils zlib1g-dev zstd >/dev/null
+# the buildroot refuses to run as root unless told otherwise; it lives in the
+# volume, which is case-sensitive (a macOS bind mount is not)
+export FORCE_UNSAFE_CONFIGURE=1
+cd /build
+[ -d openwrt/.git ] || git clone -q --depth 1 --branch v$VER https://git.openwrt.org/openwrt/openwrt.git openwrt
+cd openwrt
+# the feeds at the commits the release was built from
+cp /work/feeds.buildinfo feeds.conf
+[ -f feeds/packages.index ] || ./scripts/feeds update -a >/dev/null
+./scripts/feeds install modemmanager >/dev/null
+P=feeds/packages/net/modemmanager
+# the package directory back to the feed state, then the E5 changes on top
+git -C feeds/packages checkout -q -- net/modemmanager
+git -C feeds/packages clean -qfd -- net/modemmanager
+for p in /work/patches/pkg/*.patch; do patch -p1 -d $P < "$p"; done
+cp /work/patches/src/*.patch $P/patches/
+rel=$(sed -n "s/^PKG_RELEASE:=//p" $P/Makefile)
+sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$((rel + 900))/" $P/Makefile
+echo "modemmanager release $rel -> $((rel + 900)); patches:"; ls $P/patches/
+# the release configuration, reduced to what is needed here
+{
+    # (not CONFIG_BUILDBOT: on the release builders it also builds LLVM for
+    # BPF, which nothing here needs)
+    grep -E "^CONFIG_(TARGET_|GCC_|LIBC|MUSL|BINUTILS|KERNEL_|USE_|PKG_|SIGNED)" /work/config.buildinfo || true
+    echo "CONFIG_BPF_TOOLCHAIN_NONE=y"
+    echo "# CONFIG_BPF_TOOLCHAIN_BUILD_LLVM is not set"
+    echo "CONFIG_PACKAGE_modemmanager=m"
+    echo "CONFIG_PACKAGE_modemmanager-rpcd=m"
+    echo "CONFIG_MODEMMANAGER_WITH_NETIFD=y"
+    echo "# CONFIG_MODEMMANAGER_WITH_MBIM is not set"
+    echo "# CONFIG_MODEMMANAGER_WITH_QMI is not set"
+    echo "# CONFIG_MODEMMANAGER_WITH_QRTR is not set"
+    echo "CONFIG_MODEMMANAGER_WITH_AT_COMMAND_VIA_DBUS=y"
+} > .config
+make defconfig >/dev/null
+grep -E "^CONFIG_(GCC_VERSION|LIBC_VERSION|TARGET_ARCH_PACKAGES)=|^(# )?CONFIG_MODEMMANAGER" .config
+if [ ! -f staging_dir/.e5-toolchain-ok ]; then
+    echo "== host tools and toolchain (first run)"
+    make tools/install toolchain/install -j"$JOBS" >/build/log 2>&1 || { tail -60 /build/log; exit 1; }
+    touch staging_dir/.e5-toolchain-ok
+fi
+# the kernel, for the kmod packages the dependencies ask for (ppp wants
+# kmod-ppp); none of them is installed -- the E5 runs its vendor kernel
+if [ ! -f staging_dir/.e5-kernel-ok ]; then
+    echo "== kernel (first run)"
+    make target/linux/compile -j"$JOBS" >/build/log 2>&1 || { tail -60 /build/log; exit 1; }
+    touch staging_dir/.e5-kernel-ok
+fi
+echo "== modemmanager"
+make package/modemmanager/clean >/dev/null 2>&1 || true
+make package/modemmanager/compile -j"$JOBS" >/build/log 2>&1 || { tail -80 /build/log; exit 1; }
+rm -f /out/modemmanager*.apk
+find bin/packages -name "modemmanager*-r$((rel + 900)).apk" -exec cp {} /out/ \;
+ls -la /out/modemmanager*.apk
+'

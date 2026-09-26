@@ -1,0 +1,26 @@
+e5-linux: a default IPv4 route for a bearer without a gateway.  The Unisoc
+SIPC modem's +CGCONTRDP gives an address and DNS servers but no gateway (its
+data interface is raw IP, NOARP), and the connection came up with no default
+route at all; NetworkManager routes such a bearer to the device, and so does
+this.  Applied to the package directory by openwrt/build-modemmanager.sh.
+
+--- a/files/lib/netifd/proto/modemmanager.sh
++++ b/files/lib/netifd/proto/modemmanager.sh
+@@ -178,10 +178,15 @@
+ 	proto_set_keep 1
+ 	echo "adding IPv4 address ${address}, netmask ${mask}"
+ 	proto_add_ipv4_address "${address}" "${mask}"
+-	[ -n "${gateway}" ] && {
++	if [ -n "${gateway}" ]; then
+ 		echo "adding default IPv4 route via ${gateway}"
+ 		proto_add_ipv4_route "0.0.0.0" "0" "${gateway}" "${address}"
+-	}
++	else
++		# a point-to-point bearer (a raw-IP, NOARP data interface) has no
++		# gateway: the route goes to the device
++		echo "adding default IPv4 route on ${wwan}"
++		proto_add_ipv4_route "0.0.0.0" "0" "" "${address}"
++	fi
+ 	[ -n "${dns1}" ] && {
+ 		echo "adding primary DNS at ${dns1}"
+ 		proto_add_dns_server "${dns1}"

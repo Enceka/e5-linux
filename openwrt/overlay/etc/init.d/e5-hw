@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+# E5 hardware support the rest of the boot needs, before the network:
+#
+#  * the USB gadget stays bound (gadget-guard.sh): it is the network and the
+#    serial console at once;
+#  * cfg80211's pending request for regulatory.db is answered (regdb-load.sh):
+#    it is one-shot at boot, and without it the regulatory domain stays 00.
+#
+# The firmware itself is bound in from the Debian root in preinit
+# (/lib/preinit/05_e5_debian_root).
+START=11
+
+start() {
+	# systemd mounts configfs by itself; OpenWrt does not, and the initramfs
+	# unmounts its own before switch_root
+	grep -qs " /sys/kernel/config configfs" /proc/mounts ||
+		mount -t configfs configfs /sys/kernel/config 2>/dev/null
+	/opt/e5/gadget-guard.sh 2>&1 | logger -t e5-hw
+	/opt/e5/regdb-load.sh 2>&1 | logger -t e5-hw
+}

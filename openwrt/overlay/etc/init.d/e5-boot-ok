@@ -1,0 +1,10 @@
+#!/bin/sh /etc/rc.common
+# The system is up: re-arm slot b so the next reboot comes back to Linux, when
+# Linux is the recorded default (e5-next-boot linux).  A boot that never gets
+# this far arms nothing, and LK falls back to Android on its own
+# (e5-boot-ok.service on Debian).
+START=99
+
+start() {
+	/opt/e5/e5-next-boot --rearm 2>&1 | logger -t e5-boot-ok
+}

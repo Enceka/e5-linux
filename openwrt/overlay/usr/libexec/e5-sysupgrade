@@ -1,0 +1,15 @@
+#!/bin/sh
+# E5: sysupgrade takes firmware images, and there is no OpenWrt firmware for
+# this device -- an armsr image is a whole-disk image with a kernel of its own,
+# and written to the eMMC it would destroy the partition table, Android and the
+# bootloaders.  This tree is a directory on the Debian root image; it is
+# rebuilt and reinstalled from the host (openwrt/build-rootfs.sh, install.sh).
+# Configuration backups still go through OpenWrt's sysupgrade.
+for a in "$@"; do
+	case "$a" in
+		-b|--create-backup|-l|--list-backup) exec /sbin/sysupgrade.openwrt "$@" ;;
+	esac
+done
+echo "sysupgrade is disabled on the E5: a firmware image would overwrite the eMMC." >&2
+echo "Update packages with 'apk upgrade', or rebuild and reinstall with openwrt/install.sh from the host." >&2
+exit 1

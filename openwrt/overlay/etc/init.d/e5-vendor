@@ -1,0 +1,22 @@
+#!/bin/sh /etc/rc.common
+# Boot the baseband: Android's modem_control in the vendor chroot
+# (/opt/e5/vendor-start.sh, e5-vendor.service on Debian), then the two vendor
+# daemons that run beside it.  refnotify starts 12 s later, as on Debian.
+START=20
+USE_PROCD=1
+
+instance() {
+	procd_open_instance "$1"
+	shift
+	procd_set_param command "$@"
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+start_service() {
+	instance modem_control /opt/e5/vendor-start.sh
+	instance cp_diskserver /opt/e5/android-run cp_diskserver
+	instance refnotify /bin/sh -c 'sleep 12; exec /opt/e5/android-run refnotify'
+}

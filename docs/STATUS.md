@@ -1,6 +1,6 @@
 # Status
 
-_Last updated 2026-09-25._
+_Last updated 2026-09-27._
 
 Reasoning, evidence and dead ends live in `docs/FINDINGS.md`; traps found the hard
 way are collected in its sections 24.8 and 28.  This file is only the work list.
@@ -39,7 +39,7 @@ FINDINGS.
   `*.misc-slot-b-trial.bin` into `misc` and reset with sysrq (FINDINGS 24.5).
 - **The baseband is native on Linux since 2026-09-26** (FINDINGS 36, 37):
   `sipc_wwan` (kernel 0022/0023) puts the AT channel on a WWAN port, ModemManager
-  1.24 with the `unisoc` plugin (`rootfs/deb-patches/modemmanager-0[1-5]`) drives it,
+  1.24 with the `unisoc` plugin (`rootfs/deb-patches/modemmanager-0[1-6]`) drives it,
   NetworkManager's `Mobile` connection brings context 1 up on `sipa_eth0` (IPv4
   static from `+CGCONTRDP`, IPv6 SLAAC, the /64 passed to `br0`).  Phosh shows the
   signal, Chatty lists the SIM's SMS (and deletes them from the SIM once imported),
@@ -171,6 +171,7 @@ FINDINGS.
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
+| openwrt | OpenWrt 25.12.5 in `/openwrt` of the root image, booted by `boot-os`/`boot-os-next` (`e5-os`); WAN by ModemManager (+ patch `06`), LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; `openwrt/README.md`, FINDINGS 39 |
 
 ## Open questions
 

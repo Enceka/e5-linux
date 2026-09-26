@@ -1,0 +1,32 @@
+#!/bin/sh /etc/rc.common
+# The modem's AT port: load sipc_wwan once the CP has booted and its AT
+# channel (/dev/stty_nr1) exists (e5-sipc-wwan.service on Debian).  Its WWAN
+# port reaches ModemManager through hotplug.  The modules are the Debian
+# root's, the ones built for this kernel.
+START=23
+USE_PROCD=1
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /bin/sh -c '
+		M=/mnt/e5-disk/usr/lib/modules/$(uname -r)/modem
+		i=0
+		until [ -e /dev/stty_nr1 ]; do
+			i=$((i + 1)); [ $i -gt 120 ] && { echo "no /dev/stty_nr1 after 120 s"; exit 1; }
+			sleep 1
+		done
+		# (OpenWrt'"'"'s insmod refuses to run without the release'"'"'s module
+		# directory, even for a module given by its path)
+		mkdir -p /lib/modules/$(uname -r)
+		grep -q "^wwan " /proc/modules || insmod $M/wwan.ko || exit 1
+		grep -q "^sipc_wwan " /proc/modules || insmod $M/sipc_wwan.ko || exit 1
+		echo "sipc_wwan loaded"'
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	rmmod sipc_wwan 2>/dev/null
+	return 0
+}

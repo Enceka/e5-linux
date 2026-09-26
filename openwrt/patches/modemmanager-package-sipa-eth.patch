@@ -1,0 +1,23 @@
+e5-linux: let the Unisoc SIPC data interface (sipa_eth*) through the
+virtual-device filter, once the modem's AT port exists.  Applied to the
+package directory (net/modemmanager) by openwrt/build-modemmanager.sh.
+
+--- a/files/usr/share/ModemManager/modemmanager.common
++++ b/files/usr/share/ModemManager/modemmanager.common
+@@ -138,6 +138,16 @@
+ 				;;
+ 			"mbimmux"*)
+ 				mm_log "debug" "mbim vlan netdevice $name"
++				;;
++			"sipa_eth"*)
++				# Unisoc SoC modems (e5-linux): the data interface of an SIPC
++				# modem is a virtual netdev, grouped with the AT port by the
++				# unisoc plugin's rules.  Only while that AT port exists: MM
++				# probes a net port that comes alone, fails, and forgets it,
++				# and the modem later comes up without its data port.  The
++				# AT port's hotplug reports it again once it appears.
++				ls -d /sys/class/wwan/wwan*at* >/dev/null 2>&1 || return 1
++				mm_log "debug" "unisoc sipa netdevice $name"
+ 				;;
+ 			*)
+ 				return 1

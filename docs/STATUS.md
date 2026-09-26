@@ -86,6 +86,13 @@ FINDINGS.
   `stop_marlin(MARLIN_BLUETOOTH)` waited 30 s with the WCN power lock held and
   Wi-Fi's teardown queued behind it.  `kernel/patches/0021` sends the disable from
   `mtty_close`; the USB link now drops 8 s after `systemctl reboot`.
+- **BT off no longer kills Wi-Fi** (FINDINGS 38, `kernel/patches/0026`): a
+  blocked BT switch at boot hung the shared SDIO bus and asserted the Wi-Fi
+  firmware -- the hotspot could not be joined.  Still open: a BT power cycle
+  (rfkill, the shell's BT switch) brings hci0 back without its vendor
+  configuration (placeholder address 27:93:31:14:22:11) -- the setup runs only at
+  attach; `HCI_QUIRK_NON_PERSISTENT_SETUP` is the candidate, untested against an
+  already enabled core.
 - **The hotspot in Phosh and Settings: patched, to be confirmed in use** (FINDINGS
   38).  Phosh shows the bridged `Hotspot` as on and turns it off (it has no "on"
   of its own in 0.46); Settings' Wi-Fi panel turns the same connection on instead

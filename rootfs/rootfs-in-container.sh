@@ -124,6 +124,12 @@ if want pack; then
     # Write a real one before packing; systemd-resolved would overwrite it once
     # an interface with DNS is up.
     printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\n' > "$ROOT/etc/resolv.conf"
+    # The same kind of stowaway: an empty /.dockerenv from the build container.
+    # On the device systemd-detect-virt then answers "docker", and every unit
+    # with ConditionVirtualization=!container is skipped without a word --
+    # ModemManager, systemd-timesyncd (the clock: the board has no RTC),
+    # systemd-pstore, systemd-random-seed, fstrim.
+    rm -f "$ROOT/.dockerenv"
     mkfs.ext4 -F -q -L e5linux "$OUT"
     M=/mnt/e5img
     mkdir -p "$M"

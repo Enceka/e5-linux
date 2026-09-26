@@ -1,0 +1,157 @@
+From: Enceka <enceka@yeah.net>
+Subject: [PATCH] sipc: sipc_wwan: register the AT port only while the channel is up
+
+The module loads at boot well before the CP has booted.  A port that
+exists but refuses to open (the sbuf channel is not READY yet) is one
+ModemManager probes once, fails and forgets, so the modem never
+appeared.  Register the WWAN port when the channel comes up and remove
+it when it goes down -- a CP reset takes it -- so udev and ModemManager
+see the modem leave and come back instead of an AT server that stopped
+answering.
+
+sbuf announces READY to the ring handlers (SBUF_NOTIFY_READY) but not
+its going down, so a delayed work polls sbuf_status() once a second as
+well.  The rings are still drained from module load.
+
+---
+diff --git a/drivers/unisoc_platform/modem/sipc/sipc_wwan.c b/drivers/unisoc_platform/modem/sipc/sipc_wwan.c
+index c52fb2c35..ea9b57035 100644
+--- a/drivers/unisoc_platform/modem/sipc/sipc_wwan.c
++++ b/drivers/unisoc_platform/modem/sipc/sipc_wwan.c
+@@ -27,6 +27,15 @@
+  * The CP asserts ("Error 0xb, The queue was full") when AT commands arrive
+  * back to back for minutes; its RIL and unisoc-cpd space them.  tx_gap_ms
+  * enforces a minimum gap between writes, so no client has to know.
++ *
++ * The port exists only while the channel is up.  At boot the module loads
++ * well before the CP has booted, and a port that refuses to open (the channel
++ * is not READY yet) is a port ModemManager probes once, fails and forgets.
++ * So the port is registered when the channel comes up and removed when it
++ * goes down -- a CP reset takes it -- and udev and ModemManager see the modem
++ * leave and come back instead of an AT server that stopped answering.  The
++ * channel announces READY to the ring handlers but not its going down, so a
++ * watch polls sbuf_status() once a second as well.
+  */
+ 
+ #include <linux/delay.h>
+@@ -39,6 +48,7 @@
+ #include <linux/sipc.h>
+ #include <linux/skbuff.h>
+ #include <linux/slab.h>
++#include <linux/workqueue.h>
+ #include <linux/wwan.h>
+ 
+ #define SIPC_WWAN_RX_CHUNK	2048
+@@ -62,7 +72,10 @@ module_param(tx_gap_ms, uint, 0644);
+ MODULE_PARM_DESC(tx_gap_ms, "minimum gap between two writes, in ms");
+ 
+ struct sipc_wwan {
++	/* registered while the channel is READY, by the watch; NULL otherwise */
+ 	struct wwan_port *port;
++	struct delayed_work watch;
++	bool stopping;
+ 	struct platform_device *pdev;
+ 	u8 dst;
+ 	u8 channel;
+@@ -95,6 +108,10 @@ static void sipc_wwan_cmd_notify(int event, void *data)
+ 	struct sk_buff *skb;
+ 	int n;
+ 
++	if (event == SBUF_NOTIFY_READY) {
++		mod_delayed_work(system_wq, &sw->watch, 0);
++		return;
++	}
+ 	if (event != SBUF_NOTIFY_READ)
+ 		return;
+ 
+@@ -238,6 +255,44 @@ static const struct wwan_port_ops sipc_wwan_ops = {
+ 	.tx_blocking = sipc_wwan_tx_blocking,
+ };
+ 
++static void sipc_wwan_remove_port(struct sipc_wwan *sw)
++{
++	struct wwan_port *port = sw->port;
++
++	/* removal stops an open port first: the rx paths see !open from then on */
++	wwan_remove_port(port);
++	mutex_lock(&sw->rx_lock);
++	sw->port = NULL;
++	mutex_unlock(&sw->rx_lock);
++}
++
++static void sipc_wwan_watch(struct work_struct *work)
++{
++	struct sipc_wwan *sw = container_of(to_delayed_work(work),
++					    struct sipc_wwan, watch);
++	bool up = sbuf_status(sw->dst, sw->channel) == 0;
++	struct wwan_port *port;
++
++	if (up && !sw->port) {
++		port = wwan_create_port(&sw->pdev->dev, WWAN_PORT_AT,
++					&sipc_wwan_ops, sw);
++		if (IS_ERR(port)) {
++			pr_err_ratelimited("sipc_wwan: no AT port: %ld\n",
++					   PTR_ERR(port));
++		} else {
++			mutex_lock(&sw->rx_lock);
++			sw->port = port;
++			mutex_unlock(&sw->rx_lock);
++			pr_info("sipc_wwan: channel up, AT port registered\n");
++		}
++	} else if (!up && sw->port) {
++		pr_info("sipc_wwan: channel down (CP reset?), AT port removed\n");
++		sipc_wwan_remove_port(sw);
++	}
++	if (!READ_ONCE(sw->stopping))
++		schedule_delayed_work(&sw->watch, HZ);
++}
++
+ static struct device_node *sipc_wwan_find_node(void)
+ {
+ 	struct device_node *np = NULL;
+@@ -290,12 +345,7 @@ static int __init sipc_wwan_init(void)
+ 	mutex_init(&sw->tx_lock);
+ 	mutex_init(&sw->rx_lock);
+ 	skb_queue_head_init(&sw->urc_held);
+-	sw->port = wwan_create_port(&sw->pdev->dev, WWAN_PORT_AT,
+-				    &sipc_wwan_ops, sw);
+-	if (IS_ERR(sw->port)) {
+-		ret = PTR_ERR(sw->port);
+-		goto err;
+-	}
++	INIT_DELAYED_WORK(&sw->watch, sipc_wwan_watch);
+ 	/* drain from now on (registering also drains what is already queued) */
+ 	ret = sbuf_register_notifier(dst, channel, cmd_ring,
+ 				     sipc_wwan_cmd_notify, sw);
+@@ -304,11 +354,11 @@ static int __init sipc_wwan_init(void)
+ 					     sipc_wwan_urc_notify, sw);
+ 	if (ret) {
+ 		sbuf_unregister_notifier(dst, channel, cmd_ring);
+-		wwan_remove_port(sw->port);
+ 		goto err;
+ 	}
+-	pr_info("sipc_wwan: AT port on %s (dst %u, channel %u): ring %d, URCs from ring %d\n",
++	pr_info("sipc_wwan: AT channel %s (dst %u, channel %u): ring %d, URCs from ring %d\n",
+ 		node_label, dst, channel, cmd_ring, urc_ring);
++	schedule_delayed_work(&sw->watch, 0);
+ 	return 0;
+ 
+ err:
+@@ -321,12 +371,16 @@ static void __exit sipc_wwan_exit(void)
+ {
+ 	struct sipc_wwan *sw = &sipc_wwan;
+ 
++	/* notifiers first: a READY event would queue the watch again */
+ 	if (urc_ring >= 0)
+ 		sbuf_unregister_notifier(sw->dst, sw->channel, urc_ring);
+ 	sbuf_unregister_notifier(sw->dst, sw->channel, cmd_ring);
++	WRITE_ONCE(sw->stopping, true);
++	cancel_delayed_work_sync(&sw->watch);
++	if (sw->port)
++		sipc_wwan_remove_port(sw);
+ 	pr_info("sipc_wwan: %lu bytes dropped while the port was closed\n",
+ 		sw->dropped);
+-	wwan_remove_port(sw->port);
+ 	put_device(&sipc_wwan.pdev->dev);
+ }
+ 

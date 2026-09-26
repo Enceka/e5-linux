@@ -78,7 +78,7 @@ channels that survive a failed boot.
 | Modem web page | ✅ `unisoc-cpd web` on `http://192.168.9.1:7887` (USB port only, no authentication) |
 | UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
 | Hotspot | ✅ NetworkManager's `Hotspot` connection (Phosh, UFI-TOOLS, `nmcli`) on 5 GHz ch36 / 80 MHz, SSID `E5-Linux`, a port of `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) — FINDINGS §35 |
-| Audio | ✅ speaker through ALSA (UCM `HiFi`/`Speaker`) and PipeWire, mic as "Internal Microphone"; `e5-audio.service` boots the AGDSP off `l_agdsp_a`; kernel `0010`-`0014`, `0017`, `0019`, `0020`, FINDINGS §24.8, §33, §34. ⏳ earpiece not yet heard |
+| Audio | ✅ speaker and microphone, both confirmed in use (Amberol, GNOME Sound Recorder, the Settings sound test): speaker through ALSA (UCM `HiFi`/`Speaker`, S16 interleaved) and PipeWire, mic as the "Internal Microphone" source (DSP capture, mono S16); `e5-audio.service` boots the AGDSP off `l_agdsp_a`; kernel `0010`-`0014`, `0017`, `0019`, `0020`, FINDINGS §24.8, §33, §34. ⏳ earpiece not yet heard |
 | Idle load | ✅ load average ~0 at idle (it read 6+ from vendor threads in `D` and synchronous console output) — kernel `0015`, FINDINGS §29 |
 
 ## Repository layout

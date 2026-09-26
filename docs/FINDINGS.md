@@ -3136,8 +3136,9 @@ The DSP capture scene writes 16-bit samples whatever hw_params say: opened `S24_
 S16_LE only.  Result: an "Internal Microphone" PipeWire source (mono, S16) with a
 plausible level.  A speaker-to-mic tone never showed up in the capture, noise did --
 not echo cancellation, as first assumed, but a speaker that was not playing (34); with
-34 fixed the tone comes back from the mic at its own frequency.  A voice test is still
-to be done.  The AP capture FE (hw:N,0) still stalls after one period.
+34 fixed the tone comes back from the mic at its own frequency, and recording voice
+with GNOME Sound Recorder works (confirmed 2026-09-26).  The AP capture FE (hw:N,0)
+still stalls after one period.
 
 ### 33.2 Earpiece
 

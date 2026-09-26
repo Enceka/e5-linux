@@ -1,0 +1,45 @@
+diff --git a/src/core/supplicant/nm-supplicant-config.c b/src/core/supplicant/nm-supplicant-config.c
+index 9e06639..64db45e 100644
+--- a/src/core/supplicant/nm-supplicant-config.c
++++ b/src/core/supplicant/nm-supplicant-config.c
+@@ -525,14 +525,35 @@ get_ap_params(guint                         freq,
+             return;
+         }
+ 
++        guint center_channel = 0;
++
+         /* Determine the center channel according to the table at
+-         * https://en.wikipedia.org/wiki/List_of_WLAN_channels */
++         * https://en.wikipedia.org/wiki/List_of_WLAN_channels
++         *
++         * (Backport of upstream "supplicant: fix center channel calculation":
++         * the old formula gave 154 instead of 155 for channels 149-161.) */
+         channel = (freq - 5000) / 5;
+-        channel = ((channel / 4 - 1) / 4) * 16 + 10;
+ 
+-        *out_ht40             = 1;
+-        *out_max_oper_chwidth = 1;
+-        *out_center_freq      = 5000 + 5 * channel;
++        if (channel >= 36 && channel <= 48)
++            center_channel = 42;
++        else if (channel >= 52 && channel <= 64)
++            center_channel = 58;
++        else if (channel >= 100 && channel <= 112)
++            center_channel = 106;
++        else if (channel >= 116 && channel <= 128)
++            center_channel = 122;
++        else if (channel >= 132 && channel <= 144)
++            center_channel = 138;
++        else if (channel >= 149 && channel <= 161)
++            center_channel = 155;
++        else if (channel >= 165 && channel <= 177)
++            center_channel = 171;
++
++        if (center_channel) {
++            *out_ht40             = 1;
++            *out_max_oper_chwidth = 1;
++            *out_center_freq      = 5000 + 5 * center_channel;
++        }
+ 
+         return;
+     }

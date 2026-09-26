@@ -11,11 +11,11 @@
 # advertised on br0 (e5-ipv6-share), and nat.nft forwards and filters (its
 # bridge table keeps the management ports off wlan0).
 #
-# 5 GHz, 80 MHz on channel 36 (5170-5250, not DFS in CN), not the 149 hostapd
-# used: NetworkManager 1.52 computes the VHT80 centre as channel 154 for
-# 149-161 (the right one is 155; fixed upstream in 2026, "supplicant: fix
-# center channel calculation"), and wpa_supplicant then fails the AP with
-# "Interface initialization failed".  Its formula is right for 36-48.
+# 5 GHz channel 149 at 80 MHz (5735-5815, centre 155), as the hostapd hotspot
+# had.  Needs the patched network-manager (1.52.1+e5, rootfs/deb-patches/):
+# trixie's computes that VHT80 centre as channel 154 and wpa_supplicant then
+# fails the AP ("Interface initialization failed").  Channel 36 at 80 MHz came
+# up with the stock package but no phone ever associated with it.
 [connection]
 id=Hotspot
 uuid=6f2c9e5a-3b1d-4e57-9a0c-e5e5e5000001
@@ -32,7 +32,7 @@ slave-type=bridge
 mode=ap
 ssid=E5-Linux
 band=a
-channel=36
+channel=149
 channel-width=80
 
 [wifi-security]

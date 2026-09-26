@@ -5,6 +5,11 @@ Description: network: a bridged access point is a hotspot too
  hotspot on offered to create a new, NAT-sharing one, and the hotspot dialog
  would have added ipv4.method=shared to it.  Such a port is now found and
  reused, reported as the hotspot while active, and left without IPv4.
+ .
+ Also: the dialog's "response" handler was connected on every start_hotspot (),
+ so after the dialog had been opened n times one "Turn On" saved and activated
+ the connection n times (seen: four activations at once, and an access point
+ phones could not join until it was restarted cleanly).
 Author: e5-linux
 Forwarded: no
 
@@ -24,7 +29,16 @@ Forwarded: no
        g_object_set (setting, "method", "shared", NULL);
 --- a/panels/network/net-device-wifi.c
 +++ b/panels/network/net-device-wifi.c
-@@ -148,6 +148,21 @@
+@@ -142,12 +142,30 @@
+         NMSettingIPConfig *s_ip4;
+ 
+         s_ip4 = nm_connection_get_setting_ip4_config (c);
++        /* a bridge port has no IPv4 setting at all */
++        if (s_ip4 == NULL)
++                return FALSE;
+         if (g_strcmp0 (nm_setting_ip_config_get_method (s_ip4),
+                        NM_SETTING_IP4_CONFIG_METHOD_SHARED) != 0) {
+                 return FALSE;
          }
  
          return TRUE;
@@ -46,7 +60,7 @@ Forwarded: no
  }
  
  static gboolean
-@@ -162,7 +177,7 @@
+@@ -162,7 +180,7 @@
          if (c == NULL)
                  return FALSE;
  
@@ -55,15 +69,34 @@ Forwarded: no
  }
  
  static GBytes *
-@@ -551,6 +566,11 @@
+@@ -550,6 +568,11 @@
+         setting = nm_connection_get_setting_by_name (connection, NM_SETTING_WIRELESS_SETTING_NAME);
          if (!setting)
                  return FALSE;
- 
++
 +        /* a port of a bridge has no IP setup of its own (see
 +         * connection_is_access_point ()) */
 +        if (nm_setting_connection_get_master (sc) != NULL)
 +                return TRUE;
-+
+ 
          sip = nm_connection_get_setting_ip4_config (connection);
          if (g_strcmp0 (nm_setting_ip_config_get_method (sip), "shared") != 0) {
-                 return FALSE;
+@@ -697,6 +720,10 @@
+         if (!self->hotspot_dialog) {
+                 self->hotspot_dialog = cc_wifi_hotspot_dialog_new (GTK_WINDOW (native));
+                 g_object_ref_sink (self->hotspot_dialog);
++                /* once: connected on every start_hotspot (), the handlers piled
++                 * up and one "Turn On" saved and activated the connection as
++                 * many times as the dialog had been opened */
++                g_signal_connect_after (self->hotspot_dialog, "response", G_CALLBACK (on_wifi_hotspot_dialog_response_cb), self);
+         }
+         cc_wifi_hotspot_dialog_set_device (self->hotspot_dialog, NM_DEVICE_WIFI (self->device));
+         hostname = cc_hostname_get_display_hostname (cc_hostname_get_default ());
+@@ -706,7 +733,6 @@
+         if (c)
+                 cc_wifi_hotspot_dialog_set_connection (self->hotspot_dialog, c);
+ 
+-        g_signal_connect_after (self->hotspot_dialog, "response", G_CALLBACK (on_wifi_hotspot_dialog_response_cb), self);
+         gtk_window_present (GTK_WINDOW (self->hotspot_dialog));
+ }
+ 

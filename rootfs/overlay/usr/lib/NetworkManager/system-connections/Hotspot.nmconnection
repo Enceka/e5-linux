@@ -25,6 +25,10 @@ interface-name=wlan0
 # of the hotspot and a joined Wi-Fi network was used last, and retries on its
 # own when the WCN firmware refuses the first beacon
 autoconnect=true
+# the hotspot is what wlan0 does after boot: above any Wi-Fi network joined
+# from Phosh (priority 0), which can still be chosen by hand -- wlan0 cannot
+# be an access point and a station at once
+autoconnect-priority=100
 master=br0
 slave-type=bridge
 

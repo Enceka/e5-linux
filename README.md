@@ -1,5 +1,7 @@
 # Linux on the Rongyue E5 (Unisoc UMS9621)
 
+> 中文文档：[`README.zh-CN.md`](README.zh-CN.md)
+
 A Linux bring-up for the Rongyue E5 5G handset/hotspot (`ums9158_1h10`,
 Unisoc UMS9621 / qogirn6lite, Android 13), built the way
 [mu300-linux](https://github.com/dikeckaan/mu300-linux) does it for the ZTE F50 /

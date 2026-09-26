@@ -71,7 +71,7 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 | 基带 Web 页面 | ✅ `unisoc-cpd web` 位于 `http://192.168.9.1:7887`（仅限 USB 端口访问，无认证） |
 | UFI-TOOLS（Linux 移植版） | ✅ `http://<设备>:2333`，修改前登录口令为 `admin` |
 | 热点 | ✅ NetworkManager 的 `Hotspot` 连接（Phosh、UFI-TOOLS、`nmcli` 均可控制），5 GHz 36 信道 / 80 MHz，SSID `E5-Linux`，作为 `br0` 的端口与 USB 端口同网；IPv4 经 NAT 走承载，承载的公网 IPv6 /64 通过 SLAAC 分配给所有局域网客户端（带状态防火墙）——FINDINGS §35 |
-| 音频 | ✅ 扬声器可通过 ALSA（UCM `HiFi`/`Speaker`）与 PipeWire 播放，麦克风为 “Internal Microphone”；`e5-audio.service` 从 `l_agdsp_a` 启动 AGDSP；内核补丁 `0010`–`0014`、`0017`、`0019`、`0020`，FINDINGS §24.8、§33、§34。⏳ 听筒尚未实听 |
+| 音频 | ✅ 扬声器与麦克风均已实际使用验证（Amberol、GNOME 录音机、设置中的声音测试）：扬声器经 ALSA（UCM `HiFi`/`Speaker`，S16 交错格式）与 PipeWire 播放，麦克风为 “Internal Microphone” 音源（DSP 录音，单声道 S16）；`e5-audio.service` 从 `l_agdsp_a` 启动 AGDSP；内核补丁 `0010`–`0014`、`0017`、`0019`、`0020`，FINDINGS §24.8、§33、§34。⏳ 听筒尚未实听 |
 | 空闲负载 | ✅ 空闲时负载均值约为 0（此前因厂商内核线程处于 `D` 状态及同步控制台输出而读数在 6 以上）——内核补丁 `0015`，FINDINGS §29 |
 
 ## 仓库结构

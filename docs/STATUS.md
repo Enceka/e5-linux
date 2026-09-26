@@ -23,9 +23,9 @@ FINDINGS.
      0019, 0020; previous copies as `*.pre-guard`, `*.pre-s16`, `*.pre-fast16`).  A
      fresh rootfs gets them from `out_linux` via `configure-rootfs.sh`, which now
      holds the current build.
-  2. **Mic and earpiece are routed, not yet heard** (FINDINGS 33): the DSP capture FE
-     gives an "Internal Microphone" source, and UCM has Earpiece.  Still to do: a
-     voice test into the mic (GNOME Sound Recorder), and listening to the earpiece
+  2. **Speaker and mic confirmed in use (2026-09-26); the earpiece is routed, not yet
+     heard** (FINDINGS 33, 34): the "Internal Microphone" source records voice
+     (GNOME Sound Recorder).  Still to do: listening to the earpiece
      (`alsaucm -c hw:0 set _verb HiFi set _disdev Speaker set _enadev Earpiece`).
      The AP capture FE (hw:N,0) still stalls after one period.
   3. `VBC_*_DEV_CHANGE=TYPE_SPK` fails at boot (the DSP is not answering yet at

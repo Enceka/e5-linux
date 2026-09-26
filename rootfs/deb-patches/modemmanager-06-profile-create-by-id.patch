@@ -1,0 +1,33 @@
+Description: profile-manager: setting a profile by an undefined id defines it
+ Setting the initial EPS bearer settings stores a profile at the context id
+ the modem reports for them (the lowest +CGDCONT id), and failed with
+ "Profile '1' not found" when that context was not defined -- the Unisoc SoC
+ modem boots with only its IMS context, at 11.  +CGDCONT=<cid>,... defines a
+ context as well as it changes one, so a profile set by an id that does not
+ exist yet is now created with that id; set by APN type, it still has to
+ exist.  (OpenWrt's ModemManager protocol sets the initial EPS bearer at
+ every connect, so without this the first connect after a modem boot failed.)
+Author: e5-linux
+Forwarded: no
+
+--- a/src/mm-iface-modem-3gpp-profile-manager.c
++++ b/src/mm-iface-modem-3gpp-profile-manager.c
+@@ -534,6 +534,18 @@
+     } else
+         g_assert_not_reached ();
+     if (!existing) {
++        /* A context id that is not defined yet is defined: +CGDCONT=<cid>,...
++         * creates a context as well as it changes one.  The initial EPS bearer
++         * settings are stored this way, at the context id the modem reports
++         * for them, and a modem may boot with that one undefined. */
++        if (g_strcmp0 (ctx->index_field, "profile-id") == 0 &&
++            g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND)) {
++            mm_obj_dbg (self, "creating profile '%s'", ctx->index_field_value_str);
++            g_clear_error (&error);
++            ctx->step++;
++            set_profile_step (task);
++            return;
++        }
+         g_task_return_error (task, error);
+         g_object_unref (task);
+         return;

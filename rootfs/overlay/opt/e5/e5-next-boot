@@ -25,6 +25,10 @@ set -eu
 CONF=/etc/e5linux/default-boot
 BC_A=/run/e5linux/misc-bc-slot-a.bin
 BC_B=/run/e5linux/misc-bc-slot-b-trial.bin
+# the initramfs leaves them in /run; a system that keeps copies of its own
+# (the OpenWrt tree, openwrt/install.sh) finds them in /etc/e5linux
+[ -f "$BC_A" ] || BC_A=/etc/e5linux/misc-bc-slot-a.bin
+[ -f "$BC_B" ] || BC_B=/etc/e5linux/misc-bc-slot-b-trial.bin
 MISC=$(cat /run/e5linux/misc-dev 2>/dev/null || readlink -f /dev/block/by-name/misc)
 
 write_bc() {

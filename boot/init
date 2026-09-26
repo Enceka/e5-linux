@@ -273,8 +273,19 @@ done
 log "stage=data-partition dev=${data:-none}"
 
 has_init() { [ -x "$1/lib/systemd/systemd" ] || [ -x "$1/sbin/init" ]; }
+# e5linux/boot-os names the system to start: a directory of that name on the
+# image (/openwrt), or the Debian root at the top of it (anything else).
+# e5linux/boot-os-next does the same for one boot only, and is removed as it is
+# read: a system tried that way (e5-os <name> --once) that does not come up
+# leaves the next boot to the one before it.
 pick_root() {
-    want=$(cat /disk/e5linux/boot-os 2>/dev/null)
+    want=$(cat /disk/e5linux/boot-os-next 2>/dev/null)
+    if [ -n "$want" ]; then
+        rm -f /disk/e5linux/boot-os-next
+        log "stage=boot-os-next os=$want (one boot)"
+    else
+        want=$(cat /disk/e5linux/boot-os 2>/dev/null)
+    fi
     for os in $want ubuntu; do
         [ -d "/disk/$os" ] && has_init "/disk/$os" && { echo "/disk/$os"; return; }
         [ "$os" = ubuntu ] && [ -x /disk/lib/systemd/systemd ] && { echo /disk; return; }
@@ -306,6 +317,18 @@ if [ -n "$rootdir" ]; then
     else
         mount --bind "$rootdir" /newroot
         mkdir -p /newroot/mnt/e5-disk && mount --move /disk /newroot/mnt/e5-disk
+        # A system in a directory of the image runs on the Debian root's
+        # hardware files -- the firmware pulled from this device, the Android
+        # vendor subset -- and they are bound in before it starts, not by the
+        # system itself: the WCN driver's first firmware download comes at
+        # about the time of switch_root, from whichever root is current.  It
+        # found OpenWrt's /lib/firmware still empty 1.5 s after switch_root,
+        # before OpenWrt's preinit had bound it, and timed out a minute later.
+        for pair in usr/lib/firmware:lib/firmware opt/e5/android:opt/e5/android; do
+            src=/newroot/mnt/e5-disk/${pair%%:*} dst=/newroot/${pair#*:}
+            [ -d "$src" ] || continue
+            mkdir -p "$dst" && mount --bind "$src" "$dst" && log "stage=bind $dst"
+        done
     fi
     # Default-Linux mode leaves LK decremented tries alone; userspace re-arms
     # slot b once the system is up (e5-boot-ok.service).
@@ -321,7 +344,11 @@ if [ -n "$rootdir" ]; then
     [ -x /newroot/lib/systemd/systemd ] && init=/lib/systemd/systemd
     # ... and into the real root filesystem, so the files survive and every later
     # boot (this one included -- systemd starts after this) has them in place.
-    if [ -d /e5-overlay ]; then
+    # Only into the Debian root, the one at the top of the image: the overlay
+    # is Debian's (systemd units, NetworkManager profiles, udev rules), and a
+    # system in a directory of its own (/openwrt, openwrt/build-rootfs.sh)
+    # brings its own configuration.
+    if [ -d /e5-overlay ] && [ "$rootdir" = /disk ]; then
         # Copy file by file: the Debian root has /lib, /bin and /sbin as symlinks
         # into /usr, and a single cp -a of the whole tree refuses to merge into
         # those ("target '/newroot/./lib' is not a directory"), which left the

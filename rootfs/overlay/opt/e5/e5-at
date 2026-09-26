@@ -38,7 +38,9 @@ case "$(printf '%s' "$CMD" | tr '[:lower:]' '[:upper:]' | tr -d ' ')" in
         exit 1 ;;
 esac
 
-if systemctl -q is-active ModemManager 2>/dev/null; then
+# (systemd on Debian; OpenWrt has procd, and pidof)
+if systemctl -q is-active ModemManager 2>/dev/null ||
+   { ! command -v systemctl >/dev/null && pidof ModemManager >/dev/null; }; then
     out=$(mmcli -m any --timeout="$T" --command="$CMD" 2>&1)
     rc=$?
     if [ $rc -eq 0 ]; then

@@ -1,0 +1,43 @@
+#!/bin/sh
+# Choose which Linux the E5 starts: Debian (the root image itself) or a system
+# installed in a directory on it (/openwrt, openwrt/install.sh).
+#
+#   e5-os openwrt          OpenWrt from now on
+#   e5-os openwrt --once   OpenWrt for the next boot only, then back to the current one
+#   e5-os debian           Debian from now on
+#   e5-os status
+#
+# The initramfs (boot/init, pick_root) reads e5linux/boot-os on the root image,
+# and e5linux/boot-os-next first, which it deletes as it reads it.  Reboot
+# afterwards.  Which of Android and Linux starts is e5-next-boot's business.
+set -eu
+# the root image: this system's / when it is Debian, /mnt/e5-disk otherwise
+D=/
+[ -d /mnt/e5-disk/e5linux ] || [ -d /mnt/e5-disk/lib ] && D=/mnt/e5-disk
+E=$D/e5linux
+mkdir -p "$E"
+
+case "${1:-status}" in
+    debian|ubuntu)
+        rm -f "$E/boot-os-next"
+        echo debian > "$E/boot-os"
+        echo "next boot: debian" ;;
+    status)
+        echo "boot-os: $(cat "$E/boot-os" 2>/dev/null || echo debian)"
+        [ -f "$E/boot-os-next" ] && echo "boot-os-next: $(cat "$E/boot-os-next") (one boot)"
+        echo "installed: debian$(for d in "$D"/*/; do [ -x "$d/sbin/init" ] && [ -f "$d/etc/openwrt_release" ] && printf ' %s' "$(basename "$d")"; done)"
+        ;;
+    -*|'') echo "usage: $0 debian|openwrt [--once]|status" >&2; exit 2 ;;
+    *)
+        os=$1
+        [ -x "$D/$os/sbin/init" ] || { echo "no system installed in $D/$os" >&2; exit 1; }
+        if [ "${2:-}" = --once ]; then
+            echo "$os" > "$E/boot-os-next"
+            echo "next boot: $os, once"
+        else
+            rm -f "$E/boot-os-next"
+            echo "$os" > "$E/boot-os"
+            echo "next boot: $os"
+        fi ;;
+esac
+sync

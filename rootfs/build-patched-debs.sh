@@ -24,6 +24,9 @@
 #       UFI-TOOLS reach the modem through ModemManager
 #   05  new contexts may take the ids below the first defined one: context 1
 #       is the one routed to sipa_eth0, and the CP boots with only IMS at 11
+#   06  a profile set by an id that is not defined yet is created with it:
+#       the initial EPS bearer goes to context 1, which the CP boots without
+#       (OpenWrt's ModemManager protocol sets it at every connect)
 #
 # phosh:
 #   01  the hotspot switch follows an access point whatever its IP setup: the

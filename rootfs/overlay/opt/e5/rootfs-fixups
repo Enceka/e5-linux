@@ -60,7 +60,7 @@ f=/usr/lib/dbus-1.0/dbus-daemon-launch-helper
 # /opt/e5 is on nobody's PATH, and sudo's secure_path cannot see it at all, so the
 # commands the documentation tells people to run need links from a directory that
 # is: `sudo e5-next-boot android`, `mobile-data status`, `e5-at "AT+CSQ"`.
-for c in e5-next-boot mobile-data e5-at; do
+for c in e5-next-boot e5-os mobile-data e5-at; do
     [ -x "/opt/e5/$c" ] || continue
     [ -e "/usr/local/bin/$c" ] || ln -sfn "/opt/e5/$c" "/usr/local/bin/$c" 2>/dev/null || true
 done

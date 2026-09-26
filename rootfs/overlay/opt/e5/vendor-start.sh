@@ -51,7 +51,14 @@ mkdir -p /dev/__properties__
 mountpoint -q /dev/__properties__ 2>/dev/null ||
     mount --bind "$A/dev/__properties__" /dev/__properties__ 2>/dev/null
 if [ ! -S /dev/socket/logdw ]; then
-  nohup python3 /opt/e5/logdw.py /dev/socket/logdw >> /var/log/e5-android-log.txt 2>&1 &
+  mkdir -p /var/log
+  # the compiled sink where there is one (the OpenWrt image has no Python,
+  # and no nohup; a service manager's child needs none)
+  if [ -x /opt/e5/bin/logdw ]; then
+    /opt/e5/bin/logdw /dev/socket/logdw >> /var/log/e5-android-log.txt 2>&1 &
+  else
+    nohup python3 /opt/e5/logdw.py /dev/socket/logdw >> /var/log/e5-android-log.txt 2>&1 &
+  fi
   sleep 1
 fi
 

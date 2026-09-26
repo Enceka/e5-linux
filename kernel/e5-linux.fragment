@@ -115,6 +115,9 @@ CONFIG_IP_NF_NAT=y
 CONFIG_IP_NF_TARGET_MASQUERADE=y
 CONFIG_BRIDGE=y
 CONFIG_BRIDGE_NETFILTER=y
+# OpenWrt's netifd creates every bridge with IFLA_BR_VLAN_FILTERING (0 or 1),
+# and a kernel without the option rejects it -- no bridge at all (openwrt/)
+CONFIG_BRIDGE_VLAN_FILTERING=y
 CONFIG_VLAN_8021Q=y
 CONFIG_MACVLAN=y
 CONFIG_IPVLAN=y

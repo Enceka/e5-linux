@@ -86,6 +86,12 @@ FINDINGS.
   `stop_marlin(MARLIN_BLUETOOTH)` waited 30 s with the WCN power lock held and
   Wi-Fi's teardown queued behind it.  `kernel/patches/0021` sends the disable from
   `mtty_close`; the USB link now drops 8 s after `systemctl reboot`.
+- **The hotspot can be joined again** (FINDINGS 38, `kernel/patches/0027`): the
+  P2P Device NetworkManager's wpa_supplicant added next to wlan0 made the
+  firmware answer no station; the driver offers no P2P now.  Checked with a Mac;
+  a phone to confirm.  Also open: the beacon's bogus Extended Supported Rates
+  (HT rates in the legacy tables), and a `cancel_work_sync` WARNING in
+  `sprd_dpu_stop` when the panel blanks.
 - **BT off no longer kills Wi-Fi** (FINDINGS 38, `kernel/patches/0026`): a
   blocked BT switch at boot hung the shared SDIO bus and asserted the Wi-Fi
   firmware -- the hotspot could not be joined.  Still open: a BT power cycle

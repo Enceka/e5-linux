@@ -78,7 +78,7 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 
 | 路径 | 内容 |
 |---|---|
-| `kernel/` | `build-linux.sh`、`e5-linux.fragment`（在设备 defconfig 之上追加的 Linux 配置）、`patches/0001-0026`（由 `build-linux.sh` 应用） |
+| `kernel/` | `build-linux.sh`、`e5-linux.fragment`（在设备 defconfig 之上追加的 Linux 配置）、`patches/0001-0027`（由 `build-linux.sh` 应用） |
 | `boot/` | `init`（initramfs）、`build-boot-image.py`、`stage-modules.sh` + `module-order.{stock,extra}`、`flash-trial.sh` / `android-boot-linux.sh`（从 Android 执行）、`flash-from-linux.sh`（从运行中的 e5-linux 执行） |
 | `rootfs/` | `build-rootfs-container.sh`（及 `rootfs-in-container.sh`，在 Debian arm64 容器中构建）、`install-rootfs.sh`、`packages.list`、`configure-rootfs.sh`、`fetch-debian-rootfs.py`、`install-packages.sh`、`pull-wcn-firmware.sh` / `pull-audio-firmware.sh` / `extract-android-vendor.sh`（从你的设备提取文件）、`stage-unisoc-cpd.sh`、`overlay/`；`device-*.sh` 与 `build-rootfs.sh`/`e5-chroot.sh` 是较早的设备端构建与 qemu 构建路径 |
 | `tools/` | `collect-logs.sh`、`e5-telnet.py`、`e5-serial.py`，以及截图/按键/触摸辅助工具 |

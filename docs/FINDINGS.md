@@ -3134,9 +3134,10 @@ The DSP capture scene writes 16-bit samples whatever hw_params say: opened `S24_
 -- which PipeWire picks when the DAI offers it -- each 32-bit word held two samples
 (`0xf9530021`) and the recording was noise at -0.5 dBFS.  `kernel/patches/0017` offers
 S16_LE only.  Result: an "Internal Microphone" PipeWire source (mono, S16) with a
-plausible level.  A speaker-to-mic tone never showed up in the capture, noise did;
-the DSP capture scene's echo cancellation is the likely reason, and a voice test is
-still to be done.  The AP capture FE (hw:N,0) still stalls after one period.
+plausible level.  A speaker-to-mic tone never showed up in the capture, noise did --
+not echo cancellation, as first assumed, but a speaker that was not playing (34); with
+34 fixed the tone comes back from the mic at its own frequency.  A voice test is still
+to be done.  The AP capture FE (hw:N,0) still stalls after one period.
 
 ### 33.2 Earpiece
 
@@ -3174,3 +3175,73 @@ unchanged.  Pairing and audio profiles are not tested yet.
 Trap from the prototype: `HCIUARTSETPROTO`/`HCIUARTSETFLAGS` take their argument by
 value; passed a pointer (Python's `fcntl.ioctl(fd, op, struct.pack(...))`) they fail
 with `EPROTONOSUPPORT`/`EINVAL`.
+
+## 34. The speaker after the first sound: three faults on one path (2026-09-26)
+
+Reported as "the Settings sound test is silent".  It was three independent faults, each
+hiding the next; the mic (33) turned out to be the best instrument -- a 440 Hz tone
+played through PipeWire and recorded through the mic, with a Goertzel scan over the
+recording, tells silent, stalled and wrong-pitch apart without anyone listening.
+
+### 34.1 The codec probed against dummy regulators
+
+Every playback in every boot of the journal logged `daaor_en_event check cal_done
+failed -110`, and `ANA_CDC7` (codec analog + 0x90, readable in
+`/proc/asound/card0/sprd-codec`, "analog part" row 0x0090) stayed 0 where Android
+reads 0x000f: the AO buffer DC calibration never completed.  The boot log said why:
+
+    23.06  sprd-codec-ump9620 ...: supply VB / BIAS / HEADMICBIAS / DAHPL_CHN not found,
+           using dummy regulator
+    25.51  snd_soc_sprd_codec_ump9620_power, _power_dev loaded (by e5-audio-dsp)
+
+udev autoloads the codec by modalias; the codec power regulators (`SRG_*`, instantiated
+by `-power-dev`, which has no modalias of its own) come 2.5 s later.  The calibration
+enables `DAHPL_CHN` around its poll, and a dummy enables nothing.  Fix, in the native
+place: `rootfs/overlay/etc/modprobe.d/e5-audio.conf`, a `softdep ... pre:` on the codec
+for both power modules.  After it the codec holds `SRG_DAHPL_CHN`, the calibration
+passes and `ANA_CDC7` reads 0x000f while playing.
+
+Reading the PMIC regmap for this: `/sys/kernel/debug/regmap/spi4.0/registers` is slow
+(each line is an ADI read; a grep for one register took minutes), but it seeks: lines
+are 15 bytes, so `dd bs=15 skip=$((reg/4)) count=1` reads one register at once.  The
+codec's analog block sits at regmap 0x1000 there (the driver's 0x3000 "AGCP" base is
+remapped).
+
+### 34.2 FE_FAST_P plays one S24 stream, then stalls
+
+With calibration fixed the first sound after boot was heard, nothing after it: every
+later `pw-play`, Amberol or Settings stream hung with the Speaker node running at
+quantum 0.  The PCM position (`echo "debug_pointer_log 1" >
+/proc/asound/card0/sprd-dmaengine`) sat at 0x5a0 from the start of the stream.  The AGCP
+DMA channel was enabled with request line 9 pending-enabled and never requested; its
+destination, 0x56500010, is the MCDT, not the VBC -- FAST_P goes AP DMA -> MCDT DAC4 ->
+DSP.  MCDT `DAC4_FIFO_ADDR_ST` (0x565000f4) read 0x02E00048 in a good stream (both
+pointers moving) and 0x00000168 in a stalled one: 0x168 words = 1440 bytes written, read
+pointer 0 -- the DSP never read the FIFO.
+
+The AP side was identical in both (same open/hw_params/trigger/SIPC sequence, same MCDT
+and DMA setup, same timing), and neither re-sending the per-stream controls Android
+sends (`KCTL_SET` MDG/DG, the profile select) nor the UCM route revived it.  Raw
+`aplay` isolated it: S16 streams restart every time (8/8, gaps 0-20 s); after an S24
+(`VBC_DAT_L24`) stream the next one stalls whatever its format, and it takes one or two
+stalled streams to clear.  PipeWire opened S24_32, so it stalled from its second
+stream on.  Android's HAL opens this FE S16 only (`data_fmt=VBC_DAT_L16` in its
+dmesg).  `kernel/patches/0019`: FE_FAST_P offers S16_LE only.
+
+### 34.3 PipeWire took the planar layout
+
+Now streams ran, and music sounded "strange": the mic heard 880 Hz for a 440 Hz tone,
+with a level spike per period, while raw interleaved `aplay` came back at 440 Hz.
+`pw-top` showed `S16P` -- planar.  `sprd_pcm_hardware_v1` advertises
+`SNDRV_PCM_INFO_NONINTERLEAVED` for every FE (the AP FEs split left/right over two DMA
+channels), but for an MCDT FE `sprd_pcm_hw_params()` forces one channel, so a planar
+buffer is played as interleaved frames: each plane twice as fast.  The 24-bit format
+had hidden this, since PipeWire only goes planar where it can.
+`kernel/patches/0020`: a startup callback constrains the MCDT FEs (the ids
+`mcdt_dma_config_init()` handles) to interleaved access.  Result: `S16LE 2 48000`,
+the tone back at 440 Hz three streams in a row, each 4 s file done in 4.2 s.
+
+Trap from this session: `busybox devmem` on an AGCP register (MCDT, DMA) while the
+domain is not accessible is the same synchronous external abort as 32 -- it rebooted
+the device into Android once.  Only read those while a stream is running, or use the
+driver's own dumps (`/proc/asound/card0/{vbc,sprd-codec}`, `debug_pointer_log`).

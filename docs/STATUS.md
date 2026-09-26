@@ -9,14 +9,18 @@ FINDINGS.
 
 ## Now (目前要做)
 
-- **Audio: the speaker plays through plain ALSA and PipeWire (2026-09-25).**
+- **Audio: the speaker plays through plain ALSA and PipeWire, every stream (2026-09-26).**
   FINDINGS 24.8 has the chain (kernel `0012`-`0014`, UCM route, profile selects,
-  WirePlumber rule).  The flashed image (`work/boot-linux-slotb-load2.img`) carries
-  the current overlay; `wpctl status` shows one Speaker sink.  What is left:
+  WirePlumber rule); FINDINGS 34 the three faults that left only the first sound after
+  boot audible, and at the wrong pitch (modprobe `softdep` for the codec regulators,
+  `0019` FE_FAST_P S16 only, `0020` MCDT FEs interleaved only).  Confirmed by ear with
+  Amberol.  `wpctl status` shows one Speaker sink.  What is left:
   1. **Four rebuilt audio modules were installed on the device by hand** (originals
      as `*.ko.orig` in `/usr/lib/modules/<rel>/audio/`, and `/root/agdsp_pd.ko.bak`):
      `snd-soc-sprd-card` (0012), `sprd-dmaengine-pcm` (0013),
-     `snd-soc-sprd-codec-ump9620` (0014), `agdsp_pd` (0010 without its retry).  A
+     `snd-soc-sprd-codec-ump9620` (0014), `agdsp_pd` (0010 without its retry);
+     since then also `sprd-dmaengine-pcm` (0016) and `snd-soc-sprd-vbc-fe` (0017,
+     0019, 0020; previous copies as `*.pre-guard`, `*.pre-s16`, `*.pre-fast16`).  A
      fresh rootfs gets them from `out_linux` via `configure-rootfs.sh`, which now
      holds the current build.
   2. **Mic and earpiece are routed, not yet heard** (FINDINGS 33): the DSP capture FE
@@ -123,12 +127,12 @@ FINDINGS.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 14 on slot a |
-| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
+| kernel | rebuilt `Image` (sha256 `17b829a4...`, `kernel/patches/0001-0009`); modules carry `0010-0017`, `0019`, `0020`; `Image` #4 with `0018` (BT); slot-b boot; console level 4 on the real root (FINDINGS 29) |
 | identity | pretty hostname `Rongyue E5` (`etc/machine-info`), `Processor: Unisoc T158` in `/proc/cpuinfo` (`kernel/patches/0009`), `Hardware Model` row deliberately unset |
 | rootfs | Debian 13 (trixie) arm64, a loop file inside Android's `/data/e5linux/`; base ownership/set-id bits recorded in `/var/lib/e5linux/base-perms` |
 | session | Phosh 0.46.0, `phoc` with wlroots' GLES2 renderer on the **Mali-G57**; the lock screen accepts the password again (`unix_chkpwd` setgid shadow) |
 | gpu | **panfrost**: `mali-g57` id `0x9091`, GLES 3.1 via Mesa 25.0.7, driven by `kernel/patches/0005` + the fragment's `MALI_MIDGARD=m`; kbase is a module nothing loads |
-| audio | speaker plays through ALSA (`hw:N,3`, UCM verb HiFi / device Speaker) and PipeWire; AGDSP booted from `l_agdsp_a` by `e5-audio.service`; period events from an hrtimer; no capture |
+| audio | speaker plays through ALSA (`hw:N,3`, S16 interleaved, UCM verb HiFi / device Speaker) and PipeWire; mic as "Internal Microphone" (`hw:N,2`, mono S16); earpiece routed, not yet heard; AGDSP booted from `l_agdsp_a` by `e5-audio.service`; period events from an hrtimer |
 | baseband | `unisoc-cpd` (Rust) owns the CP on both sides (FINDINGS 25); on Linux it starts at boot with the bearer, web page on `192.168.9.1:7887` |
 | wifi | `sprd_wlan_combo` on the WCN chip: scans 2.4 and 5 GHz APs; MAC is random per boot |
 | LAN | `br0` 192.168.9.1/24 = usb0 + the AP; IPv4 NAT + the bearer's public IPv6 /64 (SLAAC, stateful firewall); management ports only from the USB port |

@@ -228,14 +228,21 @@ class UiFields:
         return str(hotspot.get("hw_mode") or "").lower() in ("g", "b")
 
 
-def _rx(app) -> int:
+def _month_direction(app, direction: str) -> int:
+    """This month's received or sent bytes (``monthly_*`` is a monthly figure,
+    not the sum of every day ever sampled)."""
     traffic = app.runtime.data.get("traffic") or {}
-    return sum(int((value or {}).get("rx", 0)) for value in traffic.values() if isinstance(value, dict))
+    prefix = time.strftime("%Y-%m")
+    return sum(int((value or {}).get(direction, 0)) for key, value in traffic.items()
+               if isinstance(value, dict) and str(key).startswith(prefix))
+
+
+def _rx(app) -> int:
+    return _month_direction(app, "rx")
 
 
 def _tx(app) -> int:
-    traffic = app.runtime.data.get("traffic") or {}
-    return sum(int((value or {}).get("tx", 0)) for value in traffic.values() if isinstance(value, dict))
+    return _month_direction(app, "tx")
 
 
 def qr_placeholder_svg() -> str:

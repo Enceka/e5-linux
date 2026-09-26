@@ -33,16 +33,30 @@ def _read_counter(interface: str, direction: str) -> Optional[int]:
 
 
 def default_route_interface() -> Optional[str]:
-    """Interface carrying the default route, from /proc/net/route."""
+    """Interface carrying the default route, from /proc/net/route.
+
+    Any route to 0.0.0.0/0 that is up, gateway or not: a cellular bearer is a
+    point-to-point link (``default dev sipa_eth0``), whose default route has no
+    RTF_GATEWAY.  Requiring the gateway flag found no uplink on such a device,
+    and ``detect_interfaces`` then fell back to summing every interface -- the
+    LAN bridge and its ports counted the same bytes again, several times over.
+    With more than one default route the lowest metric wins.
+    """
+    best = None
     try:
         with open("/proc/net/route", "r", encoding="ascii") as handle:
             for line in handle.readlines()[1:]:
                 fields = line.split()
-                if len(fields) >= 2 and fields[1] == "00000000" and int(fields[7], 16) & 0x2:
-                    return fields[0]
+                if len(fields) < 8 or fields[1] != "00000000" or fields[7] != "00000000":
+                    continue
+                if not int(fields[3], 16) & 0x1:        # RTF_UP
+                    continue
+                metric = int(fields[6])
+                if best is None or metric < best[0]:
+                    best = (metric, fields[0])
     except (OSError, ValueError, IndexError):
         pass
-    return None
+    return best[1] if best else None
 
 
 def detect_interfaces(configured: str = "") -> List[str]:

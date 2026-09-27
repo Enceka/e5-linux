@@ -5,12 +5,24 @@
 #   e5-charge            the policy loop (the procd service /etc/init.d/e5-charge)
 #   e5-charge status     one line: capacity, whether it charges, the settings
 #
-# Unisoc's charger-manager takes the orders: charger.0/stop_charge, "1" stops
-# and "0" resumes (USB keeps powering the device either way -- the power path
-# is left alone), and marks the charger externally controlled, so
-# charger-manager does not turn charging back on by itself.  Its soc_control
-# is a factory run-in mode with fixed thresholds (stop at 70 %, resume at 65 %),
-# so the limit is this loop's.  /etc/config/e5-charge:
+# Stopping is two writes (docs/FINDINGS.md 41):
+#   * charger-manager's charger.0/stop_charge 1 -- its own bookkeeping, and it
+#     marks the charger externally controlled, so charger-manager does not
+#     turn charging back on by itself.  On its own it does not reach the chip:
+#     charger-manager skips a "redundant" disable and the AW322xx driver only
+#     writes its CE bit when its own flag says it is charging, and neither
+#     flag matches the chip (which went on charging, CE = 0, STAT "charge in
+#     progress");
+#   * the charger's high_impedance_enable 1 -- HiZ, the chip stops drawing from
+#     USB.  This charger (bq24158-like) has no power path: stopped means the
+#     battery runs the device, and the current goes negative (measured
+#     -120 mA with the panel on).  USB data is not affected.
+# Resuming undoes both.  HiZ left on would drain the battery, so this loop
+# clears it when it starts and when it stops, re-applies it every pass while
+# stopped (a replug resets the chip), and resumes at `start` whatever else.
+# charger-manager's soc_control is a factory run-in mode with fixed thresholds
+# (stop at 70 %, resume at 65 %), so the limit is this loop's.
+# /etc/config/e5-charge:
 #   enabled    1: the limit applies; 0: charge normally
 #   stop       stop charging at this capacity (%)
 #   start      charge again at or below this capacity (%)
@@ -18,6 +30,7 @@
 # Stopping the service always leaves charging on.
 BAT=/sys/class/power_supply/battery
 CTL=$BAT/charger.0/stop_charge
+HIZ=/sys/class/power_supply/aw322xx_charger/high_impedance_enable
 STATE=/tmp/run/e5-charge
 INTERVAL=30
 
@@ -31,9 +44,17 @@ online() {
 # 1 = stopped by us, 0 = charging allowed
 set_stop() {
 	[ -w "$CTL" ] || return 1
-	echo "$1" > "$CTL" 2>/dev/null
+	if [ "$1" = 1 ]; then
+		echo 1 > "$CTL" 2>/dev/null
+		[ -w "$HIZ" ] && echo 1 > "$HIZ"
+	else
+		[ -w "$HIZ" ] && echo 0 > "$HIZ"
+		echo 0 > "$CTL" 2>/dev/null
+	fi
 	echo "$1" > "$STATE/stopped"
 }
+
+hiz() { cat "$HIZ" 2>/dev/null || echo 0; }
 
 status() {
 	printf 'capacity=%s status=%s stopped=%s enabled=%s stop=%s start=%s full_once=%s\n' \
@@ -49,6 +70,9 @@ esac
 on_term() { set_stop 0; exit 0; }
 trap on_term TERM INT
 
+# whatever an earlier run left: charging on, then decide
+[ -w "$HIZ" ] && echo 0 > "$HIZ"
+rm -f "$STATE/stopped"
 stopped=0
 while :; do
 	cap=$(cat "$BAT/capacity" 2>/dev/null || echo 0)
@@ -73,8 +97,10 @@ while :; do
 		want=$stopped          # between the two: keep what it does
 	fi
 
-	# (the charger takes orders only while a charger is plugged in)
-	if online && { [ "$want" != "$stopped" ] || [ ! -f "$STATE/stopped" ]; }; then
+	# (the charger takes orders only while a charger is plugged in; while
+	# stopped, HiZ is re-applied if a replug reset the chip)
+	if online && { [ "$want" != "$stopped" ] || [ ! -f "$STATE/stopped" ] ||
+	               { [ "$want" = 1 ] && [ "$(hiz)" != 1 ]; }; }; then
 		if set_stop "$want"; then
 			[ "$want" != "$stopped" ] &&
 				logger -t e5-charge "$( [ "$want" = 1 ] && echo stop || echo resume ) charging at $cap %"

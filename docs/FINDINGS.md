@@ -3792,6 +3792,23 @@ and a write marks the charger externally controlled, so charger-manager does not
 re-enable it on its own.  It is refused while no charger is plugged in.  Its
 `soc_control` is the ODM's factory run-in mode ("limit soc 70%", `cm_smt_sm()`):
 fixed thresholds, stop at 70 % and resume at 65 %, not a user limit.  So the limit
-is a loop on OpenWrt (`e5-charge`): verified at 99 % with a limit of 80 %
-(`status` -> `Not charging`), off again (`Charging`), and "charge to full once"
-charging past the limit.
+is a loop on OpenWrt (`e5-charge`).
+
+**`stop_charge` alone does not stop the chip.**  The first check only read the
+status string (`Not charging`); the current said otherwise -- +125 mA before,
++121 mA after -- and the AW322xx's registers showed it charging on: control
+`0x01=0x30` (CE = 0, enabled), status `0x00=0xd0` (STAT = 01, charge in
+progress).  Two flags stand between the write and the chip: `try_charger_enable()`
+returns early when `cm->charger_enabled` already equals the request, and the
+driver's `aw32257_charger_set_status()` writes CE only `if (!val &&
+info->charging)`; neither matched the hardware.  (`CONFIG_CHARGE_PD` is unset,
+so the CE path, not a GPIO, is the one built.)  The driver's own
+`high_impedance_enable` does reach it: HiZ, the chip stops drawing from USB, and
+since this bq24158-like charger has no power path the battery then runs the
+device -- -118 mA within 5 s, `0x01=0x32`, STAT 00, still so after 60 s; HiZ off
+and it charges again (+25 mA).  So `e5-charge` stops with both (`stop_charge 1`
+for charger-manager's bookkeeping, HiZ 1 for the chip), resumes with both off,
+re-applies HiZ each pass while stopped (a replug resets the chip) and clears it
+when it starts and stops -- HiZ left on would run the battery flat.  Verified:
+limit 80 %, at 100 %: -121 mA, the battery discharging towards the resume level.
+A kernel fix for the two flags would make `stop_charge` enough on its own.

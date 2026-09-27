@@ -12,10 +12,8 @@
 # /dev/stty_nr1 itself: a second reader splits replies with the owner and makes
 # the CP's PS task assert with "The queue was full".
 #
-# Refused, whoever the owner: the commands after which the CP's AT server
-# answers nobody until a reboot (ATZ, AT+CPMS=...), the ones that leave the
-# SIM undetected until a reboot (AT+CFUN=0, the SFUN=5/3 stack cycle), and
-# writing the IMEI.  The info screen's /api/at keeps the same list.
+# Refused, whoever the owner: writing the IMEI.  The info screen's /api/at
+# keeps the same rule.
 set -u
 
 T=8
@@ -32,19 +30,17 @@ if [ $# -eq 0 ] || [ -z "$1" ]; then
 fi
 CMD=$1
 
-# Each ;-separated part is checked, not only the first ("AT+CSQ;+CFUN=0").
-# Also refused: writing the IMEI (AT+SPIMEI=, AT+EGMR=1,...).
+# Refused: writing the IMEI (AT+SPIMEI=, AT+EGMR=1,...), in any ;-separated
+# part.  Everything else is sent as it is -- including the commands after
+# which the CP's AT server answers nobody (ATZ, AT&F, AT+CPMS=...) or the SIM
+# is not seen (AT+CFUN=0, AT+SFUN=5/3) until a reboot.
 norm=$(printf '%s' "$CMD" | tr '[:lower:]' '[:upper:]' | tr -d ' ')
 refuse=
-case "$norm" in AT*) ;; *) refuse="not an AT command" ;; esac
 IFS=';'
 for part in ${norm#AT}; do
     part=${part#AT}
     case "$part" in
-        Z*|\&F*|+CPMS=*|+CFUN=0*|+SFUN=3*|+SFUN=5*)
-            refuse="it leaves the modem's AT server or SIM dead until a reboot" ;;
-        +SPIMEI=*|+EGMR=1*)
-            refuse="it writes the IMEI" ;;
+        +SPIMEI=*|+EGMR=1*) refuse="it writes the IMEI" ;;
     esac
 done
 unset IFS

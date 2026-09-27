@@ -90,6 +90,13 @@ sprd_wlan_combo.ko
 # device to hold and ping (see rootfs/overlay/etc/systemd/system.conf.d).
 sprd_pmic_wdt.ko
 
+# --- vibrator --------------------------------------------------------------------
+# The PMIC's vibrator child (pmic@0:vibrator@2390, "sprd,ump9620-vibrator"), as
+# Android loads it ("input: sc27xx:vibrator").  A force-feedback input device:
+# feedbackd on Debian (SMS, calls) and anything with EVIOCSFF/EV_FF on OpenWrt.
+# The driver takes the strength from rumble.weak_magnitude, not strong.
+sc27xx-vibra.ko
+
 # --- physical keys -------------------------------------------------------------
 # The board is a 5G feature phone, so most of its input is a 9-key pad, not touch.
 # The pad is a plain matrix keypad on the SoC's AON keypad controller:

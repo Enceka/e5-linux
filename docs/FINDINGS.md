@@ -3760,3 +3760,15 @@ the layout.  What the E5 needed on the way:
   are harmless.
 * A test trap: a host whose DNS answers with a VPN's fake IPs (`2001:2::/..`)
   cannot test IPv6 through the E5 with its own resolver -- ask the E5's dnsmasq.
+
+## 40. The vibrator (2026-09-27)
+
+The PMIC has one (`pmic@0:vibrator@2390`, `sprd,ump9620-vibrator`), and Android
+loads its driver ("input: sc27xx:vibrator").  Ours was built
+(`CONFIG_INPUT_SC27XX_VIBRA=m`) but never staged.  It is in the initramfs list now
+(`boot/module-order.extra`, image native16), so both systems have it: a
+force-feedback input device (`EV_FF`, `FF_RUMBLE`), which feedbackd drives on
+Debian (Phosh's SMS and call feedback) and anything with `EVIOCSFF` on OpenWrt.
+**The driver takes the strength from `rumble.weak_magnitude`**: an effect with only
+`strong_magnitude` set plays at strength 0 -- accepted, and silent (the first
+test here did exactly that).  Verified by hand with a 400-600 ms rumble.

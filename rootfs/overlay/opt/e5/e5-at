@@ -12,8 +12,10 @@
 # /dev/stty_nr1 itself: a second reader splits replies with the owner and makes
 # the CP's PS task assert with "The queue was full".
 #
-# Refused, whoever the owner: writing the IMEI.  The info screen's /api/at
-# keeps the same rule.
+# Nothing is refused.  Warned about, whoever the owner: the commands after
+# which the CP's AT server answers nobody (ATZ, AT&F, AT+CPMS=...) or the SIM
+# is not seen (AT+CFUN=0, AT+SFUN=3/5) until a reboot.  The info screen's
+# /api/at warns the same way.
 set -u
 
 T=8
@@ -30,24 +32,23 @@ if [ $# -eq 0 ] || [ -z "$1" ]; then
 fi
 CMD=$1
 
-# Refused: writing the IMEI (AT+SPIMEI=, AT+EGMR=1,...), in any ;-separated
-# part.  Everything else is sent as it is -- including the commands after
-# which the CP's AT server answers nobody (ATZ, AT&F, AT+CPMS=...) or the SIM
-# is not seen (AT+CFUN=0, AT+SFUN=5/3) until a reboot.
+# Warned about, not refused: the commands after which the CP's AT server
+# answers nobody (ATZ, AT&F, AT+CPMS=...) or the SIM is not seen (AT+CFUN=0,
+# AT+SFUN=3/5) until a reboot.  Every ;-separated part is checked, and the
+# command is sent as it is.
 norm=$(printf '%s' "$CMD" | tr '[:lower:]' '[:upper:]' | tr -d ' ')
-refuse=
+warn=
 IFS=';'
 for part in ${norm#AT}; do
     part=${part#AT}
     case "$part" in
-        +SPIMEI=*|+EGMR=1*) refuse="it writes the IMEI" ;;
+        Z*|\&F*|+CPMS=*|+CFUN=0*|+SFUN=3*|+SFUN=5*)
+            warn="it may leave the modem's AT server or SIM dead until a reboot" ;;
     esac
 done
 unset IFS
-if [ -n "$refuse" ]; then
-    echo "e5-at: refusing '$CMD': $refuse" >&2
-    echo "ERROR"
-    exit 1
+if [ -n "$warn" ]; then
+    echo "e5-at: warning: '$CMD' $warn" >&2
 fi
 
 # (systemd on Debian; OpenWrt has procd, and pidof)

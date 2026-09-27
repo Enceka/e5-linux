@@ -38,8 +38,8 @@ if [ ! -f "$IMG" ] || [ -n "${E5_REBUILD:-}" ]; then
 fi
 echo "== checking the image for device files"
 bad=$(tar -tzf "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz" |
-      grep -E 'lib/firmware/(wcnmodem|gnssmodem|l_agdsp|wifi_board|sprd/)|opt/e5/android/.|etc/e5/install\.conf|mnt/vendor/.' || true)
-[ -z "$bad" ] || { echo "the generic image carries device files:" >&2; echo "$bad" | head >&2; exit 1; }
+      grep -E 'lib/firmware/(wcnmodem|gnssmodem|l_agdsp|wifi_board|sprd/)|opt/e5/android/.|etc/e5/install\.conf|mnt/vendor/.|attendedsysupgrade' || true)
+[ -z "$bad" ] || { echo "the generic image carries what it must not (device files, attended sysupgrade):" >&2; echo "$bad" | head >&2; exit 1; }
 
 echo "== boot image without the overlay"
 BOOT="$TOP/work/boot-linux-slotb-bundle"

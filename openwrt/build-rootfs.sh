@@ -173,6 +173,12 @@ apk add --allow-untrusted /in/apk/modemmanager-1*.apk /in/apk/modemmanager-rpcd-
 # (dbus-utils: dbus-monitor, for e5-sms-notify)
 apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils luci-proto-modemmanager \
     dbus-utils >/dev/null
+# attended sysupgrade flashes whole-disk images: that would overwrite the eMMC
+# (removed before the translations below, whose package for it would hold it)
+apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>&1 || true
+if grep -q "^P:luci-app-attendedsysupgrade$" /lib/apk/db/installed; then
+    echo "luci-app-attendedsysupgrade is still installed" >&2; exit 1
+fi
 # LuCI in Chinese: the base and each installed application'"'"'s translation
 # (the language is chosen at first boot, 93-e5-luci)
 apk add luci-i18n-base-zh-cn >/dev/null
@@ -186,8 +192,6 @@ echo "argon: $(sed -n "/^P:luci-theme-argon$/{n;s/^V://p}" /lib/apk/db/installed
 if [ -f /in/infoscreen/packages.txt ]; then
     apk add $(grep -v "^#" /in/infoscreen/packages.txt) >/dev/null
 fi
-# attended sysupgrade flashes whole-disk images: that would overwrite the eMMC
-apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>&1 || true
 # (apk info <name> describes the repository'"'"'s package; the installed one is here)
 echo "modemmanager $(sed -n "/^P:modemmanager$/{n;s/^V://p}" /lib/apk/db/installed) installed"
 

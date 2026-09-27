@@ -6,8 +6,8 @@
 # Only boot_b and misc's bootloader_control are written, as by boot/flash-trial.sh; boot/init keeps the
 # slot-b trial state it booted with in /run/e5linux, which re-arms the one-shot slot (tries=2, not successful:
 # a kernel that does not come up falls back to Android).  Refused unless the device runs a mainline trial, i.e.
-# the root filesystem is the copy (openwrt-mainline.ext4), so that the extra files (file:dest, e.g. a module
-# for the copy's /lib/modules) never land in the image in use.  The device pulls over HTTP from the host.
+# the root filesystem is the copy (openwrt-mainline.ext4), so that what goes into the root (the modules of
+# upstream/root-modules.txt, and extra file:dest pairs) never lands in the image in use.  The device pulls over HTTP from the host.
 set -eu
 IMG=$1; shift
 BASE=${IMG%.img}
@@ -33,6 +33,10 @@ trap 'kill $P 2>/dev/null; rm -rf "$S"' EXIT
 dd if="$IMG" of="$S/head.img" bs=1M count=$MB 2>/dev/null
 (cd "$S" && exec python3 -m http.server "$PORT" --bind "$LOCAL") >/dev/null 2>&1 & P=$!
 sleep 2
+# the modules OpenWrt loads from the root (upstream/root-modules.txt), for this kernel
+"$TOP/upstream/root-modules.sh" >/dev/null
+cp "$TOP/upstream/out/root-modules.tar" "$S/"
+dev "wget -q -O - http://$LOCAL:$PORT/root-modules.tar | tar -xf - -C / && ls /lib/modules/$(cat "$TOP/upstream/out/kernel.release")/*/ | wc -l"
 for fd in "$@"; do
     f=${fd%%:*} d=${fd#*:}
     cp "$f" "$S/$(basename "$f")"

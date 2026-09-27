@@ -1,0 +1,34 @@
+# Modules OpenWrt loads from the root filesystem rather than the initramfs, as <dir>/<module>.ko under
+# /lib/modules/<release>/ (the trial scripts put them into the trial root):
+#   modem/  sipc_wwan once the CP's AT channel exists (/etc/init.d/e5-sipc-wwan)
+#   audio/  the audio stack, once the DSP can run (/opt/e5/e5-audio-dsp, from /etc/init.d/e5-audio)
+#   thermal/ the vendor sensors while their readings are checked by hand (not loaded by anything)
+modem/sipc_wwan.ko
+audio/agdsp_pd.ko
+audio/audio_mem.ko
+audio/audio_sipc.ko
+audio/sprd_audcp_boot.ko
+audio/sprd_audcp_dvfs.ko
+audio/mcdt_hw_r2p0.ko
+audio/sprd_apipe.ko
+audio/audio-pipe.ko
+audio/audio-dsp-dump.ko
+audio/voice_trigger_irq.ko
+audio/snd-soc-sprd-dummy-codec.ko
+audio/snd-soc-fsa4480.ko
+audio/snd-soc-sprd-pa-aw87xxx.ko
+audio/snd-soc-sprd-card.ko
+audio/snd-soc-sprd-codec-ump9620-power.ko
+audio/snd-soc-sprd-codec-ump9620-power-dev.ko
+audio/snd-soc-sprd-codec-ump9620.ko
+audio/snd-soc-sprd-pdm-r2p0.ko
+audio/snd-soc-sprd-tdm.ko
+audio/snd-soc-sprd-vbc-v4.ko
+audio/snd-soc-sprd-vbc-fe.ko
+audio/sprd-compr-2stage-dma.ko
+audio/sprd-platform-pcm-routing.ko
+audio/sprd-dmaengine-pcm.ko
+thermal/sprd_thermal_r5p0.ko
+thermal/sprd_ump96xx_tsensor.ko
+thermal/sprd_shell_thm.ko
+thermal/sprd_soc_thm.ko

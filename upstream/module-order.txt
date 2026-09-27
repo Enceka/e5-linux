@@ -32,6 +32,10 @@ sprd-drm.ko
 gpu-sched.ko
 drm_shmem_helper.ko
 panfrost.ko
+sprd_battery_info.ko
+sprd-charger-manager.ko
+ump96xx_fuel_gauge.ko
+aw32257_charger.ko
 wcn_bsp.ko
 sprd_wlan_combo.ko
 sc27xx-vibra.ko

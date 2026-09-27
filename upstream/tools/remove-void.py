@@ -23,9 +23,15 @@ while depth:
     depth += {'{': 1, '}': -1}.get(s[i], 0)
     i += 1
 body = s[start:i - 1]
+# an error returned right after a NULL check of the driver data ("if (!data) return -EINVAL;", maybe with a
+# message first) only ended the remove early: a plain return now; any other error stops the conversion
+guard = r'(if\s*\(\s*!\s*[\w>.-]+\s*\)\s*(?:\{[^{}]*?)?)return\s+-E[A-Z]+\s*;'
+body, nguard = re.subn(guard, r'\1return;', body)
 others = [r for r in re.findall(r'return\s+([^;]+);', body) if r.strip() != '0']
 if others:
     sys.exit(f'{path}: {name} returns {others}: convert by hand')
+if nguard:
+    print(f'{path}: {name}: {nguard} early error return(s) after a NULL check -> return')
 body = re.sub(r'\n\n\treturn 0;\n$', '\n', body)          # the final return, with the blank line before it
 body = re.sub(r'\n\treturn 0;\n$', '\n', body)
 body = re.sub(r'return 0;', 'return;', body)               # early returns

@@ -1,0 +1,13 @@
+#!/bin/sh
+# E5 first boot: LuCI in Chinese with the Argon theme (both preinstalled,
+# openwrt/build-rootfs.sh).  Once: a reinstall keeps the configuration, and a
+# language or theme chosen since stays (LuCI -> System -> System -> Language
+# and Style).
+[ -f /etc/e5/configured.luci ] && exit 0
+uci -q batch <<UCI
+set luci.main.lang='zh_cn'
+set luci.main.mediaurlbase='/luci-static/argon'
+commit luci
+UCI
+mkdir -p /etc/e5 && touch /etc/e5/configured.luci
+exit 0

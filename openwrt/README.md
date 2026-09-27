@@ -55,6 +55,7 @@ What the E5 needs besides, in `overlay/`:
 | `etc/hotplug.d/wwan/26-e5-sipa-eth`, `lib/udev/rules.d/78-e5-mm-sipc.rules` | ModemManager without udev: the data port once the AT port exists, no tty probing |
 | `etc/hotplug.d/iface/10-e5-usb0` | puts `usb0` into `br-lan` without netifd touching it: the NCM gadget must never go down |
 | `etc/uci-defaults/90-e5`, `91-e5-wireless`, `92-e5-default-boot` | first boot: LAN, WAN, DHCP, the bearer's IPv6 /64 on the LAN, hotspot; Linux as the default boot for an install from Android |
+| `etc/uci-defaults/93-e5-luci` | first boot: LuCI in Chinese with the Argon theme (both preinstalled; Argon from its release's packages, pinned in `build-rootfs.sh`) |
 | `etc/init.d/e5-apn-auto`, `usr/libexec/e5-apn-auto` | the APN from the SIM's operator (MCC+MNC) when none was given (`network.wan.apn_auto=1`), at every boot |
 | `etc/init.d/e5-sms-notify`, `usr/libexec/e5-sms-notify` | a new SMS vibrates (`e5-vibrate`, `/etc/config/e5-notify`) and is counted unread (`/tmp/run/e5-sms/unread`, `e5-sms-notify read`) |
 | `etc/init.d/e5-charge`, `usr/libexec/e5-charge` | charge control: stop at an upper limit, resume at a lower one, charge to full once (`/etc/config/e5-charge`, through charger-manager's `stop_charge`) |
@@ -172,7 +173,8 @@ The boot image must be one with the current `boot/init` (native13 or later).
 
 ## Using it
 
-* LuCI: `http://192.168.9.1`, SSH: `ssh root@192.168.9.1`, telnet from the
+* LuCI: `http://192.168.9.1` (Chinese, Argon theme; System -> System ->
+  Language and Style changes either), SSH: `ssh root@192.168.9.1`, telnet from the
   USB port.  The password is `root` until you change it (`passwd`), as on the
   Debian image.
 * Switch: `e5-os debian` or `e5-os openwrt`, then `reboot`

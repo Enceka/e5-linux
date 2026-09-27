@@ -55,7 +55,7 @@ What it does:
 ## Using it
 
 * Hotspot: the name and key set while flashing; or the USB cable (USB network).
-* LuCI: `http://192.168.9.1`, user `root`, password `root` -- **change it**
+* LuCI (in Chinese, Argon theme; System -> System -> Language and Style): `http://192.168.9.1`, user `root`, password `root` -- **change it**
   (LuCI -> System -> Administration, or `passwd` over SSH).
 * SSH: `ssh root@192.168.9.1`.
 * The panel: left/right turn the pages, confirm presses, back goes back; 高级

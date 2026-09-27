@@ -11,8 +11,11 @@
 #
 #  * packages from OpenWrt's repository: the access point (wpad-basic-mbedtls,
 #    wifi-scripts, iw), bash, util-linux mount, ip-full, LuCI's ModemManager
-#    protocol; and ModemManager itself from out/openwrt/, built with the unisoc
-#    plugin by build-modemmanager.sh;
+#    protocol, LuCI in Chinese (luci-i18n-*-zh-cn for what is installed); and
+#    ModemManager itself from out/openwrt/, built with the unisoc plugin by
+#    build-modemmanager.sh;
+#  * the Argon theme for LuCI (jerrykuku/luci-theme-argon, its release's apk
+#    packages, pinned by version and sha256 below) with its settings page;
 #  * openwrt/overlay/: the procd services for the hardware, the first-boot
 #    configuration, the ModemManager glue, the sysupgrade guard;
 #  * from the Debian image's overlay (rootfs/overlay/opt/e5): the scripts both
@@ -72,6 +75,21 @@ FIRMWARE=${E5_FIRMWARE:-$TOP/rootfs/overlay/lib/firmware}
 ANDROID=${E5_ANDROID_SUBSET:-$TOP/work/android-subset}
 KBUILD=${E5_KBUILD:-$TOP/out_linux}
 mkdir -p "$WORK" "$OUT"
+
+# the Argon theme: not in OpenWrt's feeds; its release's packages (arch all)
+ARGON_URL=https://github.com/jerrykuku/luci-theme-argon/releases/download/v2.4.7
+ARGON_APKS="c5f0e3a55ef96213884184be9aeaadc8586418986c4dde1ff1866be5e938aaef luci-theme-argon-2.4.7-r1.apk
+506e2bc4bef7d40fab051bb38902f71a8af0356ebe765f01b1808f6d2ce8bf8f luci-app-argon-config-2.4.7-r1.apk
+00163d6b9d7f1fccae84bd220c6f3c9a4f78fe063b1d12408127d36bfe38dd7e luci-i18n-argon-config-zh-cn-26.103.13761.3e099a3.apk"
+mkdir -p "$WORK/extra"
+rm -f "$WORK/extra/"*.apk.part
+printf "%s\n" "$ARGON_APKS" | while read -r sum f; do
+    [ -f "$WORK/extra/$f" ] || { curl -fsSL -o "$WORK/extra/$f.part" "$ARGON_URL/$f" && mv "$WORK/extra/$f.part" "$WORK/extra/$f"; }
+    got=$(shasum -a 256 "$WORK/extra/$f" 2>/dev/null || sha256sum "$WORK/extra/$f")
+    [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/extra/$f"; exit 1; }
+done
+# (only the pinned ones go in)
+EXTRA_LIST=$(printf "%s\n" "$ARGON_APKS" | awk '{print "/in/extra/" $2}' | tr '\n' ' ')
 
 ls "$OUT"/modemmanager-1*.apk >/dev/null 2>&1 || {
     echo "no ModemManager package in $OUT -- run openwrt/build-modemmanager.sh first" >&2; exit 1; }
@@ -144,6 +162,7 @@ docker run --rm --platform linux/arm64 \
     -v "$OUT":/in/apk:ro -v "$BUSYBOX":/in/busybox:ro -v "$WORK/logdw":/in/logdw:ro \
     -v "$WORK/e5-vibrate":/in/e5-vibrate:ro -v "${INFOSCREEN:-$WORK/no-infoscreen}":/in/infoscreen:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" \
+    -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
     e5-openwrt-base:$VER /bin/sh -euc '
 mkdir -p /var/lock /var/run /tmp
@@ -154,6 +173,15 @@ apk add --allow-untrusted /in/apk/modemmanager-1*.apk /in/apk/modemmanager-rpcd-
 # (dbus-utils: dbus-monitor, for e5-sms-notify)
 apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils luci-proto-modemmanager \
     dbus-utils >/dev/null
+# LuCI in Chinese: the base and each installed application'"'"'s translation
+# (the language is chosen at first boot, 93-e5-luci)
+apk add luci-i18n-base-zh-cn >/dev/null
+for p in $(sed -En "s/^P:luci-(app|proto)-//p" /lib/apk/db/installed); do
+    apk add "luci-i18n-$p-zh-cn" >/dev/null 2>&1 && echo "zh-cn: luci-i18n-$p-zh-cn"
+done
+# the Argon theme (its release'"'"'s packages, unsigned)
+apk add --allow-untrusted $EXTRA_LIST >/dev/null
+echo "argon: $(sed -n "/^P:luci-theme-argon$/{n;s/^V://p}" /lib/apk/db/installed)"
 # the info screen'"'"'s packages (cage, cog, Mesa, ...), when there is one
 if [ -f /in/infoscreen/packages.txt ]; then
     apk add $(grep -v "^#" /in/infoscreen/packages.txt) >/dev/null

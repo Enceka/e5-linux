@@ -1,0 +1,34 @@
+#!/bin/sh
+# Mainline bring-up probe for the E5 (after mu300-linux/upstream/init-bringup): log what the kernel sees,
+# keep it in pstore (ramoops: the console record, and a summary in pmsg, which the kernel's own messages do
+# not crowd out), then warm-reboot.  Slot b is not marked successful, so LK goes back to Android, where
+# /sys/fs/pstore has the record (upstream/collect-pstore.sh).
+/bin/busybox mkdir -p /proc /sys /dev /tmp
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null
+/bin/busybox --install -s /bin
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+log() {
+    echo "E5-MAINLINE: $*" > /dev/kmsg
+    [ -c /dev/pmsg0 ] && echo "E5-MAINLINE: $*" > /dev/pmsg0
+}
+log "userspace up: $(uname -a)"
+log "uptime $(cut -d' ' -f1 /proc/uptime)"
+log "cpus online: $(cat /sys/devices/system/cpu/online) possible: $(cat /sys/devices/system/cpu/possible)"
+log "mem: $(grep -E 'MemTotal|MemFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
+log "cmdline: $(cat /proc/cmdline)"
+log "pstore: $(ls /sys/fs/pstore 2>&1 | tr '\n' ' ')"
+log "platform devices: $(ls /sys/bus/platform/devices | wc -l)"
+for d in /sys/bus/platform/drivers/*; do
+    n=$(ls "$d" | grep -c "[.@]")
+    [ "$n" -gt 0 ] && log "driver ${d##*/}: $(ls "$d" | grep "[.@]" | tr '\n' ' ')"
+done
+log "deferred: $(tr '\n' ';' < /sys/kernel/debug/devices_deferred 2>/dev/null | cut -c1-900)"
+log "spi: $(ls /sys/bus/spi/devices/ 2>&1 | tr '\n' ' ')"
+log "tty: $(ls /sys/class/tty | grep -v '^tty[0-9]*$' | tr '\n' ' ')"
+log "interrupts: $(grep -c : /proc/interrupts) lines, $(head -1 /proc/interrupts | tr -s ' ')"
+log "warnings in dmesg: $(dmesg | grep -ciE 'warning|bug:|oops|error')"
+for c in 1 2 3; do log "uptime $(cut -d' ' -f1 /proc/uptime) load $(cut -d' ' -f1-3 /proc/loadavg)"; sleep 5; done
+log "rebooting (warm) so the log survives in ramoops"
+echo b > /proc/sysrq-trigger

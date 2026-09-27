@@ -13,6 +13,11 @@ UFI-TOOLS/
 # is tracked (rootfs/stage-unisoc-cpd.sh writes it).
 /unisoc-cpd/
 
+# linux-lts-e5 is the mainline kernel, a repository of its own
+# (https://github.com/Enceka/linux-lts-e5, Linux 6.18.y plus the E5 port);
+# upstream/ builds it.
+/linux-lts-e5/
+
 # build trees / outputs
 out_linux/
 out_modules/

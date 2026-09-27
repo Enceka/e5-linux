@@ -14,10 +14,13 @@
 #  * a boot image without the Debian overlay (boot/build-boot-image.py with no
 #    --overlay): the overlay is Debian's, and holds this device's firmware,
 #    MAC addresses and hotspot profile;
-#  * the scripts that pull the recipient's own firmware and vendor files off
-#    their Android (rootfs/pull-*-firmware.sh, extract-android-vendor.sh, and
-#    the tools they need); boot/init unpacks those into the image at boot
-#    (e5linux/device-files.tar);
+#  * the flasher, flash.py (Python: Windows, macOS, Linux; flash.cmd and
+#    flash.sh start it), which pulls the recipient's own firmware off their
+#    Android and converts it (tools/sprd-bt-config.py, vbc-profile), and has
+#    the vendor subset collected and packed on the device itself
+#    (bundle/collect-device-files.sh) -- some of those files have ":" in their
+#    names, which Windows cannot store; boot/init unpacks the archive into the
+#    image at boot (e5linux/device-files.tar);
 #  * the device-side installers for updates over the USB LAN.
 #
 # Both images are checked for the files that must not be there before the
@@ -57,26 +60,42 @@ grep -q "Linux version $rel " < <(strings "$KERNEL") ||
 S=$(mktemp -d)
 trap 'rm -rf "$S"' EXIT
 P=$S/$NAME
-mkdir -p "$P/files" "$P/scripts/rootfs" "$P/scripts/tools"
-cp "$HERE/bundle/flash.sh" "$P/" && chmod 755 "$P/flash.sh"
+mkdir -p "$P/files" "$P/scripts/tools"
+# the flasher: flash.py (Windows, macOS, Linux), started by flash.cmd / flash.sh
+cp "$HERE/bundle/flash.py" "$HERE/bundle/flash.sh" "$HERE/bundle/flash.cmd" "$P/"
+chmod 755 "$P/flash.py" "$P/flash.sh"
 cp "$HERE/bundle/README.md" "$HERE/bundle/README.zh-CN.md" "$P/"
 cp "$TOP/LICENSE" "$P/LICENSE"
 cp "$IMG" "$P/files/openwrt.ext4.gz"
 cp "$BOOT.img" "$P/files/boot.img"
 cp "$BOOT.json" "$P/files/boot.json"
 cp "$BOOT.misc-slot-b-trial.bin" "$P/files/boot-misc-slot-b.bin"
-cp "$HERE/device-install-image.sh" "$HERE/device-flash-boot.sh" "$P/files/"
-cp "$TOP/rootfs/pull-wcn-firmware.sh" "$TOP/rootfs/pull-audio-firmware.sh" \
-   "$TOP/rootfs/extract-android-vendor.sh" "$P/scripts/rootfs/"
+cp "$HERE/device-install-image.sh" "$HERE/device-flash-boot.sh" "$HERE/bundle/collect-device-files.sh" "$P/files/"
 cp "$TOP/tools/e5-telnet.py" "$TOP/tools/sprd-bt-config.py" "$P/scripts/tools/"
 cp -R "$TOP/tools/vbc-profile" "$P/scripts/tools/"
 find "$P" \( -name .DS_Store -o -name __pycache__ \) -prune -exec rm -rf {} +
 printf "e5-openwrt-flash %s (OpenWrt %s, e5-linux %s, kernel %s)\n" \
     "$(date +%Y-%m-%d)" "$VER" "$GIT" "$rel" > "$P/files/VERSION"
-(cd "$P" && find files scripts flash.sh -type f | sort | while read -r f; do
+(cd "$P" && find files scripts flash.py flash.sh flash.cmd -type f | sort | while read -r f; do
     printf "%s  %s\n" "$({ shasum -a 256 "$f" 2>/dev/null || sha256sum "$f"; } | cut -d' ' -f1)" "$f"
 done > SHA256SUMS)
 
 tar -C "$S" -czf "$OUT/$NAME.tar.gz.part" "$NAME"
 mv "$OUT/$NAME.tar.gz.part" "$OUT/$NAME.tar.gz"
-echo "== $OUT/$NAME.tar.gz ($(du -h "$OUT/$NAME.tar.gz" | cut -f1))"
+# and a .zip for Windows (its Explorer opens it without anything installed)
+rm -f "$OUT/$NAME.zip"
+(cd "$S" && python3 - "$NAME" "$OUT/$NAME.zip.part" <<'PY'
+import os, sys, zipfile
+top, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+    for d, _, files in os.walk(top):
+        for f in sorted(files):
+            p = os.path.join(d, f)
+            i = zipfile.ZipInfo.from_file(p, p)
+            i.external_attr = (os.stat(p).st_mode & 0xFFFF) << 16
+            with open(p, 'rb') as fh:
+                z.writestr(i, fh.read(), zipfile.ZIP_STORED if f.endswith('.gz') else zipfile.ZIP_DEFLATED)
+PY
+)
+mv "$OUT/$NAME.zip.part" "$OUT/$NAME.zip"
+echo "== $OUT/$NAME.tar.gz ($(du -h "$OUT/$NAME.tar.gz" | cut -f1)), $OUT/$NAME.zip ($(du -h "$OUT/$NAME.zip" | cut -f1))"

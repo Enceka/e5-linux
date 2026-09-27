@@ -12,7 +12,12 @@ lives in an image file on the phone's storage (userdata) and boots from
 * a Rongyue E5 with an **unlocked bootloader** and Android rooted with **Magisk**;
 * Android running from slot a (as it comes from the factory);
 * at least 2.5 GB free on the phone's storage;
-* a macOS or Linux computer with `adb` (Android platform-tools) and `python3`;
+* a Windows, macOS or Linux computer with:
+  * **Python 3.8 or newer** (on Windows from https://www.python.org/downloads/, tick
+    "Add python.exe to PATH");
+  * **adb** (Android platform-tools, https://developer.android.com/tools/releases/platform-tools:
+    add its directory to PATH, or put the `platform-tools` folder into the package's);
+  * on Windows the device's USB driver (usually installed by Windows itself);
 * a USB data cable.
 
 ## Flash
@@ -21,9 +26,11 @@ lives in an image file on the phone's storage (userdata) and boots from
 2. Grant **Shell** superuser access in Magisk (the phone asks the first time).
 3. Unpack the package and run, in its directory:
 
-   ```sh
-   ./flash.sh
-   ```
+   * **Windows**: double-click `flash.cmd` (or run `flash.cmd` in a command prompt);
+   * **macOS / Linux**: `./flash.sh`
+
+   To see first that the device is fine, with nothing written: `flash.cmd --check` /
+   `./flash.sh --check`.
 
    It asks for the APN, the hotspot's name and key.  For the APN just press
    Enter: OpenWrt picks it from the SIM's operator (China Mobile `cmnet`,
@@ -32,7 +39,8 @@ lives in an image file on the phone's storage (userdata) and boots from
    shown at the end.  Or give them on the command line:
 
    ```sh
-   ./flash.sh --ssid E5-OpenWrt --wifi-key 12345678 -y
+   flash.cmd --ssid E5-OpenWrt --wifi-key 12345678 -y        (Windows)
+   ./flash.sh --ssid E5-OpenWrt --wifi-key 12345678 -y       (macOS / Linux)
    ```
 
 4. When it says done, the E5 reboots into OpenWrt; the first boot takes about
@@ -70,7 +78,7 @@ From Android back to OpenWrt, with nothing reinstalled (the settings stay):
 connect the E5 and run
 
 ```sh
-./flash.sh --boot-openwrt
+flash.cmd --boot-openwrt          (Windows; macOS / Linux: ./flash.sh --boot-openwrt)
 ```
 
 A failed OpenWrt boot falls back to Android on its
@@ -81,7 +89,7 @@ own after two tries.
 With the E5 running OpenWrt and connected over USB, run the new package's:
 
 ```sh
-./flash.sh --update
+flash.cmd --update                (Windows; macOS / Linux: ./flash.sh --update)
 ```
 
 It updates the boot image and the OpenWrt image over the USB network and

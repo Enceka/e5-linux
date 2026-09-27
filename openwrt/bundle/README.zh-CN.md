@@ -11,7 +11,11 @@
 * 荣悦 E5，**bootloader 已解锁**，Android 已用 **Magisk** 获取 root；
 * Android 在 slot a 运行（出厂状态就是）；
 * 手机存储至少 2.5 GB 可用；
-* 一台 macOS 或 Linux 电脑，装有 `adb`（Android platform-tools）和 `python3`；
+* 一台 Windows、macOS 或 Linux 电脑，装有：
+  * **Python 3.8 或更新版本**（Windows 从 https://www.python.org/downloads/ 安装，勾选“Add python.exe to PATH”）；
+  * **adb**（Android platform-tools：https://developer.android.com/tools/releases/platform-tools ，
+    解压后把目录加入 PATH，或者把 `platform-tools` 文件夹放到刷机包目录里）；
+  * Windows 还需要设备的 USB 驱动（多数情况下系统会自动安装）；
 * USB 数据线。
 
 ## 刷入
@@ -20,16 +24,18 @@
 2. 在 Magisk 里给 **Shell** 超级用户权限（第一次运行时手机会弹窗，选允许）；
 3. 解压刷机包，在目录里运行：
 
-   ```sh
-   ./flash.sh
-   ```
+   * **Windows**：双击 `flash.cmd`（或在命令提示符里运行 `flash.cmd`）；
+   * **macOS / Linux**：`./flash.sh`
+
+   想先确认设备没问题、什么都不写入，可以先运行 `flash.cmd --check` / `./flash.sh --check`。
 
    脚本会询问 APN、热点名称和密码。APN 直接回车即可：OpenWrt 会按 SIM 卡的运营商自动选择
    （移动 `cmnet`、联通 `3gnet`、电信 `ctnet`、广电 `cbnet`；其他运营商用网络默认的 APN），
    换卡后也会自动更新。密码直接回车会生成随机密码并在最后显示。也可以写在命令行里：
 
    ```sh
-   ./flash.sh --ssid E5-OpenWrt --wifi-key 12345678 -y
+   flash.cmd --ssid E5-OpenWrt --wifi-key 12345678 -y        (Windows)
+   ./flash.sh --ssid E5-OpenWrt --wifi-key 12345678 -y       (macOS / Linux)
    ```
 
 4. 等脚本显示“完成”，设备会自动重启进 OpenWrt，第一次启动约 2 分钟。
@@ -60,7 +66,7 @@
 从 Android 再回到 OpenWrt（不重装，设置都在）：连上电脑运行
 
 ```sh
-./flash.sh --boot-openwrt
+flash.cmd --boot-openwrt          (Windows；macOS / Linux：./flash.sh --boot-openwrt)
 ```
 
 如果 OpenWrt 启动失败，设备会在两次尝试后自动回到 Android。
@@ -70,7 +76,7 @@
 设备正在运行 OpenWrt、用 USB 线连着电脑时，用新的刷机包运行：
 
 ```sh
-./flash.sh --update
+flash.cmd --update                (Windows；macOS / Linux：./flash.sh --update)
 ```
 
 它会通过 USB 网络更新启动镜像和 OpenWrt 镜像，**保留 OpenWrt 的设置**（`/etc/config`、密码、

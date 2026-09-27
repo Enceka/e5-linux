@@ -55,6 +55,7 @@ What the E5 needs besides, in `overlay/`:
 | `etc/hotplug.d/wwan/26-e5-sipa-eth`, `lib/udev/rules.d/78-e5-mm-sipc.rules` | ModemManager without udev: the data port once the AT port exists, no tty probing |
 | `etc/hotplug.d/iface/10-e5-usb0` | puts `usb0` into `br-lan` without netifd touching it: the NCM gadget must never go down |
 | `etc/uci-defaults/90-e5`, `91-e5-wireless`, `92-e5-default-boot` | first boot: LAN, WAN, DHCP, the bearer's IPv6 /64 on the LAN, hotspot; Linux as the default boot for an install from Android |
+| `etc/init.d/e5-audio`, `usr/libexec/e5-volume`, `etc/config/e5-audio` | the speaker: the sound card and the audio DSP at boot (`e5-audio-dsp start`: the 24 vendor modules by insmod, the AGDSP image, the profile selects with `e5-ctl-raw`, the UCM route applied with amixer), then the saved volume -- 16 levels on the speaker's digital gain, level 15 = Android's media gain; `e5-volume play beep\|tick` |
 | `etc/init.d/e5-luci`, `usr/libexec/e5-luci-revision` | LuCI's Cellular Network page shows the modem's revision one row per line (Platform Version, Project Version, BASE Version, HW Version, Build) instead of run together; applied by the build and again at boot |
 | `etc/uci-defaults/93-e5-luci` | first boot: LuCI in Chinese with the Argon theme (both preinstalled; Argon from its release's packages, pinned in `build-rootfs.sh`) |
 | `etc/init.d/e5-apn-auto`, `usr/libexec/e5-apn-auto` | the APN from the SIM's operator (MCC+MNC) when none was given (`network.wan.apn_auto=1`), at every boot |

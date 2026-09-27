@@ -3917,3 +3917,32 @@ boot, after the pass has begun, so boot/init now copies lib/firmware out of
 userdata's device-files.tar right before `wcn_bsp` (`stage=device-firmware-early`
 at 12.7 s), and the hotspot came up.
 
+## 44. The speaker under OpenWrt (2026-09-27)
+
+`e5-audio-dsp` ran on Debian only; under OpenWrt four things were different.
+
+* **No module index.**  OpenWrt's modprobe knows only its own flat directory,
+  so the modules go in with insmod from `/lib/modules/<release>/audio`, and
+  insmod follows no dependency.  The codec and its power modules link against
+  `snd-soc-sprd-card` (`get_sp_audio_debug_flag`), which was last in the list:
+  the power module failed, and the "loaded?" test matched by prefix, so
+  `..._power_dev` counted as `..._power` and the codec went in without its
+  regulators.  The card now comes right after the PA (its only dependency), the
+  test matches the whole name, and the codec waits for both power modules (the
+  softdep of `etc/modprobe.d/e5-audio.conf`, for insmod too).
+* **No alsaucm** in OpenWrt's alsa-utils: the route is the same UCM file's
+  `cset` lines (the verb, Speaker, Mic), applied with amixer -- 48 controls.
+* **No Python**, so the DSP profile selects (above amixer's clamp) are written
+  by `openwrt/src/e5-ctl-raw.c`, the same ioctl as the Python tool.
+* **"The DSP is already running" was a powered domain**: the route's
+  `agdsp_access_en` keeps the AGDSP domain up with no firmware in it, so a
+  second `start` skipped the image and every open failed ("channel 0 not
+  opened, ... dsp_ready 0", -EIO).  Only an image written since boot counts now
+  (`/run/e5-audio-dsp.started`).
+
+With that, `aplay -D hw:0,3` plays (heard).  `e5-volume`: 16 levels on
+`VBC DAC0 DG Set` (1.5 dB a step, so 3 dB a level), level 15 = 39, the media
+gain of the device's own Android, level 0 = 0 (mute); the info screen's volume
+keys step it.  `/etc/init.d/e5-audio` brings the card and the DSP up at boot and
+restores the level (checked across reboots).
+

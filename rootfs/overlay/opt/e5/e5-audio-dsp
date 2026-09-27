@@ -61,24 +61,54 @@ PART_FALLBACK=/dev/mmcblk0p26
 # stack, and the card last.  These are the 24 modules the kernel build makes
 # from CONFIG_UNISOC_AUDIO_* and CONFIG_SND_SOC_UNISOC_* (=m in
 # e5_rongyue_defconfig) -- the same set Android runs built-in.
+#
+# snd-soc-sprd-card comes right after the PA, before the codec: the codec and
+# its power modules link against it (get_sp_audio_debug_flag), which modprobe
+# resolves by itself and insmod (OpenWrt) does not.  Its probe defers until the
+# components exist; bind_card rebinds it at the end, as before.
 MODULES="agdsp_pd audio_mem audio_sipc sprd_audcp_boot sprd_audcp_dvfs
 mcdt_hw_r2p0 sprd_apipe audio-pipe audio-dsp-dump voice_trigger_irq
 snd-soc-sprd-dummy-codec snd-soc-fsa4480 snd-soc-sprd-pa-aw87xxx
+snd-soc-sprd-card
 snd-soc-sprd-codec-ump9620-power snd-soc-sprd-codec-ump9620-power-dev
 snd-soc-sprd-codec-ump9620 snd-soc-sprd-pdm-r2p0 snd-soc-sprd-tdm
 snd-soc-sprd-vbc-v4 snd-soc-sprd-vbc-fe sprd-compr-2stage-dma
-sprd-platform-pcm-routing snd-soc-sprd-card sprd-dmaengine-pcm"
+sprd-platform-pcm-routing sprd-dmaengine-pcm"
 
-loaded() { grep -q "^$(echo "$1" | tr - _)" /proc/modules; }
+# the whole name: snd_soc_sprd_codec_ump9620 is also the start of its _power
+# modules' names, and a prefix match took the codec for loaded
+loaded() { grep -q "^$(echo "$1" | tr - _) " /proc/modules; }
+
+# (/lib: /usr/lib on Debian, OpenWrt's own /lib -- openwrt/build-rootfs.sh
+# stages them there)
+K=/lib/modules/$(uname -r)/audio
+
+# modprobe where there is a module index (Debian: modules.dep), else insmod of
+# the file -- OpenWrt's modprobe knows only its own flat directory.  Names are
+# given either way round (dash or underscore), files are named either way too.
+load_mod() {
+    # the codec never before its regulators (the softdep of
+    # etc/modprobe.d/e5-audio.conf, for insmod too): probed against dummy ones
+    # its DC calibration fails and the speaker stays silent
+    case "$1" in snd-soc-sprd-codec-ump9620|snd_soc_sprd_codec_ump9620)
+        loaded snd-soc-sprd-codec-ump9620-power && loaded snd-soc-sprd-codec-ump9620-power-dev || return 1 ;;
+    esac
+    modprobe "$1" 2>/dev/null && return 0
+    for f in "$K/$1.ko" "$K/$(echo "$1" | tr _ -).ko" "$K/$(echo "$1" | tr - _).ko"; do
+        [ -f "$f" ] && { insmod "$f" 2>/dev/null; return; }
+    done
+    return 1
+}
 
 load_all() {
-    K=/usr/lib/modules/$(uname -r)/audio
     [ -d "$K" ] || { echo "no audio modules in $K -- configure-rootfs.sh stages them from out_modules" >&2; return 1; }
     n=0
-    for pass in 1 2; do
+    # insmod does not follow dependencies: a module whose supplier comes later
+    # in the list goes in on a later pass
+    for pass in 1 2 3 4; do
         for m in $MODULES; do
             loaded "$m" && continue
-            modprobe "$m" 2>/dev/null && n=$((n + 1))
+            load_mod "$m" && n=$((n + 1))
         done
     done
     total=$(echo $MODULES | wc -w)
@@ -180,10 +210,48 @@ dsp_alive() {
 # sprdphone-sc273/, verb HiFi, device Speaker): the same file WirePlumber
 # applies when a session opens the card, so there is one description of the
 # mixer and this only primes it for clients that do not speak UCM (aplay).
+# Without alsaucm (OpenWrt's alsa-utils leaves it out) the same file is
+# applied with amixer: the cset lines of the verb's EnableSequence and of the
+# Speaker and Mic devices' EnableSequences, in order.
+UCM=/usr/share/alsa/ucm2/sprdphone-sc273/HiFi.conf
+ucm_csets() {
+    awk -v want="$1" '
+        /^SectionVerb/ { sec = "verb" }
+        /^SectionDevice\."/ { sec = $0; sub(/^SectionDevice\."/, "", sec); sub(/".*/, "", sec) }
+        /EnableSequence \[/ { on = (sec == want) ; next }
+        /DisableSequence \[/ { on = 0 }
+        /^[ \t]*\]/ { on = 0 }
+        on && /^[ \t]*cset "name=/ { sub(/^[ \t]*cset "/, ""); sub(/"[ \t]*$/, ""); print }
+    ' "$UCM"
+}
+set_routes_amixer() {
+    local card=$1 n=0 bad=0 line name val
+    for part in verb Speaker Mic; do
+        ucm_csets "$part" > /run/e5-ucm.$$
+        while IFS= read -r line; do
+            # name='X' V  ->  amixer cset name='X' V
+            name=${line%%\' *}; name=${name#name=\'}
+            val=${line#*\' }
+            if amixer -q -c "$card" cset "name=$name" "$val" >/dev/null 2>&1; then
+                n=$((n + 1))
+            else
+                bad=$((bad + 1)); echo "  cset failed: $name = $val" >&2
+            fi
+        done < /run/e5-ucm.$$
+        rm -f /run/e5-ucm.$$
+    done
+    echo "audio route: $n controls from $UCM (HiFi, Speaker+Mic) on card $card${bad:+, $bad failed}"
+    [ "$n" -gt 0 ]
+}
+
 set_routes() {
-    command -v alsaucm >/dev/null 2>&1 || { echo "no alsaucm; install alsa-utils" >&2; return 1; }
     card=$(awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null)
     [ -n "$card" ] || { echo "no sprdphone card" >&2; return 1; }
+    if ! command -v alsaucm >/dev/null 2>&1; then
+        command -v amixer >/dev/null 2>&1 || { echo "no alsaucm and no amixer; install alsa-utils" >&2; return 1; }
+        set_routes_amixer "$card"
+        return
+    fi
     if alsaucm -c "hw:$card" set _verb HiFi set _enadev Speaker set _enadev Mic; then
         echo "audio route: UCM HiFi/Speaker+Mic on card $card"
     else
@@ -263,7 +331,7 @@ resolve_fw() {
 rescue_card() {
     echo "card missing; re-probing AGDSP power-domain consumers (deferred-probe race)" >&2
     bind_pd_consumers
-    modprobe snd_soc_sprd_card 2>/dev/null
+    load_mod snd_soc_sprd_card
     sleep 3
     grep -q sprdphone /proc/asound/cards 2>/dev/null
 }
@@ -287,7 +355,12 @@ start)
     grep -q sprdphone /proc/asound/cards 2>/dev/null || rescue_card ||
         { echo "no sound card even after the rescue; not touching the DSP (see dmesg)" >&2; exit 1; }
     resolve_fw || { echo "no AGDSP image: stage $FW (rootfs/pull-audio-firmware.sh) or keep $PART_BYNAME readable" >&2; exit 1; }
-    dsp_running && { echo "the DSP is already running"; do_profiles "$prof_mode"; set_routes; exit 0; }
+    # (a powered domain alone is not a running DSP: the route's
+    # agdsp_access_en keeps it powered with no firmware in it -- only an image
+    # this script wrote since boot counts)
+    if [ -f /run/e5-audio-dsp.started ] && dsp_running; then
+        echo "the DSP is already running"; do_profiles "$prof_mode"; set_routes; exit 0
+    fi
     # ldinfo is a struct too: char name[32]; u32 load_phy_addr; u32 size.  The
     # size is what agdsp_store() clamps every write to, so a bigger image would
     # be truncated silently -- refuse instead.
@@ -302,6 +375,7 @@ start)
     # one write, not a loop: the driver tracks its own offset across writes
     if dd if="$FW" of="$BOOT/agdsp" bs=4096 2>/dev/null; then
         echo 1 > "$BOOT/start" 2>/dev/null
+        : > /run/e5-audio-dsp.started
         do_profiles "$prof_mode"
         set_routes
         dsp_wakes; w=$?

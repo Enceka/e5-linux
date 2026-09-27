@@ -1,5 +1,6 @@
 #!/bin/sh
-# New SMS on the E5 under OpenWrt: vibrate, and count it unread.
+# New SMS on the E5 under OpenWrt: vibrate (and a sound, if asked), and count
+# it unread.
 #
 #   e5-sms-notify          listen (the procd service /etc/init.d/e5-sms-notify)
 #   e5-sms-notify read     the messages have been seen: unread 0
@@ -20,6 +21,8 @@ UNREAD=$STATE/unread
 cfg() { uci -q get "e5-notify.sms.$1" || echo "$2"; }
 
 alert() {
+	# (the sound at the speaker volume, /usr/libexec/e5-volume; none at 0)
+	[ "$(cfg sound 0)" = 1 ] && [ -x /usr/libexec/e5-volume ] && /usr/libexec/e5-volume play beep
 	[ "$(cfg vibrate 1)" = 1 ] && e5-vibrate $(cfg pattern "250 150 250")
 }
 

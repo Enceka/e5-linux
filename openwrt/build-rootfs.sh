@@ -23,7 +23,11 @@
 #    the USB gadget guard, e5-next-boot, e5-os, e5-at;
 #  * a full static busybox (the boot image's own) for the applets OpenWrt's
 #    leaves out, logdw (openwrt/src/logdw.c) for the vendor chroot's log, and
-#    e5-vibrate (openwrt/src/e5-vibrate.c) for the motor.
+#    e5-vibrate (openwrt/src/e5-vibrate.c) for the motor, e5-ctl-raw
+#    (openwrt/src/e5-ctl-raw.c) for the audio DSP's profile selects;
+#  * the speaker: the 24 vendor audio modules of the kernel build (out_linux)
+#    in /lib/modules/<release>/audio, alsa-utils, the card's UCM profile
+#    (rootfs/overlay/usr/share/alsa/ucm2), e5-audio-dsp, and e5-volume;
 #
 # The firmware and the Android vendor subset are not in the tarball: they are
 # the Debian root's, bound in at boot (overlay/lib/preinit/05_e5_debian_root).
@@ -107,12 +111,19 @@ have=$(shasum -a 256 "$WORK/$TARBALL" 2>/dev/null || sha256sum "$WORK/$TARBALL")
 docker run --rm --platform linux/arm64 -v "$HERE/src":/src:ro -v "$WORK":/out alpine:3.22 \
     sh -euc 'apk add -q gcc musl-dev linux-headers >/dev/null &&
         gcc -static -Os -s -o /out/logdw /src/logdw.c &&
-        gcc -static -Os -s -Wall -o /out/e5-vibrate /src/e5-vibrate.c'
+        gcc -static -Os -s -Wall -o /out/e5-vibrate /src/e5-vibrate.c &&
+        gcc -static -Os -s -Wall -o /out/e5-ctl-raw /src/e5-ctl-raw.c'
 
 # what a standalone image carries of the device's own (the Debian root's in the
 # directory form); an empty directory each otherwise
 SA="$WORK/standalone"
-rm -rf "$SA" && mkdir -p "$SA/firmware" "$SA/android" "$SA/modem" "$SA/fonts"
+rm -rf "$SA" && mkdir -p "$SA/firmware" "$SA/android" "$SA/modem" "$SA/fonts" "$SA/audio"
+# the vendor audio modules (e5-audio-dsp loads them), in every form: GPL, of
+# this kernel build, nothing of a device's
+find "$KBUILD/sound/soc/sprd" "$KBUILD/drivers/unisoc_platform/sprd_audio" -name '*.ko' -exec cp {} "$SA/audio/" \; 2>/dev/null
+n=$(ls "$SA/audio" | grep -c '\.ko$' || true)
+[ "$n" = 24 ] || { echo "expected the 24 audio modules in $KBUILD, found $n (kernel/build-linux.sh)" >&2; exit 1; }
+strings "$SA/audio/snd-soc-sprd-card.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1 > "$SA/audio/release"
 if [ -n "$STANDALONE" ]; then
     NAME=e5-openwrt-$VER-standalone-rootfs.tar.gz
     [ -f "$FIRMWARE/regulatory.db" ] || { echo "no $FIRMWARE/regulatory.db" >&2; exit 1; }
@@ -161,6 +172,7 @@ docker run --rm --platform linux/arm64 \
     -v "$HERE/overlay":/in/overlay:ro -v "$TOP/rootfs/overlay/opt/e5":/in/opt-e5:ro \
     -v "$OUT":/in/apk:ro -v "$BUSYBOX":/in/busybox:ro -v "$WORK/logdw":/in/logdw:ro \
     -v "$WORK/e5-vibrate":/in/e5-vibrate:ro -v "${INFOSCREEN:-$WORK/no-infoscreen}":/in/infoscreen:ro \
+    -v "$WORK/e5-ctl-raw":/in/e5-ctl-raw:ro -v "$TOP/rootfs/overlay/usr/share/alsa":/in/alsa:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
@@ -171,8 +183,9 @@ apk update >/dev/null
 # repository one, so what depends on it takes this one and apk upgrade keeps it
 apk add --allow-untrusted /in/apk/modemmanager-1*.apk /in/apk/modemmanager-rpcd-*.apk >/dev/null
 # (dbus-utils: dbus-monitor, for e5-sms-notify)
+# (alsa-utils: aplay and amixer for the speaker, e5-audio-dsp and e5-volume)
 apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils luci-proto-modemmanager \
-    dbus-utils >/dev/null
+    dbus-utils alsa-utils >/dev/null
 # attended sysupgrade flashes whole-disk images: that would overwrite the eMMC
 # (removed before the translations below, whose package for it would hold it)
 apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>&1 || true
@@ -214,11 +227,14 @@ if [ -d /in/infoscreen/root ]; then
     find $R -name .DS_Store -exec rm -f {} +
     screen=e5-infoscreen
 fi
-for f in vendor-start.sh android-run node-perms.sh regdb-load.sh gadget-guard.sh e5-next-boot e5-os e5-at; do
+for f in vendor-start.sh android-run node-perms.sh regdb-load.sh gadget-guard.sh e5-next-boot e5-os e5-at e5-audio-dsp; do
     cp /in/opt-e5/$f $R/opt/e5/$f; chmod 755 $R/opt/e5/$f
 done
 cp /in/logdw $R/opt/e5/bin/logdw && chmod 755 $R/opt/e5/bin/logdw
 cp /in/e5-vibrate $R/usr/bin/e5-vibrate && chmod 755 $R/usr/bin/e5-vibrate
+cp /in/e5-ctl-raw $R/opt/e5/e5-ctl-raw && chmod 755 $R/opt/e5/e5-ctl-raw
+# the card'"'"'s UCM profile: applied by e5-audio-dsp with amixer (OpenWrt has no alsaucm)
+mkdir -p $R/usr/share/alsa && cp -a /in/alsa/ucm2 $R/usr/share/alsa/
 cp /in/busybox $R/opt/e5/bin/busybox && chmod 755 $R/opt/e5/bin/busybox
 # the applets the shared scripts use that OpenWrt'"'"'s busybox leaves out --
 # the ones the full busybox really has
@@ -249,12 +265,14 @@ grep -q "^ttyGS0:" $R/etc/inittab || echo "ttyGS0::askfirst:/usr/libexec/login.s
 mv $R/sbin/sysupgrade $R/sbin/sysupgrade.openwrt
 mv $R/usr/libexec/e5-sysupgrade $R/sbin/sysupgrade
 # enable the services ("rc.common enable" wants ubus, which is not running here)
-for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci dbus modemmanager $screen; do
+for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio dbus modemmanager $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
 # no kernel of its own
 rm -rf $R/lib/modules/* $R/boot
+arel=$(cat /in/sa/audio/release)
+mkdir -p $R/lib/modules/$arel/audio && cp /in/sa/audio/*.ko $R/lib/modules/$arel/audio/
 if [ -n "$STANDALONE" ]; then
     # the device'"'"'s own files, where the directory form binds the Debian root'"'"'s
     cp -a /in/sa/firmware/. $R/lib/firmware/

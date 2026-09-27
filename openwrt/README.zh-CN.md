@@ -114,7 +114,9 @@ SSID、密码和信道，以及默认启动项。重装会保留 OpenWrt 的配�
 
 ## 暂不包含
 
-* **屏幕上的图形界面。** OpenWrt 的 feeds 确实有 Wayland 栈（`video` feed：
-  wayland、wlroots、weston、cage、gtk、mesa），但没有 Phosh 或手机界面，暂不做。
+* **屏幕上的图形界面。** 没有手机界面（OpenWrt 的 `video` feed 有 wayland、
+  wlroots、weston、cage、cog、gtk 和 Mesa 的 panfrost，但没有 Phosh）。屏幕上运行的
+  是信息屏：cage + cog 跑在 panfrost 上，状态页面可用触摸和键盘操作。它放在单独的
+  仓库 `e5-infoscreen` 里，装在这棵系统树之上。
 * **蓝牙。** 没有启动 `btattach`，BT 核心保持关闭（从内核 `0026` 起不会影响 Wi-Fi）。
 * **音频、带声音的通话。** 和 Debian 一样，通话音频尚未解决；音频模块不加载。

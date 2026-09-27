@@ -126,9 +126,11 @@ the default for many boots.
 
 ## Not here
 
-* **A graphical interface on the panel.**  OpenWrt's feeds do have a Wayland
-  stack (the `video` feed: wayland, wlroots, weston, cage, gtk, mesa), but not
-  Phosh or a phone shell; left out for now.
+* **A graphical interface on the panel.**  No phone shell (OpenWrt's `video`
+  feed has wayland, wlroots, weston, cage, cog, gtk and Mesa's panfrost, but
+  not Phosh).  The panel runs an info screen instead -- cage + cog on
+  panfrost, status pages driven by touch and the keypad -- kept in its own
+  repository, `e5-infoscreen`, and installed on top of this tree.
 * **Bluetooth.**  `btattach` is not started; the BT core stays off (which,
   since kernel `0026`, cannot disturb Wi-Fi).
 * **Audio, calls with sound.**  As on Debian, call audio is open; the audio

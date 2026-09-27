@@ -20,6 +20,7 @@ on the ZTE MU300, UMS9620 -- the E5's UMS9621 is the "lite" member of the same q
 | `make-boot.sh` | a slot-b boot image of the kernel and an init (`boot/build-boot-image.py`) |
 | `module-order.txt` | the modules `boot/init` loads from the initramfs, in the 5.15 order |
 | `trial-from-openwrt.sh` | the next trial, flashed from a running OpenWrt trial over the USB LAN (no Android round trip) |
+| `trial-from-android.sh` | the same from Android: `sipc_wwan.ko` into the trial root, then `boot/flash-trial.sh` |
 
 ```sh
 docker build -t e5-mainline-build upstream/
@@ -52,10 +53,10 @@ The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_
 | M2: clocks, PMIC + regulators, PMIC watchdog, eMMC, USB gadget (musb): `boot/init` starts OpenWrt | **done 2026-09-27** (pinctrl and the SD card slot are still to come) |
 | M3: Wi-Fi and Bluetooth (marlin3lite over SDIO: wcn_bsp, sprd_wlan_combo, sprdbt_tty) | **done 2026-09-27** (hotspot on 5745 MHz beaconing, hci0 up with the factory address at boot) |
 | M4: the modem (SIPC, SIPA, modem loader, Trusty) with ModemManager as on 5.15 | **done 2026-09-28** (5G NR, connected, data on sipa_eth0) |
-| M5: display (sprd DRM, DSI panel), touch, keypad, vibrator | |
+| M5: display (sprd DRM, DSI panel), touch, keypad, vibrator | **mostly done 2026-09-28** (panel, fbcon, backlight, touch, keypad, gpio-keys, vibrator, RGB LED; not yet: DPU DVFS, GSP) |
 | M6: charger, fuel gauge, thermal, cpufreq | |
 | M7: audio (AGDSP, VBC, UMP9620 codec, aw87xxx PA) | |
-| M8: GPU (Mali G57) | |
+| M8: GPU (Mali G57) | **done 2026-09-28**, brought forward (panfrost, as on 5.15; the info screen's cog renders through it) |
 
 The target is what works on 5.15 today (`docs/STATUS.md`, `boot/module-order.txt`).
 
@@ -138,6 +139,26 @@ What it took besides the drivers:
 A trial's root is a copy, so its `sipc_wwan.ko` has to be put into the copy's `/lib/modules/<release>/modem`:
 `trial-from-openwrt.sh img upstream/out/modules/sipc_wwan.ko:/lib/modules/<release>/modem/sipc_wwan.ko` does it
 on the way; from Android, loop-mount the copy (SELinux has to be permissive for the loop mount).
+
+### M5 and M8 (2026-09-28)
+
+The display is Unisoc's KMS driver of the 5.15 tree (`drivers/unisoc_platform/sprd_disp`: DPU r6p1, the
+qogirn6lite DSI host and PHY, the generic MIPI panel driver with the st7365p's timings from the DT, backlight, the
+OCP2131 LCD bias), with its power domain (`drivers/soc/sprd/domain`, "sprd,vpu-pd") and IOMMU; the backlight's PWM
+is mainline's pwm-sprd, which learned the UMS9620's channel stride and counter lengths. On the device: the panel
+lights with fbcon on it (320x480 XR24, `/dev/fb0` as on 5.15), and OpenWrt's info screen -- cage running cog --
+scans out its own buffer. The GPU is mainline panfrost with e5-linux's platform glue of 5.15 (`sprd,mali-natt`: the
+kbase power-on sequence replayed from the DT's syscon triples, no devfreq, the vendor's upper-case IRQ names), which
+cog's EGL needed: `mali-g57 id 0x9091`, `/dev/dri/renderD128`. Input as on 5.15: the gpio-keys (power, volume,
+smart voice), the matrix keypad, the tlsc6x touch panel (on I2C, which mainline's i2c-sprd drives through the
+DT's "sprd,sc9860-i2c" fallback), the PMIC vibrator (mainline, plus UMP9620); the PMIC's RGB LED is mainline's
+leds-sc27xx-bltc plus UMP9620, with 5.15's names (`sc27xx:blue`).
+
+What 6.18 broke on the way, besides the renames `port-api.py` does: `drm_open()` refuses fops without
+`FOP_UNSIGNED_OFFSET` (the vendor's own fops: every open of card0 was EINVAL, and seatd could not hand it to cage);
+fw_devlink lets the panel attach before the DSI binds (an e5-linux work item initialised in bind was then queued
+uninitialised: a panic); genpd registers a device per domain name, and all the vendor's nodes are `power-domain`;
+the panel created its proc entry again on every deferred probe.
 
 ### What the vendor DT asks for
 

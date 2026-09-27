@@ -3781,3 +3781,17 @@ a service by its main process and a pipeline's other half outlived every restart
 (each one would have added another vibration per message); and the PMIC's
 `sc27xx:red/green/blue` LEDs drive nothing on this board -- the E5 has no
 notification LED.
+
+## 41. Charge control (2026-09-27)
+
+Unisoc's charger-manager (`drivers/power/supply/charger-manager.c`) takes
+`/sys/class/power_supply/battery/charger.0/stop_charge`: `1` stops charging
+(`try_charger_enable(cm, false)`), `0` resumes, a second number 255/254 also
+turns the power path off/on -- left alone, so USB keeps powering the device --
+and a write marks the charger externally controlled, so charger-manager does not
+re-enable it on its own.  It is refused while no charger is plugged in.  Its
+`soc_control` is the ODM's factory run-in mode ("limit soc 70%", `cm_smt_sm()`):
+fixed thresholds, stop at 70 % and resume at 65 %, not a user limit.  So the limit
+is a loop on OpenWrt (`e5-charge`): verified at 99 % with a limit of 80 %
+(`status` -> `Not charging`), off again (`Charging`), and "charge to full once"
+charging past the limit.

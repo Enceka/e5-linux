@@ -1,0 +1,7 @@
+config charge 'main'
+	# 1: stop charging at `stop` and resume at `start`; 0: charge normally
+	option enabled '0'
+	option stop '80'
+	option start '70'
+	# 1: charge to 100 % once, then back to the limit (cleared by e5-charge)
+	option full_once '0'

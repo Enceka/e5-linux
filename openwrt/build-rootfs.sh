@@ -140,7 +140,7 @@ grep -q "^ttyGS0:" $R/etc/inittab || echo "ttyGS0::askfirst:/usr/libexec/login.s
 mv $R/sbin/sysupgrade $R/sbin/sysupgrade.openwrt
 mv $R/usr/libexec/e5-sysupgrade $R/sbin/sysupgrade
 # enable the services ("rc.common enable" wants ubus, which is not running here)
-for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify dbus modemmanager $screen; do
+for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge dbus modemmanager $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done

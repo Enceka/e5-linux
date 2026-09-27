@@ -51,6 +51,7 @@ What the E5 needs besides, in `overlay/`:
 | `etc/hotplug.d/iface/10-e5-usb0` | puts `usb0` into `br-lan` without netifd touching it: the NCM gadget must never go down |
 | `etc/uci-defaults/90-e5`, `91-e5-wireless` | first boot: LAN, WAN, DHCP, the bearer's IPv6 /64 on the LAN, hotspot |
 | `etc/init.d/e5-sms-notify`, `usr/libexec/e5-sms-notify` | a new SMS vibrates (`e5-vibrate`, `/etc/config/e5-notify`) and is counted unread (`/tmp/run/e5-sms/unread`, `e5-sms-notify read`) |
+| `etc/init.d/e5-charge`, `usr/libexec/e5-charge` | charge control: stop at an upper limit, resume at a lower one, charge to full once (`/etc/config/e5-charge`, through charger-manager's `stop_charge`) |
 | `usr/libexec/e5-sysupgrade` | replaces `sysupgrade`: a firmware image would overwrite the eMMC |
 
 and the scripts the two systems share come from `rootfs/overlay/opt/e5`

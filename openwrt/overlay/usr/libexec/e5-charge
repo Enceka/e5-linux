@@ -1,0 +1,88 @@
+#!/bin/sh
+# Charge control on the E5 under OpenWrt: stop charging at an upper limit,
+# resume at a lower one, and charge to full once when asked.
+#
+#   e5-charge            the policy loop (the procd service /etc/init.d/e5-charge)
+#   e5-charge status     one line: capacity, whether it charges, the settings
+#
+# Unisoc's charger-manager takes the orders: charger.0/stop_charge, "1" stops
+# and "0" resumes (USB keeps powering the device either way -- the power path
+# is left alone), and marks the charger externally controlled, so
+# charger-manager does not turn charging back on by itself.  Its soc_control
+# is a factory run-in mode with fixed thresholds (stop at 70 %, resume at 65 %),
+# so the limit is this loop's.  /etc/config/e5-charge:
+#   enabled    1: the limit applies; 0: charge normally
+#   stop       stop charging at this capacity (%)
+#   start      charge again at or below this capacity (%)
+#   full_once  1: charge to 100 % once, then back to the limit (cleared here)
+# Stopping the service always leaves charging on.
+BAT=/sys/class/power_supply/battery
+CTL=$BAT/charger.0/stop_charge
+STATE=/tmp/run/e5-charge
+INTERVAL=30
+
+cfg() { uci -q get "e5-charge.main.$1" || echo "$2"; }
+
+online() {
+	[ "$(cat /sys/class/power_supply/usb/online 2>/dev/null)" = 1 ] ||
+		[ "$(cat /sys/class/power_supply/ac/online 2>/dev/null)" = 1 ]
+}
+
+# 1 = stopped by us, 0 = charging allowed
+set_stop() {
+	[ -w "$CTL" ] || return 1
+	echo "$1" > "$CTL" 2>/dev/null
+	echo "$1" > "$STATE/stopped"
+}
+
+status() {
+	printf 'capacity=%s status=%s stopped=%s enabled=%s stop=%s start=%s full_once=%s\n' \
+		"$(cat $BAT/capacity)" "$(cat $BAT/status)" "$(cat $STATE/stopped 2>/dev/null || echo 0)" \
+		"$(cfg enabled 0)" "$(cfg stop 80)" "$(cfg start 70)" "$(cfg full_once 0)"
+}
+
+mkdir -p "$STATE"
+case "${1:-}" in
+status) status; exit 0 ;;
+esac
+
+on_term() { set_stop 0; exit 0; }
+trap on_term TERM INT
+
+stopped=0
+while :; do
+	cap=$(cat "$BAT/capacity" 2>/dev/null || echo 0)
+	enabled=$(cfg enabled 0); stop=$(cfg stop 80); start=$(cfg start 70)
+	full_once=$(cfg full_once 0)
+	# a start at or above the stop would never charge: keep a gap
+	[ "$start" -lt "$stop" ] 2>/dev/null || start=$((stop - 5))
+
+	if [ "$full_once" = 1 ]; then
+		want=0
+		if [ "$cap" -ge 100 ] || [ "$(cat $BAT/status)" = Full ]; then
+			uci set e5-charge.main.full_once=0 && uci commit e5-charge
+			logger -t e5-charge "full once: reached $cap %, back to the limit"
+		fi
+	elif [ "$enabled" != 1 ]; then
+		want=0
+	elif [ "$cap" -ge "$stop" ]; then
+		want=1
+	elif [ "$cap" -le "$start" ]; then
+		want=0
+	else
+		want=$stopped          # between the two: keep what it does
+	fi
+
+	# (the charger takes orders only while a charger is plugged in)
+	if online && { [ "$want" != "$stopped" ] || [ ! -f "$STATE/stopped" ]; }; then
+		if set_stop "$want"; then
+			[ "$want" != "$stopped" ] &&
+				logger -t e5-charge "$( [ "$want" = 1 ] && echo stop || echo resume ) charging at $cap %"
+			stopped=$want
+		fi
+	fi
+	! online && [ "$stopped" = 1 ] && { stopped=0; rm -f "$STATE/stopped"; }
+
+	sleep "$INTERVAL" &
+	wait $!
+done

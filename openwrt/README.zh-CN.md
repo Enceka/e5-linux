@@ -44,6 +44,7 @@ E5 另外需要的东西在 `overlay/` 里：
 | `etc/hotplug.d/iface/10-e5-usb0` | 把 `usb0` 加进 `br-lan`，netifd 不碰它：NCM gadget 绝不能 down |
 | `etc/uci-defaults/90-e5`、`91-e5-wireless` | 首次启动：LAN、WAN、DHCP、把承载的 IPv6 /64 放到 LAN、热点 |
 | `etc/init.d/e5-sms-notify`、`usr/libexec/e5-sms-notify` | 新短信时震动（`e5-vibrate`，设置在 `/etc/config/e5-notify`），并记为未读（`/tmp/run/e5-sms/unread`，`e5-sms-notify read` 清除） |
+| `etc/init.d/e5-charge`、`usr/libexec/e5-charge` | 充电控制：到上限停止充电，降到下限重新充电，可临时充满一次（`/etc/config/e5-charge`，通过 charger-manager 的 `stop_charge`） |
 | `usr/libexec/e5-sysupgrade` | 替换 `sysupgrade`：刷固件镜像会覆盖 eMMC |
 
 两个系统共用的脚本来自 `rootfs/overlay/opt/e5`（`vendor-start.sh`、

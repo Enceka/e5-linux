@@ -131,25 +131,40 @@ fi
 
 # An image built without the device's files (E5_DEVICE_FILES=0) takes them
 # from userdata's device-files.tar, which boot/init unpacks as well; made here
-# from this system's own when there is none yet (every form of e5-linux has
-# them at /lib/firmware and /opt/e5/android)
-DFT=$DIR/device-files.tar
-if [ ! -f "$N/lib/firmware/wcnmodem.bin" ]; then
-    if [ ! -f "$DFT" ] && [ -f /lib/firmware/wcnmodem.bin ] && [ -x /opt/e5/android/vendor/bin/modem_control ]; then
+# from this system's own when there is none yet.  Read through a plain
+# (non-recursive) bind of the root that has them -- the Debian image for the
+# directory form, / otherwise: the vendor chroot has /proc, /sys and /dev
+# mounted inside it while the baseband runs, and a tar of the live tree
+# walked into those.
+DFT=$DIR/device-files.tar VIEW=/tmp/e5-img.view
+if [ ! -f "$N/lib/firmware/wcnmodem.bin" ] && [ ! -f "$DFT" ]; then
+    src=/
+    [ -f /mnt/e5-disk/usr/lib/firmware/wcnmodem.bin ] && src=/mnt/e5-disk
+    mkdir -p "$VIEW" && mount --bind "$src" "$VIEW"
+    if [ -f "$VIEW/lib/firmware/wcnmodem.bin" ] && [ -x "$VIEW/opt/e5/android/vendor/bin/modem_control" ]; then
         echo "== the device's files from this system -> $DFT"
-        list=$(cd / && for f in lib/firmware/wcnmodem.bin lib/firmware/gnssmodem.bin \
+        list=$(cd "$VIEW" && for f in lib/firmware/wcnmodem.bin lib/firmware/gnssmodem.bin \
                    lib/firmware/wifi_board_config*.ini lib/firmware/tsx_data lib/firmware/l_agdsp_a.img \
                    lib/firmware/audio_structure lib/firmware/dsp_vbc lib/firmware/cvs \
                    lib/firmware/aw87xxx_acf.bin lib/firmware/sprd opt/e5/android; do
                    [ -e "$f" ] && echo "$f"; done)
-        (cd / && tar -cf "$DFT.part" $list) && mv "$DFT.part" "$DFT"
+        if (cd "$VIEW" && tar -cf "$DFT.part" $list); then
+            mv "$DFT.part" "$DFT"
+        else
+            rm -f "$DFT.part"
+        fi
     fi
+    umount "$VIEW"
+fi
+if [ ! -f "$N/lib/firmware/wcnmodem.bin" ]; then
     if [ -f "$DFT" ]; then
         tar -xf "$DFT" -C "$N"
         sha256sum "$DFT" | cut -d' ' -f1 > "$N/etc/e5/device-files.stamp"
         echo "== the device's files unpacked into the image"
     else
-        echo "WARNING: the image has no firmware or vendor subset, and there is no $DFT" >&2
+        # (no modem and no Wi-Fi without them: better the old system than that)
+        echo "the image has no firmware or vendor subset, and there is no $DFT: not installed" >&2
+        exit 1
     fi
 fi
 

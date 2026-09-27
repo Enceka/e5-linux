@@ -176,6 +176,29 @@ persist_job=$!
  persist; reboot -f; sleep 10; echo b > /proc/sysrq-trigger) &
 timer_job=$!
 
+# A boot image without the overlay (the flash package's,
+# openwrt/make-flash-bundle.sh) has no firmware of its own: the device's own
+# is on userdata, in the archive its installer pulled
+# (e5linux/device-files.tar), and the WCN driver of the module pass below asks
+# for it before any root is mounted -- without it the chip never powers on
+# ("failed to power on WCN", no wlan0).  userdata is mounted for the copy and
+# let go again; the root filesystem section mounts it for good.
+if [ ! -f /lib/firmware/wcnmodem.bin ]; then
+    for u in /sys/class/block/mmcblk*p*/uevent; do
+        grep -qx PARTNAME=userdata "$u" 2>/dev/null && early_data=/dev/$(basename "$(dirname "$u")")
+    done
+    mkdir -p /data /tmp/devfiles
+    if [ -n "${early_data:-}" ] && mount -t f2fs -o noatime,nodiratime "$early_data" /data 2>/dev/null; then
+        if [ -f /data/e5linux/device-files.tar ] &&
+           tar -xf /data/e5linux/device-files.tar -C /tmp/devfiles 2>/dev/null; then
+            mkdir -p /lib/firmware && cp -a /tmp/devfiles/lib/firmware/. /lib/firmware/
+            log "stage=device-firmware-early firmware=$(ls /lib/firmware | wc -l)"
+        fi
+        umount /data
+    fi
+    rm -rf /tmp/devfiles
+fi
+
 loaded=0
 failed=0
 if [ -f /etc/module-order ]; then

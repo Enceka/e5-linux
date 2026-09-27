@@ -179,31 +179,45 @@ timer_job=$!
 # A boot image without the overlay (the flash package's,
 # openwrt/make-flash-bundle.sh) has no firmware of its own: the device's own
 # is on userdata, in the archive its installer pulled
-# (e5linux/device-files.tar), and the WCN driver of the module pass below asks
-# for it before any root is mounted -- without it the chip never powers on
-# ("failed to power on WCN", no wlan0).  userdata is mounted for the copy and
-# let go again; the root filesystem section mounts it for good.
-if [ ! -f /lib/firmware/wcnmodem.bin ]; then
-    for u in /sys/class/block/mmcblk*p*/uevent; do
-        grep -qx PARTNAME=userdata "$u" 2>/dev/null && early_data=/dev/$(basename "$(dirname "$u")")
+# (e5linux/device-files.tar), and the WCN driver asks for it as soon as it is
+# loaded, before any root is mounted -- without it the chip never powers on
+# ("failed to power on WCN", no wlan0).  So right before wcn_bsp in the module
+# pass: the eMMC is only probed about 9 s into the boot, after the pass has
+# begun, but it is there by then.  userdata is mounted for the copy and let go
+# again; the root filesystem section mounts it for good.
+early_device_firmware() {
+    local n=0 dev=
+    [ -f /lib/firmware/wcnmodem.bin ] && return 0
+    while [ -z "$dev" ] && [ "$n" -lt 10 ]; do
+        for u in /sys/class/block/mmcblk*p*/uevent; do
+            grep -qx PARTNAME=userdata "$u" 2>/dev/null && dev=/dev/$(basename "$(dirname "$u")")
+        done
+        [ -n "$dev" ] || { n=$((n + 1)); mdev -s; sleep 1; }
     done
+    [ -n "$dev" ] || { log "stage=device-firmware-early no userdata"; return 0; }
+    [ -b "$dev" ] || mdev -s
     mkdir -p /data /tmp/devfiles
-    if [ -n "${early_data:-}" ] && mount -t f2fs -o noatime,nodiratime "$early_data" /data 2>/dev/null; then
+    if mount -t f2fs -o noatime,nodiratime "$dev" /data 2>/run/early-data.err; then
         if [ -f /data/e5linux/device-files.tar ] &&
            tar -xf /data/e5linux/device-files.tar -C /tmp/devfiles 2>/dev/null; then
             mkdir -p /lib/firmware && cp -a /tmp/devfiles/lib/firmware/. /lib/firmware/
             log "stage=device-firmware-early firmware=$(ls /lib/firmware | wc -l)"
+        else
+            log "stage=device-firmware-early none on userdata"
         fi
         umount /data
+    else
+        log "stage=device-firmware-early mount-fail $(cat /run/early-data.err)"
     fi
     rm -rf /tmp/devfiles
-fi
+}
 
 loaded=0
 failed=0
 if [ -f /etc/module-order ]; then
     while read module; do
         [ -n "$module" ] || continue
+        [ "$module" = wcn_bsp.ko ] && early_device_firmware
         if insmod "/linux-modules/$module" 2>/run/insmod.err; then
             loaded=$((loaded + 1))
         else

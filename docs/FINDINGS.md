@@ -3903,3 +3903,17 @@ runs at every boot while `network.wan.apn_auto` is 1, so another SIM or the
 other slot gets its own.  Checked on the device: a wrong staged APN was
 replaced by cbnet and the WAN came back.
 
+The first flash package failed on this device in two ways, both fixed.  (1)
+`device-install-image.sh` made the archive from the live tree, and the vendor
+chroot has /proc, /sys and /dev mounted inside it: tar walked into them, left
+a 123 MB `.part`, and the image went in without the files -- no modem, no
+Wi-Fi.  It now reads through a non-recursive bind of the root and refuses to
+install an image with no device files.  (2) With the files in the image, Wi-Fi
+still failed ("failed to power on WCN"): the WCN driver asks for its firmware
+as soon as `wcn_bsp` is loaded in the initramfs's module pass (about 12 s),
+from the initramfs, which gets it from the embedded overlay -- and the
+package's boot image has none.  The eMMC is only probed about 9 s into the
+boot, after the pass has begun, so boot/init now copies lib/firmware out of
+userdata's device-files.tar right before `wcn_bsp` (`stage=device-firmware-early`
+at 12.7 s), and the hotspot came up.
+

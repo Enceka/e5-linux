@@ -304,6 +304,11 @@ persist
 # f2fs and mounted directly from mmcblk0p70 (no metadata encryption).
 ROOT_FILE=/data/e5linux/rootfs.ext4
 OPENWRT_FILE=/data/e5linux/openwrt.ext4
+# e5.openwrt=<file in e5linux/> on the kernel's command line boots another OpenWrt image: the mainline
+# kernel's trials (upstream/) run a copy, so that a half-working system neither writes to the one in use nor
+# becomes the default boot
+w=$(echo " $(cat /proc/cmdline)" | sed -n 's/.* e5\.openwrt=\([A-Za-z0-9._-]*\).*/\1/p')
+[ -n "$w" ] && OPENWRT_FILE=/data/e5linux/$w e5_trial=1
 data=
 for u in /sys/class/block/mmcblk*p*/uevent; do
     grep -qx PARTNAME=userdata "$u" 2>/dev/null && data=/dev/$(basename "$(dirname "$u")")
@@ -363,7 +368,7 @@ if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/da
         [ -f "$OPENWRT_FILE" ] && mv "$OPENWRT_FILE" "$OPENWRT_FILE.old"
         mv "$OPENWRT_FILE.new" "$OPENWRT_FILE" && log "stage=openwrt-image-updated"
     fi
-    if [ -f "$OPENWRT_FILE" ] && { [ "$want" = openwrt ] || [ ! -f "$ROOT_FILE" ]; }; then
+    if [ -f "$OPENWRT_FILE" ] && { [ -n "$e5_trial" ] || [ "$want" = openwrt ] || [ ! -f "$ROOT_FILE" ]; }; then
         rootloop=$(losetup -f 2>/run/rootmount.err)
         if [ -n "$rootloop" ] && losetup "$rootloop" "$OPENWRT_FILE" 2>>/run/rootmount.err \
            && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err \
@@ -376,7 +381,8 @@ if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/da
         fi
     fi
     [ -n "$rootdir" ] || [ -f "$ROOT_FILE" ] || log "stage=no-rootfile $ROOT_FILE"
-    if [ -z "$rootdir" ] && [ -f "$ROOT_FILE" ]; then
+    # (a trial boots its image or nothing: never the systems in use)
+    if [ -z "$rootdir" ] && [ -z "$e5_trial" ] && [ -f "$ROOT_FILE" ]; then
         rootloop=$(losetup -f 2>/run/rootmount.err)
         if [ -n "$rootloop" ] && losetup "$rootloop" "$ROOT_FILE" 2>>/run/rootmount.err \
            && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err \
@@ -431,6 +437,9 @@ if [ -n "$rootdir" ]; then
     fi
     # Default-Linux mode leaves LK decremented tries alone; userspace re-arms
     # slot b once the system is up (e5-boot-ok.service).
+    # a trial image (e5.openwrt=) is never the default boot: its own e5-boot-ok would re-arm slot b
+    [ -n "$e5_trial" ] && mkdir -p /newroot/etc/e5linux && echo android > /newroot/etc/e5linux/default-boot &&
+        log "stage=trial-image default-boot=android"
     if [ "$(cat /newroot/etc/e5linux/default-boot 2>/dev/null)" = linux ]; then
         log "stage=default-boot-linux (slot a restore skipped)"
     else

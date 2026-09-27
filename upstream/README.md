@@ -47,7 +47,7 @@ The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_
 | milestone | state |
 |---|---|
 | M1: the kernel boots on the vendor DTB, reaches /init, resets through the PMIC, leaves its log | **done 2026-09-27** (first try: userspace at 1.58 s, 8 CPUs, 1.5 GB, back in Android) |
-| M2: clocks, pinctrl, PMIC + regulators, PMIC watchdog, eMMC, USB gadget (musb): `boot/init` and SSH over USB | next |
+| M2: clocks, PMIC + regulators, PMIC watchdog, eMMC, USB gadget (musb): `boot/init` starts OpenWrt | **done 2026-09-27** (pinctrl and the SD card slot are still to come) |
 | M3: Wi-Fi and Bluetooth (marlin3lite over SDIO: wcn_bsp, sprd_wlan_combo, sprdbt_tty) | |
 | M4: the modem (SIPC, SIPA, modem loader) with ModemManager as on 5.15 | |
 | M5: display (sprd DRM, DSI panel), touch, keypad, vibrator | |
@@ -63,6 +63,35 @@ The target is what works on 5.15 today (`docs/STATUS.md`, `boot/module-order.txt
 1,516,708 kB, ramoops and the ADI probed (the three PMIC slaves appeared as spi4.0-4.2), and the warm reset
 through the PMIC returned to Android with the record intact. Deferred, as expected without a clock driver:
 the four UARTs and the hwspinlock ("get hwspinlock clock failed").
+
+### M2 (2026-09-27)
+
+`linux-lts-e5` has the UMS9621 clocks (resets, frequency-table PLLs), the UMP9620/9621/9622 PMICs with their
+regulators and eFuses, the PMIC watchdog, the r11p3 SDHCI (DLL phase, the eMMC at the 3.0 V of
+"voltage-ranges", no polling of the SDIO-only WCN controller), the PMIC's Type-C controller, the USB2 PHY with
+BC1.2 detection and the MUSB glue with its DMA. Measured on the device:
+
+* eMMC in HS400ES at 200 MHz, 1.8 V signalling, 3.0 V supply: 500 MiB read in 1.69 s (~296 MB/s);
+* the USB gadget at high speed: NCM + ACM, the Mac at 192.168.9.2;
+* the PMIC watchdog taken over (a probe init stayed up for 797 s, LK's watchdog would have reset it at 295 s);
+* **`boot/init` starts OpenWrt 25.12 on 6.18.54**: userdata (f2fs with quota, compression, encryption) mounted,
+  the image loop-mounted, br-lan on 192.168.9.1, dnsmasq, dropbear, uhttpd/LuCI, rpcd, fw4 (the ruleset passes
+  `fw4 check`); 94 MB used. What fails is what later milestones bring: the display (cage finds no DRM device),
+  the modem, Wi-Fi, audio.
+
+A trial boots a copy of the OpenWrt image: the kernel's command line has `e5.openwrt=openwrt-mainline.ext4`, and
+`boot/init` then starts that file (and nothing else), with its default boot set to android, so that a
+half-working system neither writes to the image in use nor makes itself the default. Make the copy in Android:
+`cp /data/e5linux/openwrt.ext4 /data/e5linux/openwrt-mainline.ext4`, then
+`upstream/make-boot.sh boot/init work/boot-mainline-openwrt.img` and `boot/flash-trial.sh` as before.
+`boot_b`'s OpenWrt boot image goes back with `dd if=/data/e5linux/boot_b-openwrt.img of=/dev/block/by-name/boot_b`
+and `flash.sh --boot-openwrt`.
+
+Traps met on the way (the commits have the details): 6.x no longer puts DT interrupts into platform resources
+(the MUSB child found no "mc" IRQ); the vendor DT names two eFuse cells alike, which 6.x's nvmem sysfs refuses;
+`wakeup_source_register()` is a NULL stub without PM_SLEEP; userdata cannot be mounted read-write without QUOTA;
+reading an unclocked peripheral through /dev/mem is an SError (boot/init's SoC watchdog diagnostic, now without
+DEVMEM).
 
 ### What the vendor DT asks for
 

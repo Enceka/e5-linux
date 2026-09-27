@@ -59,7 +59,7 @@ for c in 1 2 3; do log "uptime $(cut -d' ' -f1 /proc/uptime) load $(cut -d' ' -f
 
 # With a USB device controller: the gadget boot/init sets up (NCM + ACM, same addresses), a DHCP server for
 # the one host on the cable, and a shell over telnet on 192.168.9.1 -- the USB link only, for bring-up.  The
-# probe then stays up for E5_STAY seconds (or until /tmp/reboot exists) before it goes back to Android.
+# probe then stays up for E5_STAY seconds (180; `touch /tmp/reboot` ends it early) before it goes back to Android.
 udc=$(ls /sys/class/udc 2>/dev/null | head -1)
 log "udc: ${udc:-none}"
 if [ -n "$udc" ]; then
@@ -83,7 +83,7 @@ if [ -n "$udc" ]; then
     # telnetd opens a pty for every session: without devpts the first one ends the daemon
     mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
     ( while :; do telnetd -F -b 192.168.9.1 -p 23 -l /bin/sh; sleep 1; done ) &
-    stay=${E5_STAY:-900} t=0
+    stay=${E5_STAY:-180} t=0
     while [ "$t" -lt "$stay" ] && [ ! -e /tmp/reboot ]; do
         sleep 30; t=$((t + 30))
         persist

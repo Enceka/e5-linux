@@ -13,6 +13,23 @@ log() {
     echo "E5-MAINLINE: $*" > /dev/kmsg
     [ -c /dev/pmsg0 ] && echo "E5-MAINLINE: $*" > /dev/pmsg0
 }
+# the whole dmesg, where boot/init keeps its log: 4 MiB at 56 MiB into boot_b (tools/collect-logs.sh reads
+# it back in Android); the 32 KiB ramoops console only holds the tail
+persist() {
+    b=
+    for u in /sys/class/block/mmcblk0p*/uevent; do
+        grep -qx PARTNAME=boot_b "$u" 2>/dev/null && b=/dev/$(basename "$(dirname "$u")")
+    done
+    [ -b "$b" ] || return
+    { echo "E5-PERSIST-BEGIN uptime=$(cut -d' ' -f1 /proc/uptime) release=$(uname -r) init=bringup"
+      echo "--- deferred"; cat /sys/kernel/debug/devices_deferred 2>&1
+      echo "--- udc"; ls /sys/class/udc 2>&1
+      echo "--- dmesg"; dmesg | tail -c 3000000
+      echo "E5-PERSIST-END"; } > /tmp/persist.txt 2>&1
+    head -c 65536 /dev/zero >> /tmp/persist.txt
+    dd if=/tmp/persist.txt of="$b" bs=4096 seek=14336 conv=notrunc 2>/dev/null
+    sync
+}
 log "userspace up: $(uname -a)"
 log "uptime $(cut -d' ' -f1 /proc/uptime)"
 log "cpus online: $(cat /sys/devices/system/cpu/online) possible: $(cat /sys/devices/system/cpu/possible)"
@@ -26,9 +43,53 @@ for d in /sys/bus/platform/drivers/*; do
 done
 log "deferred: $(tr '\n' ';' < /sys/kernel/debug/devices_deferred 2>/dev/null | cut -c1-900)"
 log "spi: $(ls /sys/bus/spi/devices/ 2>&1 | tr '\n' ' ')"
+c=/sys/kernel/debug/clk
+log "clocks: $(ls $c 2>/dev/null | grep -vc '^clk_')  resets: $(ls /sys/kernel/debug/reset 2>/dev/null | wc -l)"
+log "clock rates: $(for n in $(ls $c 2>/dev/null | grep -E 'pll|uart|emmc|sdio|usb|otg' | head -40); do printf '%s=%s ' $n $(cat $c/$n/clk_rate 2>/dev/null); done)"
 log "tty: $(ls /sys/class/tty | grep -v '^tty[0-9]*$' | tr '\n' ' ')"
+log "regulators: $(ls -d /sys/class/regulator/regulator.* 2>/dev/null | wc -l): $(for r in /sys/class/regulator/regulator.*; do printf '%s=%s/%s ' "$(cat $r/name)" "$(cat $r/state 2>/dev/null)" "$(cat $r/microvolts 2>/dev/null)"; done | cut -c1-900)"
+for w in /sys/class/watchdog/watchdog*; do [ -d "$w" ] && log "${w##*/}: $(cat $w/identity) state=$(cat $w/state) timeout=$(cat $w/timeout)"; done
+log "block: $(grep -c mmcblk /proc/partitions) mmcblk entries; $(ls /sys/block | tr '\n' ' ')"
+for h in /sys/kernel/debug/mmc*; do [ -f "$h/ios" ] && log "${h##*/}: $(tr -s ' \n' ' ' < $h/ios)"; done
+for b in /sys/block/mmcblk*; do [ -d "$b" ] && log "${b##*/}: $(cat $b/device/name 2>/dev/null) $(cat $b/size) sectors"; done
+dmesg | grep -iE "typec|hsphy|musb|usb|udc|bc1p2|extcon|efuse|nvmem|eic|gpio|defer" | grep -v E5-MAINLINE | tail -40 | while read -r l; do log "k: $l"; done
 log "interrupts: $(grep -c : /proc/interrupts) lines, $(head -1 /proc/interrupts | tr -s ' ')"
 log "warnings in dmesg: $(dmesg | grep -ciE 'warning|bug:|oops|error')"
 for c in 1 2 3; do log "uptime $(cut -d' ' -f1 /proc/uptime) load $(cut -d' ' -f1-3 /proc/loadavg)"; sleep 5; done
+
+# With a USB device controller: the gadget boot/init sets up (NCM + ACM, same addresses), a DHCP server for
+# the one host on the cable, and a shell over telnet on 192.168.9.1 -- the USB link only, for bring-up.  The
+# probe then stays up for E5_STAY seconds (or until /tmp/reboot exists) before it goes back to Android.
+udc=$(ls /sys/class/udc 2>/dev/null | head -1)
+log "udc: ${udc:-none}"
+if [ -n "$udc" ]; then
+    mkdir -p /config && mount -t configfs configfs /config
+    g=/config/usb_gadget/linux
+    mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409" "$g/functions/ncm.usb0" "$g/functions/acm.GS0"
+    echo 0x0525 > "$g/idVendor"; echo 0xa4a1 > "$g/idProduct"; echo 0x0200 > "$g/bcdUSB"
+    echo E5LINUX > "$g/strings/0x409/serialnumber"; echo Unisoc > "$g/strings/0x409/manufacturer"
+    echo "E5 Linux USB Ethernet (mainline bring-up)" > "$g/strings/0x409/product"
+    echo "Linux NCM + ACM console" > "$g/configs/c.1/strings/0x409/configuration"
+    echo 250 > "$g/configs/c.1/MaxPower"
+    echo 02:50:00:00:e5:01 > "$g/functions/ncm.usb0/dev_addr"
+    echo 02:50:00:00:e5:02 > "$g/functions/ncm.usb0/host_addr"
+    ln -s "$g/functions/ncm.usb0" "$g/configs/c.1/f1"; ln -s "$g/functions/acm.GS0" "$g/configs/c.1/f2"
+    echo "$udc" > "$g/UDC"; log "gadget bound to $udc: rc=$?"
+    ifconfig lo 127.0.0.1 up
+    ifconfig usb0 192.168.9.1 netmask 255.255.255.0 up; log "usb0: $(ifconfig usb0 | tr -s ' \n' ' ' | cut -c1-200)"
+    mkdir -p /var/lib/misc && touch /var/lib/misc/udhcpd.leases
+    printf 'start 192.168.9.2\nend 192.168.9.2\ninterface usb0\noption subnet 255.255.255.0\nopt lease 600\n' > /tmp/udhcpd.conf
+    udhcpd /tmp/udhcpd.conf
+    # telnetd opens a pty for every session: without devpts the first one ends the daemon
+    mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+    ( while :; do telnetd -F -b 192.168.9.1 -p 23 -l /bin/sh; sleep 1; done ) &
+    stay=${E5_STAY:-900} t=0
+    while [ "$t" -lt "$stay" ] && [ ! -e /tmp/reboot ]; do
+        sleep 30; t=$((t + 30))
+        persist
+        log "up $(cut -d' ' -f1 /proc/uptime) load $(cut -d' ' -f1-3 /proc/loadavg) usb0 rx $(cat /sys/class/net/usb0/statistics/rx_packets 2>/dev/null) tx $(cat /sys/class/net/usb0/statistics/tx_packets 2>/dev/null)"
+    done
+fi
+persist
 log "rebooting (warm) so the log survives in ramoops"
 echo b > /proc/sysrq-trigger

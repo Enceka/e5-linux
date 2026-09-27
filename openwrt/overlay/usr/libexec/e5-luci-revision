@@ -1,0 +1,23 @@
+#!/bin/sh
+# E5: LuCI's Cellular Network page (luci-proto-modemmanager,
+# view/modemmanager/status.js) shows the modem's revision in one table cell,
+# and this modem's revision is five lines -- "Platform Version: ...",
+# "Project Version: ...", "BASE Version: ...", "HW Version: ..." and the build
+# date -- which HTML runs together into one.  Each "name: value" line becomes
+# a row of its own (a line without a name: "Build").  Idempotent; run by the
+# build and at every boot (/etc/init.d/e5-luci), so an upgrade of the package
+# gets it again.
+F=${1:-}/www/luci-static/resources/view/modemmanager/status.js
+[ -f "$F" ] || exit 0
+grep -q "e5-revision-rows" "$F" && exit 0
+OLD="[_('Revision'),generic.revision],"
+grep -qF "$OLD" "$F" || { echo "e5-luci-revision: the Revision row is not in $F" >&2; exit 1; }
+NEW=$(cat <<'JS'
+...(function(r){/*e5-revision-rows*/var o=[];String(r||'').split('\n').forEach(function(l){l=l.replace(/\s+/g,' ').trim();if(!l)return;var m=l.match(/^([A-Za-z][^:]*):\s*(.*)$/);o.push(m?[m[1].trim(),m[2]]:[_('Build'),l]);});return o.length>1?o:[[_('Revision'),r]];})(generic.revision),
+JS
+)
+# (| as the sed delimiter: the replacement has /)
+sed -i "s|$(printf '%s' "$OLD" | sed 's/[][\.*^$|]/\\&/g')|$(printf '%s' "$NEW" | sed 's/[&|\\]/\\&/g')|" "$F"
+grep -q "e5-revision-rows" "$F" || { echo "e5-luci-revision: patch failed" >&2; exit 1; }
+rm -f ${1:-}/tmp/luci-indexcache* 2>/dev/null
+exit 0

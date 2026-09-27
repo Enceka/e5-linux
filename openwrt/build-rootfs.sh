@@ -238,6 +238,8 @@ done
 # modem_control failed on /dev/chsys and the CP never booted.
 sed -i "s|\[ \"makedev\", \"/dev/%DEVNAME%\", \"0600\" \]|[ \"makedev\", \"/dev/%DEVNAME%\", \"0660\" ]|" $R/etc/hotplug.json
 grep -q "\"/dev/%DEVNAME%\", \"0660\" \]" $R/etc/hotplug.json || { echo "hotplug.json: default node mode not found" >&2; exit 1; }
+# LuCI: the modem'"'"'s revision one row per line (again at boot, /etc/init.d/e5-luci)
+sh $R/usr/libexec/e5-luci-revision $R
 for c in e5-os e5-next-boot e5-at; do ln -sf /opt/e5/$c $R/usr/bin/$c; done
 ln -sf /usr/libexec/e5-sms-notify $R/usr/bin/e5-sms-notify
 # the USB serial console: in the image, not at first boot -- procd reads
@@ -247,7 +249,7 @@ grep -q "^ttyGS0:" $R/etc/inittab || echo "ttyGS0::askfirst:/usr/libexec/login.s
 mv $R/sbin/sysupgrade $R/sbin/sysupgrade.openwrt
 mv $R/usr/libexec/e5-sysupgrade $R/sbin/sysupgrade
 # enable the services ("rc.common enable" wants ubus, which is not running here)
-for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto dbus modemmanager $screen; do
+for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci dbus modemmanager $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done

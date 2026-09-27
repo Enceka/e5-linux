@@ -1,0 +1,8 @@
+#!/bin/sh /etc/rc.common
+# LuCI fixups that a package upgrade would undo, applied again at boot
+# (/usr/libexec/e5-luci-revision: the modem's revision one row per line).
+START=98
+
+start() {
+	/usr/libexec/e5-luci-revision 2>&1 | logger -t e5-luci
+}

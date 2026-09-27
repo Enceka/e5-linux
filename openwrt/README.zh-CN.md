@@ -48,6 +48,7 @@ E5 另外需要的东西在 `overlay/` 里：
 | `etc/hotplug.d/wwan/26-e5-sipa-eth`、`lib/udev/rules.d/78-e5-mm-sipc.rules` | 没有 udev 时的 ModemManager 衔接：AT 端口出现后再交出数据口，不探测 tty |
 | `etc/hotplug.d/iface/10-e5-usb0` | 把 `usb0` 加进 `br-lan`，netifd 不碰它：NCM gadget 绝不能 down |
 | `etc/uci-defaults/90-e5`、`91-e5-wireless`、`92-e5-default-boot` | 首次启动：LAN、WAN、DHCP、把承载的 IPv6 /64 放到 LAN、热点；从 Android 安装时把 Linux 设为默认启动 |
+| `etc/init.d/e5-luci`、`usr/libexec/e5-luci-revision` | LuCI 的“蜂窝网络”页把模组修订版本按行拆成单独的行（Platform Version、Project Version、BASE Version、HW Version、Build），不再挤成一行；构建时和每次启动时都会应用 |
 | `etc/uci-defaults/93-e5-luci` | 首次启动：LuCI 设为中文和 Argon 主题（都已预装；Argon 用其发布页的软件包，版本和校验值固定在 `build-rootfs.sh` 里） |
 | `etc/init.d/e5-apn-auto`、`usr/libexec/e5-apn-auto` | 没有指定 APN 时（`network.wan.apn_auto=1`），每次启动按 SIM 卡运营商（MCC+MNC）自动设置 APN |
 | `etc/init.d/e5-sms-notify`、`usr/libexec/e5-sms-notify` | 新短信时震动（`e5-vibrate`，设置在 `/etc/config/e5-notify`），并记为未读（`/tmp/run/e5-sms/unread`，`e5-sms-notify read` 清除） |

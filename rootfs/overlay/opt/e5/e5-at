@@ -13,8 +13,9 @@
 # the CP's PS task assert with "The queue was full".
 #
 # Refused, whoever the owner: the commands after which the CP's AT server
-# answers nobody until a reboot (ATZ, AT+CPMS=...), and the ones that leave the
-# SIM undetected until a reboot (AT+CFUN=0, the SFUN=5/3 stack cycle).
+# answers nobody until a reboot (ATZ, AT+CPMS=...), the ones that leave the
+# SIM undetected until a reboot (AT+CFUN=0, the SFUN=5/3 stack cycle), and
+# writing the IMEI.  The info screen's /api/at keeps the same list.
 set -u
 
 T=8
@@ -31,12 +32,27 @@ if [ $# -eq 0 ] || [ -z "$1" ]; then
 fi
 CMD=$1
 
-case "$(printf '%s' "$CMD" | tr '[:lower:]' '[:upper:]' | tr -d ' ')" in
-    ATZ*|AT\&F*|AT+CPMS=*|AT+CFUN=0*|AT+SFUN=3*|AT+SFUN=5*)
-        echo "e5-at: refusing '$CMD': it leaves the modem's AT server or SIM dead until a reboot" >&2
-        echo "ERROR"
-        exit 1 ;;
-esac
+# Each ;-separated part is checked, not only the first ("AT+CSQ;+CFUN=0").
+# Also refused: writing the IMEI (AT+SPIMEI=, AT+EGMR=1,...).
+norm=$(printf '%s' "$CMD" | tr '[:lower:]' '[:upper:]' | tr -d ' ')
+refuse=
+case "$norm" in AT*) ;; *) refuse="not an AT command" ;; esac
+IFS=';'
+for part in ${norm#AT}; do
+    part=${part#AT}
+    case "$part" in
+        Z*|\&F*|+CPMS=*|+CFUN=0*|+SFUN=3*|+SFUN=5*)
+            refuse="it leaves the modem's AT server or SIM dead until a reboot" ;;
+        +SPIMEI=*|+EGMR=1*)
+            refuse="it writes the IMEI" ;;
+    esac
+done
+unset IFS
+if [ -n "$refuse" ]; then
+    echo "e5-at: refusing '$CMD': $refuse" >&2
+    echo "ERROR"
+    exit 1
+fi
 
 # (systemd on Debian; OpenWrt has procd, and pidof)
 if systemctl -q is-active ModemManager 2>/dev/null ||

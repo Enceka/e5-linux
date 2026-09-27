@@ -11,9 +11,10 @@
 #
 #  * packages from OpenWrt's repository: the access point (wpad-basic-mbedtls,
 #    wifi-scripts, iw), bash, util-linux mount, ip-full, LuCI's ModemManager
-#    protocol, LuCI in Chinese (luci-i18n-*-zh-cn for what is installed); and
-#    ModemManager itself from out/openwrt/, built with the unisoc plugin by
-#    build-modemmanager.sh;
+#    protocol, LuCI in Chinese (luci-i18n-*-zh-cn for what is installed),
+#    PulseAudio with BlueZ; and from out/openwrt/ ModemManager, built with the
+#    unisoc plugin by build-modemmanager.sh, and BlueZ, patched by
+#    build-bluez.sh;
 #  * the Argon theme for LuCI (jerrykuku/luci-theme-argon, its release's apk
 #    packages, pinned by version and sha256 below) with its settings page;
 #  * openwrt/overlay/: the procd services for the hardware, the first-boot
@@ -95,6 +96,8 @@ done
 # (only the pinned ones go in)
 EXTRA_LIST=$(printf "%s\n" "$ARGON_APKS" | awk '{print "/in/extra/" $2}' | tr '\n' ' ')
 
+ls "$OUT"/bluez-daemon-*.apk >/dev/null 2>&1 || {
+    echo "no BlueZ package in $OUT -- run openwrt/build-bluez.sh first" >&2; exit 1; }
 ls "$OUT"/modemmanager-1*.apk >/dev/null 2>&1 || {
     echo "no ModemManager package in $OUT -- run openwrt/build-modemmanager.sh first" >&2; exit 1; }
 [ -x "$BUSYBOX" ] || { echo "no static busybox at $BUSYBOX (E5_BUSYBOX=...)" >&2; exit 1; }
@@ -182,10 +185,16 @@ apk update >/dev/null
 # ModemManager first, from its local file (unsigned): its release is above the
 # repository one, so what depends on it takes this one and apk upgrade keeps it
 apk add --allow-untrusted /in/apk/modemmanager-1*.apk /in/apk/modemmanager-rpcd-*.apk >/dev/null
+# BlueZ the same way, patched (openwrt/build-bluez.sh: the SDP MTU headphones need)
+apk add --allow-untrusted /in/apk/bluez-libs-*.apk /in/apk/bluez-daemon-*.apk /in/apk/bluez-utils-5*.apk >/dev/null
 # (dbus-utils: dbus-monitor, for e5-sms-notify)
 # (alsa-utils: aplay and amixer for the speaker, e5-audio-dsp and e5-volume)
 apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils luci-proto-modemmanager \
     dbus-utils alsa-utils >/dev/null
+# Bluetooth audio: PulseAudio built with BlueZ (the -avahi variant carries
+# the bluetooth modules), run by /etc/init.d/e5-pulseaudio, not by its own
+# init script (which forbids loading the modules a connecting device needs)
+apk add pulseaudio-daemon-avahi pulseaudio-tools >/dev/null
 # attended sysupgrade flashes whole-disk images: that would overwrite the eMMC
 # (removed before the translations below, whose package for it would hold it)
 apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>&1 || true
@@ -265,7 +274,8 @@ grep -q "^ttyGS0:" $R/etc/inittab || echo "ttyGS0::askfirst:/usr/libexec/login.s
 mv $R/sbin/sysupgrade $R/sbin/sysupgrade.openwrt
 mv $R/usr/libexec/e5-sysupgrade $R/sbin/sysupgrade
 # enable the services ("rc.common enable" wants ubus, which is not running here)
-for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio dbus modemmanager $screen; do
+rm -f $R/etc/rc.d/*pulseaudio
+for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio e5-bt bluetoothd dbus modemmanager $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done

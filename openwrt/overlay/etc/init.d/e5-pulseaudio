@@ -1,0 +1,24 @@
+#!/bin/sh /etc/rc.common
+# PulseAudio for the E5 (system mode, /etc/pulse/system.pa): the speaker and
+# Bluetooth audio.  In place of the package's /etc/init.d/pulseaudio, which
+# stays disabled: that one passes --disallow-module-loading, and a Bluetooth
+# device's sink is a module loaded when the device connects
+# (module-bluez5-device) -- with the flag the headphones connected and no
+# sink ever appeared.  Not enabled on its own either: /etc/init.d/e5-audio
+# starts it once the sound card's DSP runs (opening the card before that is
+# what reset the device on Debian).
+USE_PROCD=1
+PROG=/usr/bin/pulseaudio
+
+start_service() {
+	mkdir -p -m 0750 /var/run/pulse /var/lib/pulse
+	chown pulse:pulse /var/run/pulse /var/lib/pulse
+	chown root:pulse /dev/snd/* 2>/dev/null
+	chmod 664 /dev/snd/* 2>/dev/null
+	procd_open_instance
+	procd_set_param command $PROG --system --disallow-exit --disable-shm --exit-idle-time=-1 --realtime=false
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}

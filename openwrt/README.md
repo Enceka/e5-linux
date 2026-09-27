@@ -55,6 +55,8 @@ What the E5 needs besides, in `overlay/`:
 | `etc/hotplug.d/wwan/26-e5-sipa-eth`, `lib/udev/rules.d/78-e5-mm-sipc.rules` | ModemManager without udev: the data port once the AT port exists, no tty probing |
 | `etc/hotplug.d/iface/10-e5-usb0` | puts `usb0` into `br-lan` without netifd touching it: the NCM gadget must never go down |
 | `etc/uci-defaults/90-e5`, `91-e5-wireless`, `92-e5-default-boot` | first boot: LAN, WAN, DHCP, the bearer's IPv6 /64 on the LAN, hotspot; Linux as the default boot for an install from Android |
+| `etc/init.d/e5-bt`, `etc/config/e5-bluetooth`, `usr/libexec/e5-bt-connect`, `etc/uci-defaults/94-e5-bluetooth` | Bluetooth: `btattach` holds the WCN chip's BT core as hci0 (the kernel does the vendor setup), bluetoothd from our patched BlueZ (`build-bluez.sh`: the SDP MTU), the adapter "E5" and always pairable; `e5-bt-connect MAC` pairs, trusts and connects headphones in the order this chip needs |
+| `etc/init.d/e5-pulseaudio`, `etc/pulse/system.pa` | PulseAudio for the speaker and Bluetooth audio (A2DP), started by `e5-audio` once the DSP runs; a connecting headset becomes the output, its disconnection falls back to the speaker |
 | `etc/init.d/e5-audio`, `usr/libexec/e5-volume`, `etc/config/e5-audio` | the speaker: the sound card and the audio DSP at boot (`e5-audio-dsp start`: the 24 vendor modules by insmod, the AGDSP image, the profile selects with `e5-ctl-raw`, the UCM route applied with amixer), then the saved volume -- 16 levels on the speaker's digital gain, level 15 = Android's media gain; `e5-volume play beep` |
 | `etc/init.d/e5-luci`, `usr/libexec/e5-luci-revision` | LuCI's Cellular Network page shows the modem's revision one row per line (Platform Version, Project Version, BASE Version, HW Version, Build) instead of run together; applied by the build and again at boot |
 | `etc/uci-defaults/93-e5-luci` | first boot: LuCI in Chinese with the Argon theme (both preinstalled; Argon from its release's packages, pinned in `build-rootfs.sh`) |
@@ -72,6 +74,7 @@ On the host (Docker, arm64 -- native on Apple silicon):
 
 ```sh
 openwrt/build-modemmanager.sh   # ModemManager with the unisoc plugin -> out/openwrt/*.apk
+openwrt/build-bluez.sh          # BlueZ with rootfs/deb-patches/bluez-0*.patch -> out/openwrt/*.apk
 openwrt/build-rootfs.sh         # -> out/openwrt/e5-openwrt-25.12.5-rootfs.tar.gz (the directory form)
 E5_STANDALONE=1 openwrt/build-rootfs.sh   # -> out/openwrt/e5-openwrt-25.12.5.ext4.gz (standalone)
 ```

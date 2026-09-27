@@ -1,0 +1,38 @@
+--- a/src/device.c
++++ b/src/device.c
+@@ -6435,27 +6435,15 @@
+ 
+ static uint16_t get_sdp_flags(struct btd_device *device)
+ {
+-	uint16_t vid, pid;
+-
+-	vid = btd_device_get_vendor(device);
+-	pid = btd_device_get_product(device);
+-
+-	/* Sony DualShock 4 is not respecting negotiated L2CAP MTU. This might
+-	 * results in SDP response being dropped by kernel. Workaround this by
+-	 * forcing SDP code to use bigger MTU while connecting.
++	/* The larger SDP MTU for every device, not only for the Sony DualShock 4
++	 * this was written for: offering a bigger MTU is always within the
++	 * specification, and more devices than that one ignore the default one.
++	 * The Redmi Buds 6 answered the service search with 679-byte PDUs over a
++	 * channel whose MTU was 672: the kernel dropped them ("Dropping L2CAP
++	 * data: receive buffer overflow"), the search never completed, and no
++	 * profile connected ("br-connection-create-socket").
+ 	 */
+-	if (vid == 0x054c && pid == 0x05c4)
+-		return SDP_LARGE_MTU;
+-
+-	if (btd_adapter_ssp_enabled(device->adapter))
+-		return 0;
+-
+-	/* if no EIR try matching Sony DualShock 4 with name and class */
+-	if (!strncmp(device->name, "Wireless Controller", MAX_NAME_LENGTH) &&
+-			device->class == 0x2508)
+-		return SDP_LARGE_MTU;
+-
+-	return 0;
++	return SDP_LARGE_MTU;
+ }
+ 
+ static int device_browse_sdp(struct btd_device *device, DBusMessage *msg)

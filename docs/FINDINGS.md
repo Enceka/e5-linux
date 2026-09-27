@@ -3946,3 +3946,48 @@ gain of the device's own Android, level 0 = 0 (mute); the info screen's volume
 keys step it.  `/etc/init.d/e5-audio` brings the card and the DSP up at boot and
 restores the level (checked across reboots).
 
+## 45. Bluetooth headphones under OpenWrt (2026-09-27)
+
+The link came up at once (`btattach -B /dev/ttyBT0 -S 3000000`, the kernel's
+vendor setup, bluetoothd), scanning worked; a pair of Redmi Buds 6 took five
+faults to play, each hiding the next:
+
+1. **A search running during the pairing** kept it from completing on this
+   chip: the link came up and a link key was made, the pairing never
+   finished.  `e5-bt-connect` stops any search first (the discovery belongs
+   to the bluetoothctl that started it).
+2. **Not bondable**: the E5 itself sent "No Bonding" in its IO capability
+   reply (btmon), so the key was not kept.  bluetoothd sets the adapter
+   bondable when pairable: `AlwaysPairable = true` (94-e5-bluetooth).
+3. **The headphones' own connection needed an agent**: the moment the pairing
+   was done they opened A2DP themselves, an untrusted device's connection is
+   authorised by an agent, the pairing's bluetoothctl had gone ("a2dp.c:
+   auth_cb() Access denied: org.bluez.Error.Canceled"), and they dropped the
+   pairing ("Authentication Failed" from then on).  Trusted before pairing.
+4. **The SDP answer was dropped**: the Buds send 679-byte SDP PDUs over a
+   channel whose MTU is the default 672, the kernel drops them ("Dropping
+   L2CAP data: receive buffer overflow"), the service search never finishes and
+   no profile connects ("br-connection-create-socket").  BlueZ has
+   `SDP_LARGE_MTU` (1013) for one Sony controller that does the same;
+   `rootfs/deb-patches/bluez-01-sdp-large-mtu.patch` uses it for every device
+   (a larger MTU offer is always within the specification);
+   `openwrt/build-bluez.sh` builds OpenWrt's bluez with it (r902).
+5. **No sink**: OpenWrt's PulseAudio init passes `--disallow-module-loading`,
+   and a connecting headset's sink is a module loaded then
+   (module-bluez5-device).  `/etc/init.d/e5-pulseaudio` runs it without.
+
+Then the speaker went silent through PulseAudio (after a Bluetooth
+disconnection, and in fact always): measured with the device's mic playing a
+440 Hz tone -- the Goertzel method of 34 -- it came back from aplay and from
+PulseAudio with `tsched=0` or `mmap=0`, not from the default (timer-based
+scheduling over mmap).  The speaker sink has `tsched=0`: period interrupts,
+the kernel's period timer (0013), as aplay uses them; two streams in a row
+both measured.
+
+The model string: `+IMSREGADDR:<the IMS addresses>` came in while ModemManager
+read AT+CGMM and was stored in front of V1.0.1-B7 (shown as an IPv6 address).
+The unisoc plugin ignores `+IMSREGADDR:` and `+SPNRINDICATE:` now
+(modemmanager-01); the OpenWrt package carries an E5 revision in its release
+(r909) so apk takes a rebuild for a new package.  After ModemManager restarts,
+netifd does not bring the WAN up by itself: `ifup wan`.
+

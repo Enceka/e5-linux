@@ -1,0 +1,83 @@
+#!/bin/sh
+# E5: pair (if not yet), trust and connect a Bluetooth device -- headphones,
+# speakers: "Just Works" pairing, no PIN (bluetoothctl's NoInputNoOutput
+# agent).  The progress for the info screen, in /tmp/run/e5-bt/<MAC with _>:
+# pairing, connecting, connected, or failed: <reason> -- notfound (not seen:
+# not in pairing mode?), forgot (the device dropped the pairing: pair again
+# in pairing mode), noanswer (no answer to the page: in its case, asleep, or
+# connected to another phone), or bluetoothd's error.
+#
+#   e5-bt-connect MAC
+#
+# What the order is for (docs/FINDINGS.md 45):
+#  * no search going on: on this chip it keeps the pairing from completing
+#    (the link came up, the pairing never finished).  The discovery belongs
+#    to the bluetoothctl that started it, so that one goes;
+#  * the adapter bondable (pairable): otherwise the kernel asks the device for
+#    "No Bonding" and the key is not kept;
+#  * trusted before the pairing: headphones open their audio connection
+#    themselves the moment the pairing is done, and an untrusted device's
+#    connection needs an agent's authorisation -- the pairing's bluetoothctl
+#    had already gone, bluetoothd said "Access denied: Canceled", and the
+#    headphones dropped the pairing they had just made;
+#  * connected at once, while the device is still in pairing mode.
+M=$(echo "${1:?MAC}" | tr a-f A-F)
+case "$M" in [0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]) ;;
+	*) echo "not a MAC: $M" >&2; exit 2 ;; esac
+S=/tmp/run/e5-bt; mkdir -p "$S"
+F=$S/$(echo "$M" | tr : _)
+say() { echo "$1" > "$F"; }
+fail() { say "failed: $1"; logger -t e5-bt "$M: $1"; exit 1; }
+info() { bluetoothctl info "$M" 2>/dev/null; }
+# (not "info": for an unknown device it says "Device <MAC> not available")
+known() { bluetoothctl devices 2>/dev/null | grep -q "^Device $M"; }
+
+killall bluetoothctl 2>/dev/null
+bluetoothctl pairable on >/dev/null 2>&1
+
+if ! info | grep -q "Bonded: yes"; then
+	say pairing
+	# (a pairing whose key was not kept is no use: made again)
+	info | grep -q "Paired: yes" && bluetoothctl remove "$M" >/dev/null 2>&1
+	# the pairing pages the device by its address: no search needed for one
+	# bluetoothd knows (the list it was picked from).  Only an unknown one is
+	# searched for -- slowly on this chip: headphones took over 30 s to answer
+	# the inquiry.  (Not "seen just now": bluetoothd drops the RSSI the moment
+	# a search stops.)
+	if ! known; then
+		( bluetoothctl --timeout 40 scan on </dev/null >/dev/null 2>&1 & )
+		i=0
+		until known; do
+			i=$((i + 1)); [ $i -gt 40 ] && break
+			sleep 1
+		done
+		killall bluetoothctl 2>/dev/null
+		bluetoothctl scan off >/dev/null 2>&1
+		known || fail notfound
+	fi
+	bluetoothctl trust "$M" >/dev/null 2>&1
+	bluetoothctl --agent NoInputNoOutput --timeout 20 pair "$M" > "$F.log" 2>&1
+	info | grep -q "Paired: yes" ||
+		fail "$(grep -oE "Failed to pair: [^ ]+" "$F.log" | head -1 | cut -d' ' -f4-)"
+else
+	bluetoothctl trust "$M" >/dev/null 2>&1
+fi
+
+say connecting
+# (25 s: longer than the page timeout, about 17 s, so "no answer" is told)
+# always asked: after a pairing, "Connected: yes" is the link alone, not the
+# audio profile (already connected, the answer comes at once)
+bluetoothctl --timeout 25 connect "$M" > "$F.log" 2>&1
+if ! grep -qE "Connection successful|AlreadyConnected" "$F.log"; then
+	if grep -q "Authentication Failed" "$F.log"; then
+		# the device no longer has the key: pair again, in pairing mode
+		bluetoothctl remove "$M" >/dev/null 2>&1
+		fail forgot
+	fi
+	# not answering the page: in its case, asleep, or with another phone
+	grep -q "page-timeout" "$F.log" && fail noanswer
+	fail "$(grep -oE "Failed to connect: [^ ]+( [^ ]+)?" "$F.log" | head -1 | cut -d' ' -f4-)"
+fi
+say connected
+rm -f "$F.log"
+logger -t e5-bt "$M: connected"

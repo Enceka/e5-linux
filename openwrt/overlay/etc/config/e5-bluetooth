@@ -1,0 +1,4 @@
+config bluetooth 'main'
+	# attach the WCN chip's Bluetooth core (/etc/init.d/e5-bt); bluetoothd
+	# powers the adapter on (AutoEnable)
+	option enabled '1'

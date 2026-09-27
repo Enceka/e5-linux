@@ -6,14 +6,22 @@
 # value, rootfs/overlay/usr/share/alsa/ucm2/sprdphone-sc273/HiFi.conf), and
 # each level below takes 2 off: 11 at level 1.  Never louder than Android.
 #
-#   e5-volume                 the level, as JSON: {"level":N,"max":15,"card":true|false}
+#   e5-volume                 the level, as JSON: {"level":N,"max":15,"card":true|false,"output":"speaker"|"bluetooth"}
 #   e5-volume set N | up | down
 #   e5-volume apply           the saved level to the card (after e5-audio-dsp start)
 #   e5-volume play FILE|beep   play a sound (not while one is playing)
+#
+# With PulseAudio running (/etc/init.d/e5-pulseaudio) a sound goes through it,
+# to its default sink: the Bluetooth headphones while they are connected,
+# the speaker otherwise.  The level is applied to both: the speaker's gain as
+# above, and a Bluetooth sink's volume (level / 15, which the headphones take
+# as their own volume).
 MAX=15
 CTL='VBC DAC0 DG Set'
 
 card() { awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null; }
+pa() { pidof pulseaudio >/dev/null && PULSE_SERVER=unix:/var/run/pulse/native "$@"; }
+bt_sinks() { pa pactl list short sinks 2>/dev/null | awk '$2 ~ /^bluez_sink/ {print $2}'; }
 level() {
 	local l
 	l=$(uci -q get e5-audio.main.volume)
@@ -23,13 +31,19 @@ level() {
 }
 gain() { [ "$1" -le 0 ] && echo 0 || echo $((39 - (MAX - $1) * 2)); }
 apply() {
-	local c g
+	local c g s
+	for s in $(bt_sinks); do
+		pa pactl set-sink-volume "$s" "$(($1 * 100 / MAX))%" >/dev/null 2>&1
+	done
 	c=$(card); [ -n "$c" ] || return 1
 	g=$(gain "$1")
 	amixer -q -c "$c" cset "name=$CTL" "$g,$g" >/dev/null 2>&1
 }
 status() {
-	printf '{"level":%d,"max":%d,"card":%s}\n' "$(level)" $MAX "$([ -n "$(card)" ] && echo true || echo false)"
+	local out=speaker
+	case "$(pa pactl get-default-sink 2>/dev/null)" in bluez_sink*) out=bluetooth ;; esac
+	printf '{"level":%d,"max":%d,"card":%s,"output":"%s"}\n' "$(level)" $MAX \
+		"$([ -n "$(card)" ] && echo true || echo false)" "$out"
 }
 save() {
 	uci -q set e5-audio.main=audio
@@ -41,6 +55,10 @@ play() {
 	case "$f" in beep) f=/usr/share/e5/beep.wav ;; esac
 	c=$(card); [ -n "$c" ] && [ -f "$f" ] || return 1
 	[ "$(level)" -gt 0 ] || return 0
+	if pidof pulseaudio >/dev/null; then
+		PULSE_SERVER=unix:/var/run/pulse/native paplay "$f" >/dev/null 2>&1 &
+		return 0
+	fi
 	pidof aplay >/dev/null && return 0
 	aplay -q -D "hw:$c,3" "$f" >/dev/null 2>&1 &
 }

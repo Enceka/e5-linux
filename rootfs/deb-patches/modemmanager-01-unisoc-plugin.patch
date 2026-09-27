@@ -799,7 +799,7 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.h b/src/plugins/unisoc
 diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/mm-broadband-modem-unisoc.c
 --- a/src/plugins/unisoc/mm-broadband-modem-unisoc.c	1970-01-01 08:00:00
 +++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c	2026-09-26 21:39:07
-@@ -0,0 +1,1125 @@
+@@ -0,0 +1,1126 @@
 +/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 +/*
 + * This program is free software; you can redistribute it and/or modify
@@ -1796,8 +1796,9 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +     * control reports of the vendor RIL's protocol (^ORIG/^CONF/^CONN/^CEND/^DSCI,
 +     * +SPCALLEXTINFO),
 +     * the dial's "+CDU: <n>" and the VoLTE call state "+CLCCS:" -- calls are
-+     * followed through +CLCC -- and the IMS registration report "+CIREGU:". */
-+    vendor = g_regex_new ("\\r\\n\\+(SIND|ECIND|PRENWINFU|SPPSREADY|SPSLICEQUE|SPERROR|SPPCODATA|SPCALLEXTINFO|CIREGU|CDU|CLCCS):[^\\r\\n]*\\r\\n",
++     * followed through +CLCC -- the IMS registration report "+CIREGU:" and
++     * its addresses "+IMSREGADDR:", and the NR indication "+SPNRINDICATE:". */
++    vendor = g_regex_new ("\\r\\n\\+(SIND|ECIND|PRENWINFU|SPPSREADY|SPSLICEQUE|SPERROR|SPPCODATA|SPCALLEXTINFO|CIREGU|CDU|CLCCS|IMSREGADDR|SPNRINDICATE):[^\\r\\n]*\\r\\n",
 +                          G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 +    call = g_regex_new ("\\r\\n\\^(ORIG|CONF|CONN|CEND|DSCI):[^\\r\\n]*\\r\\n",
 +                        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);

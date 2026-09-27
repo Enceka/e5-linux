@@ -28,8 +28,12 @@
 #
 # The release is OpenWrt's plus 900 (1.24.0-r11 -> r911): the repository's
 # package never looks newer, so `apk upgrade` does not replace this one with a
-# modemmanager that has no unisoc plugin.
+# modemmanager that has no unisoc plugin.  Plus E5REV, the revision of the E5
+# patches: raised whenever one of them changes, so that apk takes the rebuilt
+# package for a new one (it does not reinstall a version it has).
 set -euo pipefail
+# 1: +IMSREGADDR/+SPNRINDICATE among the ignored unsolicited reports
+E5REV=1
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
@@ -52,7 +56,7 @@ done
 cp "$HERE"/patches/modemmanager-package-*.patch "$WORK/patches/pkg/"
 
 docker run --rm --platform linux/arm64 -v e5-openwrt-src:/build \
-    -v "$WORK":/work:ro -v "$OUT":/out -e VER="$VER" \
+    -v "$WORK":/work:ro -v "$OUT":/out -e VER="$VER" -e E5REV="$E5REV" \
     -e JOBS="${E5_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}" \
     debian:trixie bash -euc '
 export DEBIAN_FRONTEND=noninteractive
@@ -77,8 +81,8 @@ git -C feeds/packages clean -qfd -- net/modemmanager
 for p in /work/patches/pkg/*.patch; do patch -p1 -d $P < "$p"; done
 cp /work/patches/src/*.patch $P/patches/
 rel=$(sed -n "s/^PKG_RELEASE:=//p" $P/Makefile)
-sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$((rel + 900))/" $P/Makefile
-echo "modemmanager release $rel -> $((rel + 900)); patches:"; ls $P/patches/
+sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$((rel + 900 + E5REV))/" $P/Makefile
+echo "modemmanager release $rel -> $((rel + 900 + E5REV)); patches:"; ls $P/patches/
 # the release configuration, reduced to what is needed here
 {
     # (not CONFIG_BUILDBOT: on the release builders it also builds LLVM for
@@ -112,6 +116,6 @@ echo "== modemmanager"
 make package/modemmanager/clean >/dev/null 2>&1 || true
 make package/modemmanager/compile -j"$JOBS" >/build/log 2>&1 || { tail -80 /build/log; exit 1; }
 rm -f /out/modemmanager*.apk
-find bin/packages -name "modemmanager*-r$((rel + 900)).apk" -exec cp {} /out/ \;
+find bin/packages -name "modemmanager*-r$((rel + 900 + E5REV)).apk" -exec cp {} /out/ \;
 ls -la /out/modemmanager*.apk
 '

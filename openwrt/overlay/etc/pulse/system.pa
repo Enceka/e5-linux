@@ -1,0 +1,36 @@
+#!/usr/bin/pulseaudio -nF
+# The E5's PulseAudio (system mode, /etc/init.d/e5-pulseaudio): the speaker and
+# Bluetooth audio (A2DP to headphones and speakers).
+#
+# No module-detect: probing the sound card before its DSP runs is what reset
+# the device on Debian (2026-09-19, docs/STATUS.md) -- a PCM open powers the
+# AGDSP domain with nothing to execute.  /etc/init.d/e5-audio starts
+# PulseAudio (e5-pulseaudio) once the DSP is up, and the speaker is named here: the FAST front end, hw:<card>,3, the
+# one the UCM profile routes to the speaker (e5-audio-dsp).
+
+load-module module-device-restore
+load-module module-stream-restore
+load-module module-card-restore
+
+.nofail
+# tsched=0: period interrupts (the kernel's period timer, kernel/patches/0013),
+# as aplay uses them.  PulseAudio's timer-based scheduling over mmap ran
+# every stream to its end and the speaker stayed silent -- measured with the
+# device's own mic: a 440 Hz tone came back from aplay and from tsched=0 or
+# mmap=0, not from the default (docs/FINDINGS.md 45)
+load-module module-alsa-sink device=hw:CARD=sprdphonesc2730,DEV=3 sink_name=speaker rate=48000 tsched=0 sink_properties=device.description=Speaker
+.fail
+
+# Bluetooth: a paired, connected device becomes a sink (A2DP) and, being
+# new, the default one; its disconnection falls back to the speaker
+load-module module-bluetooth-policy
+load-module module-bluetooth-discover
+load-module module-switch-on-connect
+
+# root's tools (paplay, pactl) and the info screen, without a cookie
+load-module module-native-protocol-unix auth-anonymous=1
+load-module module-default-device-restore
+load-module module-always-sink
+# idle for 3 s: the speaker's PCM is closed again (the DSP domain may sleep,
+# and aplay can have the device)
+load-module module-suspend-on-idle timeout=3

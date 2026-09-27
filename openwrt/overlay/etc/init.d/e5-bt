@@ -1,0 +1,33 @@
+#!/bin/sh /etc/rc.common
+# Bluetooth: the WCN chip's BT core as hci0 (e5-bt-attach.service on Debian).
+# Opening /dev/ttyBT0 powers MARLIN_BLUETOOTH on, and btattach holds the HCI
+# line discipline for as long as the controller exists: it runs in the
+# foreground, respawned.  The kernel sends the core its vendor setup -- the
+# pskey and RF blobs of /lib/firmware/sprd, then core enable -- and, when
+# the adapter is powered off, its disable (kernel/patches/0018, 0021).
+# Before bluetoothd (62).  Settings: /etc/config/e5-bluetooth.
+START=61
+STOP=10
+USE_PROCD=1
+
+start_service() {
+	[ "$(uci -q get e5-bluetooth.main.enabled)" = 0 ] && return 0
+	[ -e /dev/ttyBT0 ] || return 0
+	procd_open_instance
+	procd_set_param command /usr/bin/btattach -B /dev/ttyBT0 -S 3000000
+	procd_set_param respawn 3600 5 0
+	# btattach ignores SIGTERM: straight to SIGKILL
+	procd_set_param term_timeout 1
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	# powered off through bluetoothd first: that is when the kernel disables the
+	# BT core.  Killed with the core still enabled, btattach's close waited 30 s
+	# for the CP with the WCN power lock held, and Wi-Fi's teardown hung behind
+	# it (docs/FINDINGS.md 35).
+	bluetoothctl power off >/dev/null 2>&1
+	sleep 1
+}

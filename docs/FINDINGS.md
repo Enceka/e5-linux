@@ -3991,3 +3991,25 @@ The unisoc plugin ignores `+IMSREGADDR:` and `+SPNRINDICATE:` now
 (r909) so apk takes a rebuild for a new package.  After ModemManager restarts,
 netifd does not bring the WAN up by itself: `ifup wan`.
 
+## 46. A module-load watchdog panicked the first boot of an update (2026-09-27)
+
+The first boot after an update (flash.py --update) came up in Android.  pstore
+(`/sys/fs/pstore/dmesg-ramoops-0.enc.z`, read from Android, raw deflate):
+
+    Kernel panic - not syncing: sprd_dmaengine_pcm.ko loads too long time,
+    panic timeout = 2000 ms
+      panic <- sprd_modules_exit [native_hang_monitor] <- call_timer_fn
+
+`native_hang_monitor` (drivers/unisoc_platform/sysdump) carries, besides
+Android's native hang monitor, a module notifier that arms a 2 s timer at
+MODULE_STATE_COMING and panics if MODULE_STATE_LIVE does not follow --
+MODULES_TIME_OUT, no parameter.  e5-audio-dsp's last insmod, sprd-dmaengine-pcm,
+completes the sound card, and the card's whole probe runs inside that init; on
+a busy first boot (uci-defaults, the image just swapped in) it passed 2 s.
+The panic's sysdump boot used a try of slot b, and LK fell back to Android
+(section 32).  Earlier boots of the same image were under the limit: a race.
+`boot/module-order.skip` leaves the module out of the initramfs (stage-modules.sh
+filters the generated order); nothing depends on it.  Recovered from Android with
+boot/flash-trial.sh and the rebuilt boot image; the updated image, its settings
+and the installed apps were all there.
+

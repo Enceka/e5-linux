@@ -56,6 +56,13 @@ fi
 # 2. dependency closure, dependency-first
 python3 "$HERE/gen-module-order.py" "$MODDIR/modules.dep" \
         "$STOCK" "$EXTRA" > "$HERE/module-order.txt"
+# ... less the ones the initramfs must not load (boot/module-order.skip)
+if [ -f "$HERE/module-order.skip" ]; then
+    grep -v '^#' "$HERE/module-order.skip" | grep . > "$HERE/.skip.$$" || true
+    grep -vxF -f "$HERE/.skip.$$" "$HERE/module-order.txt" > "$HERE/.order.$$" || true
+    mv "$HERE/.order.$$" "$HERE/module-order.txt"
+    rm -f "$HERE/.skip.$$"
+fi
 
 # 3. flat, stripped copies of exactly the modules the initramfs will insmod
 mkdir -p "$DEST"

@@ -27,7 +27,6 @@ sprd_iq.ko
 slog_bridge.ko
 sbuf_bridge.ko
 sblock_bridge.ko
-native_hang_monitor.ko
 usb_f_vser.ko
 sprd_u_serial.ko
 sprd_usb_f_serial.ko

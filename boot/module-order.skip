@@ -1,0 +1,13 @@
+# Modules of the stock first stage that the e5-linux initramfs does NOT load,
+# taken out of the generated order by boot/stage-modules.sh (one per line).
+#
+# native_hang_monitor: Android's hang monitor for native processes, and a
+# module-load watchdog (drivers/unisoc_platform/sysdump/sprd_modules_notify.c)
+# that panics when a module's init takes over 2 s -- a fixed MODULES_TIME_OUT,
+# no parameter.  Under OpenWrt the last vendor audio module
+# (sprd-dmaengine-pcm) completes the sound card, the card's whole probe runs in
+# its init, and on a busy first boot that took more than 2 s: "Kernel panic -
+# not syncing: sprd_dmaengine_pcm.ko loads too long time", the panic's sysdump
+# boot used a try of slot b, and the device came up in Android (2026-09-27,
+# docs/FINDINGS.md 46).  Nothing depends on the module.
+native_hang_monitor.ko

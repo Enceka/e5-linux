@@ -12,7 +12,7 @@ import sys
 path = sys.argv[1]
 s = open(path).read()
 name = sys.argv[2] if len(sys.argv) > 2 else re.search(r'\.remove\s*=\s*(\w+)\s*,', s).group(1)
-m = re.search(r'^static int (%s)\((struct platform_device \*\w+)\)\n\{\n' % name, s, re.M)
+m = re.search(r'^static\s+int\s+(%s)\((struct platform_device \*\w+)\)\n\{\n' % name, s, re.M)
 if not m:
     sys.exit(f'{path}: no "static int {name}(struct platform_device *)" to convert')
 start = m.end()

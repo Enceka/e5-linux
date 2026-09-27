@@ -107,10 +107,11 @@ def run(cmds, wait=60.0):
         return 1
     rc = 0
     for c in cmds:
-        s.sendall(('%s; echo %s\n' % (c, END)).encode())
-        # The pty echoes the command back, so the sentinel appears once in the
-        # echo of what we typed; only the second occurrence is real output.
-        out, m = read_until(s, [END + '\r\n' + END], limit=wait) if False else _read_n(s, END, 2, wait)
+        # The sentinel is typed split in two ("__E5_CMD_""DONE__"), so only the
+        # shell's output contains it whole, never the pty's echo of the command --
+        # which the 80-column pty also wraps, splitting a literal sentinel there.
+        s.sendall(('%s; echo %s""%s\n' % (c, END[:9], END[9:])).encode())
+        out, m = _read_n(s, END, 1, wait)
         # strip the echoed command and the sentinel itself
         body = out.replace(END, '')
         for line in body.splitlines():

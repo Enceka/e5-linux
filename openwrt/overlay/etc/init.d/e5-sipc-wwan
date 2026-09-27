@@ -12,6 +12,7 @@ start_service() {
 	procd_set_param command /bin/sh -c '
 		M=/lib/modules/$(uname -r)/modem
 		[ -f $M/sipc_wwan.ko ] || M=/mnt/e5-disk/usr/lib/modules/$(uname -r)/modem
+		[ -f $M/sipc_wwan.ko ] || M=$(dirname "$(find /lib/modules/$(uname -r) -name sipc_wwan.ko | head -1)")
 		i=0
 		until [ -e /dev/stty_nr1 ]; do
 			i=$((i + 1)); [ $i -gt 120 ] && { echo "no /dev/stty_nr1 after 120 s"; exit 1; }
@@ -20,7 +21,8 @@ start_service() {
 		# (OpenWrt'"'"'s insmod refuses to run without the release'"'"'s module
 		# directory, even for a module given by its path)
 		mkdir -p /lib/modules/$(uname -r)
-		grep -q "^wwan " /proc/modules || insmod $M/wwan.ko || exit 1
+		# (the WWAN core is a module on 5.15, built in on the mainline kernel)
+		[ -d /sys/class/wwan ] || grep -q "^wwan " /proc/modules || insmod $M/wwan.ko || exit 1
 		grep -q "^sipc_wwan " /proc/modules || insmod $M/sipc_wwan.ko || exit 1
 		echo "sipc_wwan loaded"'
 	procd_set_param stdout 1

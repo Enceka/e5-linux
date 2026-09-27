@@ -18,6 +18,8 @@ on the ZTE MU300, UMS9620 -- the E5's UMS9621 is the "lite" member of the same q
 | `wrap-image.py` | LK copies the kernel to 0x80080000; the stub moves the entry to 0x80200000 (2 MiB aligned) |
 | `init-bringup` | a probe init: logs devices, drivers, deferrals to kmsg and pmsg, warm-reboots |
 | `make-boot.sh` | a slot-b boot image of the kernel and an init (`boot/build-boot-image.py`) |
+| `module-order.txt` | the modules `boot/init` loads from the initramfs, in the 5.15 order |
+| `trial-from-openwrt.sh` | the next trial, flashed from a running OpenWrt trial over the USB LAN (no Android round trip) |
 
 ```sh
 docker build -t e5-mainline-build upstream/
@@ -49,7 +51,7 @@ The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_
 | M1: the kernel boots on the vendor DTB, reaches /init, resets through the PMIC, leaves its log | **done 2026-09-27** (first try: userspace at 1.58 s, 8 CPUs, 1.5 GB, back in Android) |
 | M2: clocks, PMIC + regulators, PMIC watchdog, eMMC, USB gadget (musb): `boot/init` starts OpenWrt | **done 2026-09-27** (pinctrl and the SD card slot are still to come) |
 | M3: Wi-Fi and Bluetooth (marlin3lite over SDIO: wcn_bsp, sprd_wlan_combo, sprdbt_tty) | **done 2026-09-27** (hotspot on 5745 MHz beaconing, hci0 up with the factory address at boot) |
-| M4: the modem (SIPC, SIPA, modem loader) with ModemManager as on 5.15 | |
+| M4: the modem (SIPC, SIPA, modem loader, Trusty) with ModemManager as on 5.15 | **done 2026-09-28** (5G NR, connected, data on sipa_eth0) |
 | M5: display (sprd DRM, DSI panel), touch, keypad, vibrator | |
 | M6: charger, fuel gauge, thermal, cpufreq | |
 | M7: audio (AGDSP, VBC, UMP9620 codec, aw87xxx PA) | |
@@ -109,6 +111,33 @@ kernel/patches/0018 applies to 6.18 as it is; mu300-linux's link policy commit i
 devices. Two traps: `RFKILL_INPUT` (on by default, off on 5.15) lets the WCN tty's persistent, blocked switch block
 every bluetooth switch, so hci0 refused to come up (ERFKILL) -- off, under EXPERT like the GKI config; and the
 tool's first cut dropped `wakeup_source_remove()` where the vendor code has no destroy after it.
+
+### M4 (2026-09-28)
+
+The modem stack is Unisoc's 5.15 one, as modules in `module-order.txt`'s order (time sync, TSHM and the Trusty
+log, the power manager, mailbox, SIPC with its ports and bridges, SIPA with sipa_eth and sipa_usb, the modem
+loader, CP dump, IQ, URSP), and `sipc_wwan` loaded by OpenWrt's `e5-sipc-wwan` from the root's
+`/lib/modules/<release>/modem` once the CP's AT channel exists; the CP is booted by Android's `modem_control` in
+the vendor chroot, as on 5.15. On the device: `modem run = 1`, `CH Alive`/`Modem Alive`, ModemManager on
+`wwan0at0` + `sipa_eth0`, connected on 5G NR; ping, DNS and HTTP over `sipa_eth0` (~16 Mbit/s from a mirror,
+the RPS switch to the middle cores under load), fw4 masquerading the LAN onto it.
+
+What it took besides the drivers:
+
+* **Trusty.** `modem_control` has the TEE unlock the CP's DDR (`/dev/trusty-ipc-dev0`) before it loads anything:
+  drivers/trusty of the same tree, built in as on 5.15 (log, TSHM, TUI modules), plus mu300-linux's fix -- the
+  Android PSCI hooks that keep Trusty's CPU awake do not exist on mainline, so trusty-core polls it with NOPs
+  while requests are in flight. Virtio's ID 13 is the balloon on mainline and Trusty IPC on Android.
+* **The slot suffix** comes from LK's bootconfig behind the initrd (`androidboot.slot_suffix`), not the command
+  line: `BOOT_CONFIG` + `BOOT_CONFIG_FORCE` (the forced command line lacks LK's `bootconfig`). Without it
+  `modem_control` asked for `nr_fixnv1` with no suffix and retried forever.
+* **The CP's region is no-map:** `vmap()` refuses its pfns on 6.x; smem ioremaps such regions.
+* `PM_WAKELOCKS` (`/sys/power/wake_lock`), and SIPA's RPS switch looked for rx-0's `rps_cpus` in the ktype's
+  default groups, which 6.18 keeps in the queue: a panic at the first burst of data, before the fix.
+
+A trial's root is a copy, so its `sipc_wwan.ko` has to be put into the copy's `/lib/modules/<release>/modem`:
+`trial-from-openwrt.sh img upstream/out/modules/sipc_wwan.ko:/lib/modules/<release>/modem/sipc_wwan.ko` does it
+on the way; from Android, loop-mount the copy (SELinux has to be permissive for the loop mount).
 
 ### What the vendor DT asks for
 

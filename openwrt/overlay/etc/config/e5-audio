@@ -3,5 +3,3 @@ config audio 'main'
 	option enabled '1'
 	# speaker volume, 0 (mute) - 15 (/usr/libexec/e5-volume)
 	option volume '10'
-	# a short tick at the new level when the volume keys change it
-	option key_tick '1'

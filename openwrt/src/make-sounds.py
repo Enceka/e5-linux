@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The E5's two sounds, as 48 kHz stereo S16 WAV (what hw:N,3 plays):
-beep.wav, two tones for a notification; tick.wav, the volume keys' click.
+"""The E5's notification sound, beep.wav: two tones, 48 kHz stereo S16 WAV
+(what hw:N,3 plays).
     make-sounds.py OUTDIR
 """
 import math, os, struct, sys, wave
@@ -21,4 +21,3 @@ def tone(path, parts, level):
 out = sys.argv[1]
 os.makedirs(out, exist_ok=True)
 tone(os.path.join(out, 'beep.wav'), [(880, 0.18), (0, 0.06), (1320, 0.22)], 0.35)
-tone(os.path.join(out, 'tick.wav'), [(1200, 0.05)], 0.3)

@@ -9,7 +9,7 @@
 #   e5-volume                 the level, as JSON: {"level":N,"max":15,"card":true|false}
 #   e5-volume set N | up | down
 #   e5-volume apply           the saved level to the card (after e5-audio-dsp start)
-#   e5-volume play FILE|beep|tick   play a sound (not while one is playing)
+#   e5-volume play FILE|beep   play a sound (not while one is playing)
 MAX=15
 CTL='VBC DAC0 DG Set'
 
@@ -38,7 +38,7 @@ save() {
 }
 play() {
 	local c f=$1
-	case "$f" in beep|tick) f=/usr/share/e5/$f.wav ;; esac
+	case "$f" in beep) f=/usr/share/e5/beep.wav ;; esac
 	c=$(card); [ -n "$c" ] && [ -f "$f" ] || return 1
 	[ "$(level)" -gt 0 ] || return 0
 	pidof aplay >/dev/null && return 0

@@ -1,0 +1,41 @@
+From 90bd8fc0b01ce647e193065b9b988667c138a436 Mon Sep 17 00:00:00 2001
+From: Enceka <enceka@yeah.net>
+Date: Sun, 27 Sep 2026 12:08:48 +0800
+Subject: [PATCH] input: tlsc6x: declare ABS_X/ABS_Y, so the panel is a
+ touchscreen without udev
+
+The driver declares only the multitouch axes.  udev's input_id treats a
+device with ABS_MT_POSITION_X/Y as a touchscreen, so Debian's libinput uses
+it, but libudev-zero -- what OpenWrt has instead of udev -- classifies a
+touchscreen only by ABS_X and ABS_Y, and without its ID_INPUT_TOUCHSCREEN
+libinput ignores the device: no touch under cage on OpenWrt.
+
+Declare the single-touch axes with the ranges of the MT ones.  The events
+stay the multitouch ones, which is what libinput reads from a device with
+slots; nothing else changes for Debian.
+---
+ drivers/input/touchscreen/tlsc6x/tlsc6x_main.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/input/touchscreen/tlsc6x/tlsc6x_main.c b/drivers/input/touchscreen/tlsc6x/tlsc6x_main.c
+index 4d99793f0..44f00b4de 100644
+--- a/drivers/input/touchscreen/tlsc6x/tlsc6x_main.c
++++ b/drivers/input/touchscreen/tlsc6x/tlsc6x_main.c
+@@ -1867,6 +1867,14 @@ static int tlsc6x_probe(struct i2c_client *client, const struct i2c_device_id *i
+ #endif
+ 	input_set_abs_params(input_dev, ABS_MT_POSITION_X, 0, pdata->x_res_max, 0, 0);
+ 	input_set_abs_params(input_dev, ABS_MT_POSITION_Y, 0, pdata->y_res_max, 0, 0);
++	/*
++	 * The single-touch axes too, with the same ranges: without ABS_X and
++	 * ABS_Y a device is not a touchscreen to libudev-zero (OpenWrt has no
++	 * udev), and libinput then ignores it.  The events stay the MT ones;
++	 * libinput reads the slots of a multitouch device.
++	 */
++	input_set_abs_params(input_dev, ABS_X, 0, pdata->x_res_max, 0, 0);
++	input_set_abs_params(input_dev, ABS_Y, 0, pdata->y_res_max, 0, 0);
+ 	input_set_abs_params(input_dev, ABS_MT_TOUCH_MAJOR, 0, 15, 0, 0);
+ 	input_set_abs_params(input_dev, ABS_MT_WIDTH_MAJOR, 0, 15, 0, 0);
+ #ifdef TLSC_REPORT_PRESSURE_EN
+-- 
+2.54.0 (Apple Git-157)
+

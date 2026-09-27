@@ -3812,3 +3812,24 @@ re-applies HiZ each pass while stopped (a replug resets the chip) and clears it
 when it starts and stops -- HiZ left on would run the battery flat.  Verified:
 limit 80 %, at 100 %: -121 mA, the battery discharging towards the resume level.
 A kernel fix for the two flags would make `stop_charge` enough on its own.
+
+## 42. Touch under OpenWrt: libudev-zero wants ABS_X/ABS_Y (2026-09-27)
+
+On OpenWrt the panel took no touch: the info screen's cage never saw the
+touchscreen.  OpenWrt has no udev; libinput's device properties come from
+libudev-zero, whose `set_properties_from_evdev()` tags `ID_INPUT_TOUCHSCREEN`
+only for a device with **both `ABS_X` and `ABS_Y`** (plus `BTN_TOUCH`); it never
+looks at the multitouch axes or at `INPUT_PROP_DIRECT`.  `tlsc6x` declares only
+`ABS_MT_*` (`B: ABS=265800002000000`, `PROP=2`) -- udev's input_id accepts that,
+which is why Debian's libinput always had the panel -- so to libudev-zero it was
+no touchscreen, and libinput dropped it.  `kernel/patches/0028`: the driver
+declares `ABS_X`/`ABS_Y` with the MT ranges (`ABS=...2000003`); the events stay
+the multitouch ones, which libinput reads from a device with slots.  Image
+native17 (the module is in the initramfs).  Debian's touch unchanged (checked by
+hand).
+
+**Do not reload an input driver under a running compositor.**  `rmmod tlsc6x`
+with cage holding the device: a kernel warning in cage's context, the kernel
+tainted `B` (bad page), and the reloaded driver's probe failed (`tlsc6x_hw_init`,
+error -1) -- no touch device until a reboot.  A driver in the initramfs is
+tested with a new boot image.

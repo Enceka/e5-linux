@@ -169,6 +169,7 @@ FINDINGS.
 | hotspot | NetworkManager `Hotspot` connection (wpa_supplicant AP mode), port of `br0`, `AP-ENABLED` on 5 GHz ch149 at 80 MHz (centre 5775) with the patched network-manager 1.52.1+e5 (trixie's computes that centre wrong); WPS off (with it the firmware-SME driver let no phone associate); a phone joins, gets 192.168.9.x from dnsmasq on br0; up at boot (autoconnect), SSID/PSK changes survive the overlay; no AP+STA concurrency |
 | bluetooth | configured by the kernel like the vendor HAL (0018: pskey/RF/enable; 0021: core disable on close); factory address `FC:B5:85:D0:85:9B`, manufacturer 0x01ec; scans, connects, power-cycles; audio profiles untested |
 | vibrator | `sc27xx-vibra` from the initramfs (native16): a force-feedback device, feedbackd on Debian (FINDINGS 40) |
+| touch | `tlsc6x`: Debian via udev; OpenWrt needs `ABS_X`/`ABS_Y` for libudev-zero (kernel `0028`, native17, FINDINGS 42) |
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |

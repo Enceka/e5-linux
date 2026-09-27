@@ -50,6 +50,7 @@ What the E5 needs besides, in `overlay/`:
 | `etc/hotplug.d/wwan/26-e5-sipa-eth`, `lib/udev/rules.d/78-e5-mm-sipc.rules` | ModemManager without udev: the data port once the AT port exists, no tty probing |
 | `etc/hotplug.d/iface/10-e5-usb0` | puts `usb0` into `br-lan` without netifd touching it: the NCM gadget must never go down |
 | `etc/uci-defaults/90-e5`, `91-e5-wireless` | first boot: LAN, WAN, DHCP, the bearer's IPv6 /64 on the LAN, hotspot |
+| `etc/init.d/e5-sms-notify`, `usr/libexec/e5-sms-notify` | a new SMS vibrates (`e5-vibrate`, `/etc/config/e5-notify`) and is counted unread (`/tmp/run/e5-sms/unread`, `e5-sms-notify read`) |
 | `usr/libexec/e5-sysupgrade` | replaces `sysupgrade`: a firmware image would overwrite the eMMC |
 
 and the scripts the two systems share come from `rootfs/overlay/opt/e5`
@@ -73,7 +74,10 @@ runs rebuild ModemManager only.
 `build-rootfs.sh` takes OpenWrt's `armsr/armv8` root filesystem, installs the
 packages (hostapd, iw, bash, LuCI's ModemManager protocol, ModemManager from
 `out/openwrt/`), adds `overlay/`, the shared scripts, a full static busybox for
-the applets OpenWrt's leaves out, and `logdw` (`src/logdw.c`, from mu300-linux).
+the applets OpenWrt's leaves out, `logdw` (`src/logdw.c`, from mu300-linux) and
+`e5-vibrate` (`src/e5-vibrate.c`, the PMIC's vibrator).  If the info screen's
+repository is next to this one (`../e5-infoscreen`, or `E5_INFOSCREEN=<dir>`;
+`E5_INFOSCREEN=` leaves it out), its packages and files go into the tree too.
 
 ## Install
 

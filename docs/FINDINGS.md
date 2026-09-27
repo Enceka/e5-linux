@@ -3772,3 +3772,12 @@ Debian (Phosh's SMS and call feedback) and anything with `EVIOCSFF` on OpenWrt.
 **The driver takes the strength from `rumble.weak_magnitude`**: an effect with only
 `strong_magnitude` set plays at strength 0 -- accepted, and silent (the first
 test here did exactly that).  Verified by hand with a 400-600 ms rumble.
+
+On OpenWrt, `e5-sms-notify` (procd) listens for ModemManager's
+`Modem.Messaging.Added` with `dbus-monitor` and vibrates through `e5-vibrate` when
+`received` is true -- verified with a real SMS.  Two things on the way: the
+listener reads `dbus-monitor` through a FIFO, not a pipeline, because procd stops
+a service by its main process and a pipeline's other half outlived every restart
+(each one would have added another vibration per message); and the PMIC's
+`sc27xx:red/green/blue` LEDs drive nothing on this board -- the E5 has no
+notification LED.

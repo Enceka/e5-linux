@@ -34,8 +34,14 @@ if [ -d "$DEST/etc/config" ]; then
     echo "== keeping the configuration of the installed tree"
     for p in etc/config etc/shadow etc/passwd etc/group etc/dropbear etc/e5 etc/e5linux etc/uhttpd.crt etc/uhttpd.key; do
         [ -e "$DEST/$p" ] || continue
-        rm -rf "$NEW/$p"
-        cp -a "$DEST/$p" "$NEW/$p"
+        if [ -d "$DEST/$p" ] && [ -d "$NEW/$p" ]; then
+            # merged: the installed files win, and a file only the new tree
+            # has (a new package's /etc/config/<name>) is kept
+            cp -a "$DEST/$p/." "$NEW/$p/"
+        else
+            rm -rf "$NEW/$p"
+            cp -a "$DEST/$p" "$NEW/$p"
+        fi
     done
     # the new image's version, not the kept one
     tar -xzf "$T" -C "$NEW" ./etc/e5/image-version 2>/dev/null || true

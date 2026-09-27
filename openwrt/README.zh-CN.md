@@ -43,6 +43,7 @@ E5 另外需要的东西在 `overlay/` 里：
 | `etc/hotplug.d/wwan/26-e5-sipa-eth`、`lib/udev/rules.d/78-e5-mm-sipc.rules` | 没有 udev 时的 ModemManager 衔接：AT 端口出现后再交出数据口，不探测 tty |
 | `etc/hotplug.d/iface/10-e5-usb0` | 把 `usb0` 加进 `br-lan`，netifd 不碰它：NCM gadget 绝不能 down |
 | `etc/uci-defaults/90-e5`、`91-e5-wireless` | 首次启动：LAN、WAN、DHCP、把承载的 IPv6 /64 放到 LAN、热点 |
+| `etc/init.d/e5-sms-notify`、`usr/libexec/e5-sms-notify` | 新短信时震动（`e5-vibrate`，设置在 `/etc/config/e5-notify`），并记为未读（`/tmp/run/e5-sms/unread`，`e5-sms-notify read` 清除） |
 | `usr/libexec/e5-sysupgrade` | 替换 `sysupgrade`：刷固件镜像会覆盖 eMMC |
 
 两个系统共用的脚本来自 `rootfs/overlay/opt/e5`（`vendor-start.sh`、
@@ -64,7 +65,10 @@ openwrt/build-rootfs.sh         # -> out/openwrt/e5-openwrt-25.12.5-rootfs.tar.g
 `build-rootfs.sh` 取 OpenWrt 的 `armsr/armv8` 根文件系统，安装软件包（hostapd、iw、
 bash、LuCI 的 ModemManager 协议、`out/openwrt/` 里的 ModemManager），加入
 `overlay/`、共用脚本、一个完整的静态 busybox（补上 OpenWrt 版省掉的 applet），
-以及 `logdw`（`src/logdw.c`，来自 mu300-linux）。
+`logdw`（`src/logdw.c`，来自 mu300-linux），以及 `e5-vibrate`（`src/e5-vibrate.c`，
+驱动 PMIC 的震动马达）。如果信息屏仓库就在本仓库旁边（`../e5-infoscreen`，或用
+`E5_INFOSCREEN=<目录>` 指定；`E5_INFOSCREEN=` 留空则不包含），它的软件包和文件也会
+一并装进系统树。
 
 ## 安装
 

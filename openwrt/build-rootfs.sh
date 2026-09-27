@@ -19,7 +19,8 @@
 #    systems share -- the baseband's vendor chroot, the regulatory database,
 #    the USB gadget guard, e5-next-boot, e5-os, e5-at;
 #  * a full static busybox (the boot image's own) for the applets OpenWrt's
-#    leaves out, and logdw (openwrt/src/logdw.c) for the vendor chroot's log.
+#    leaves out, logdw (openwrt/src/logdw.c) for the vendor chroot's log, and
+#    e5-vibrate (openwrt/src/e5-vibrate.c) for the motor.
 #
 # The firmware and the Android vendor subset are not in the tarball: they are
 # the Debian root's, bound in at boot (overlay/lib/preinit/05_e5_debian_root).
@@ -33,6 +34,10 @@ OUT="$TOP/out/openwrt"
 URL=https://downloads.openwrt.org/releases/$VER/targets/armsr/armv8
 TARBALL=openwrt-$VER-armsr-armv8-rootfs.tar.gz
 BUSYBOX=${E5_BUSYBOX:-$TOP/work/busybox/ext/usr/bin/busybox}
+# the info screen, from its own repository, when it is there (E5_INFOSCREEN=
+# empty leaves it out)
+INFOSCREEN=${E5_INFOSCREEN-$TOP/../e5-infoscreen}
+[ -n "$INFOSCREEN" ] && [ -f "$INFOSCREEN/packages.txt" ] && [ -d "$INFOSCREEN/root" ] || INFOSCREEN=""
 NAME=e5-openwrt-$VER-rootfs.tar.gz
 mkdir -p "$WORK" "$OUT"
 
@@ -48,16 +53,22 @@ want=$(curl -fsSL "$URL/sha256sums" | sed -n "s/^\([0-9a-f]*\) \*$TARBALL$/\1/p"
 have=$(shasum -a 256 "$WORK/$TARBALL" 2>/dev/null || sha256sum "$WORK/$TARBALL")
 [ -n "$want" ] && [ "${have%% *}" = "$want" ] || { echo "checksum mismatch for $TARBALL" >&2; exit 1; }
 
-# logdw, static: OpenWrt has no compiler of its own
+# logdw and e5-vibrate, static: OpenWrt has no compiler of its own
 docker run --rm --platform linux/arm64 -v "$HERE/src":/src:ro -v "$WORK":/out alpine:3.22 \
-    sh -euc 'apk add -q gcc musl-dev >/dev/null && gcc -static -Os -s -o /out/logdw /src/logdw.c'
+    sh -euc 'apk add -q gcc musl-dev linux-headers >/dev/null &&
+        gcc -static -Os -s -o /out/logdw /src/logdw.c &&
+        gcc -static -Os -s -Wall -o /out/e5-vibrate /src/e5-vibrate.c'
 
 docker import --platform linux/arm64 "$WORK/$TARBALL" e5-openwrt-base:$VER >/dev/null
+# (an empty directory stands for no info screen)
+mkdir -p "$WORK/no-infoscreen"
+echo "info screen: ${INFOSCREEN:-(none)}"
 VERSION=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
 
 docker run --rm --platform linux/arm64 \
     -v "$HERE/overlay":/in/overlay:ro -v "$TOP/rootfs/overlay/opt/e5":/in/opt-e5:ro \
     -v "$OUT":/in/apk:ro -v "$BUSYBOX":/in/busybox:ro -v "$WORK/logdw":/in/logdw:ro \
+    -v "$WORK/e5-vibrate":/in/e5-vibrate:ro -v "${INFOSCREEN:-$WORK/no-infoscreen}":/in/infoscreen:ro \
     -v "$OUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
     e5-openwrt-base:$VER /bin/sh -euc '
 mkdir -p /var/lock /var/run /tmp
@@ -65,7 +76,13 @@ apk update >/dev/null
 # ModemManager first, from its local file (unsigned): its release is above the
 # repository one, so what depends on it takes this one and apk upgrade keeps it
 apk add --allow-untrusted /in/apk/modemmanager-1*.apk /in/apk/modemmanager-rpcd-*.apk >/dev/null
-apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils luci-proto-modemmanager >/dev/null
+# (dbus-utils: dbus-monitor, for e5-sms-notify)
+apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils luci-proto-modemmanager \
+    dbus-utils >/dev/null
+# the info screen'"'"'s packages (cage, cog, Mesa, ...), when there is one
+if [ -f /in/infoscreen/packages.txt ]; then
+    apk add $(grep -v "^#" /in/infoscreen/packages.txt) >/dev/null
+fi
 # attended sysupgrade flashes whole-disk images: that would overwrite the eMMC
 apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>&1 || true
 # (apk info <name> describes the repository'"'"'s package; the installed one is here)
@@ -84,10 +101,17 @@ printf "127.0.0.1\tlocalhost\n\n::1\tlocalhost ip6-localhost ip6-loopback\nff02:
 printf "E5\n" > $R/etc/hostname
 
 cp -a /in/overlay/. $R/
+screen=
+if [ -d /in/infoscreen/root ]; then
+    cp -a /in/infoscreen/root/. $R/
+    find $R -name .DS_Store -exec rm -f {} +
+    screen=e5-infoscreen
+fi
 for f in vendor-start.sh android-run node-perms.sh regdb-load.sh gadget-guard.sh e5-next-boot e5-os e5-at; do
     cp /in/opt-e5/$f $R/opt/e5/$f; chmod 755 $R/opt/e5/$f
 done
 cp /in/logdw $R/opt/e5/bin/logdw && chmod 755 $R/opt/e5/bin/logdw
+cp /in/e5-vibrate $R/usr/bin/e5-vibrate && chmod 755 $R/usr/bin/e5-vibrate
 cp /in/busybox $R/opt/e5/bin/busybox && chmod 755 $R/opt/e5/bin/busybox
 # the applets the shared scripts use that OpenWrt'"'"'s busybox leaves out --
 # the ones the full busybox really has
@@ -108,6 +132,7 @@ done
 sed -i "s|\[ \"makedev\", \"/dev/%DEVNAME%\", \"0600\" \]|[ \"makedev\", \"/dev/%DEVNAME%\", \"0660\" ]|" $R/etc/hotplug.json
 grep -q "\"/dev/%DEVNAME%\", \"0660\" \]" $R/etc/hotplug.json || { echo "hotplug.json: default node mode not found" >&2; exit 1; }
 for c in e5-os e5-next-boot e5-at; do ln -sf /opt/e5/$c $R/usr/bin/$c; done
+ln -sf /usr/libexec/e5-sms-notify $R/usr/bin/e5-sms-notify
 # the USB serial console: in the image, not at first boot -- procd reads
 # inittab before uci-defaults run, and the console is the way in when the
 # network is not up
@@ -115,7 +140,7 @@ grep -q "^ttyGS0:" $R/etc/inittab || echo "ttyGS0::askfirst:/usr/libexec/login.s
 mv $R/sbin/sysupgrade $R/sbin/sysupgrade.openwrt
 mv $R/usr/libexec/e5-sysupgrade $R/sbin/sysupgrade
 # enable the services ("rc.common enable" wants ubus, which is not running here)
-for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok dbus modemmanager; do
+for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify dbus modemmanager $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done

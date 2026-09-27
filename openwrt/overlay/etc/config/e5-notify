@@ -1,0 +1,6 @@
+config sms 'sms'
+	# vibrate on a new message; the pattern is on/off/on... in ms
+	option vibrate '1'
+	option pattern '250 150 250'
+	# the info screen lights up and shows a new message
+	option screen '1'

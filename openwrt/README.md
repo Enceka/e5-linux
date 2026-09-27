@@ -12,18 +12,23 @@ as one LAN, LuCI, SSH.  No graphical interface on the panel (see the end).
 ## How it fits
 
 * **No kernel, no firmware image.**  The E5 boots its vendor kernel from
-  `boot_b`; the initramfs (`boot/init`) mounts the Linux root image
-  (`/data/e5linux/rootfs.ext4`) and starts the system named in
-  `e5linux/boot-os` on it -- Debian, which *is* the image, or a system in a
-  directory of the image: OpenWrt lives in `/openwrt`.  `e5linux/boot-os-next`
-  does the same for one boot only.
-* **The hardware files are Debian's.**  The Wi-Fi/BT firmware, the Debian-signed
+  `boot_b`; the initramfs (`boot/init`) mounts userdata and starts the system
+  named in `e5linux/boot-os` there (`e5linux/boot-os-next` for one boot only;
+  `e5-os` writes both).  OpenWrt comes in two forms:
+  * **standalone**: a root image of its own, `/data/e5linux/openwrt.ext4`,
+    with no Debian needed.  Without a Debian image next to it
+    (`/data/e5linux/rootfs.ext4`) it is what boots; with one, `e5-os` chooses.
+  * **in the Debian image**: a directory of the Debian root image, `/openwrt`.
+* **The hardware files.**  The Wi-Fi/BT firmware, the Debian-signed
   `regulatory.db` this kernel wants, the Android vendor subset that boots the
   baseband (`/opt/e5/android`) and the kernel's modem modules were pulled from
-  this device into the Debian root.  OpenWrt binds them in at boot from
+  this device.  The standalone image carries them, and Noto Sans CJK for the
+  info screen.  The directory form binds the Debian root's in at boot from
   `/mnt/e5-disk` (the image, which the initramfs leaves mounted there) instead
-  of carrying a second copy.  The initramfs no longer copies Debian's overlay
-  (systemd units, NetworkManager profiles) into a root that is not Debian.
+  of carrying a second copy.  The initramfs copies Debian's overlay (systemd
+  units, NetworkManager profiles) only into Debian.
+* **userdata** is at `/mnt/e5-data` in the running system (the initramfs
+  moves its mount there): the root images, `e5linux/boot-os`.
 * **The modem is ModemManager, as on Debian** -- OpenWrt's own package, rebuilt
   with the unisoc plugin (`rootfs/deb-patches/modemmanager-0*.patch`, the same
   patches), and OpenWrt's netifd protocol for it: `wan` is `proto
@@ -41,7 +46,7 @@ What the E5 needs besides, in `overlay/`:
 
 | | |
 |---|---|
-| `lib/preinit/05_e5_debian_root` | binds the Debian root's firmware and vendor subset in |
+| `lib/preinit/05_e5_debian_root` | binds the Debian root's firmware and vendor subset in (the directory form) |
 | `etc/init.d/e5-hw` | USB gadget guard, the regulatory database |
 | `etc/init.d/e5-vendor` | the baseband: `modem_control`, `cp_diskserver`, `refnotify` in the vendor chroot |
 | `etc/init.d/e5-sipc-wwan` | the modem's AT port, once the CP is up |
@@ -63,7 +68,8 @@ On the host (Docker, arm64 -- native on Apple silicon):
 
 ```sh
 openwrt/build-modemmanager.sh   # ModemManager with the unisoc plugin -> out/openwrt/*.apk
-openwrt/build-rootfs.sh         # -> out/openwrt/e5-openwrt-25.12.5-rootfs.tar.gz
+openwrt/build-rootfs.sh         # -> out/openwrt/e5-openwrt-25.12.5-rootfs.tar.gz (the directory form)
+E5_STANDALONE=1 openwrt/build-rootfs.sh   # -> out/openwrt/e5-openwrt-25.12.5.ext4.gz (standalone)
 ```
 
 `build-modemmanager.sh` builds from OpenWrt's source tree at the release tag,
@@ -80,7 +86,54 @@ the applets OpenWrt's leaves out, `logdw` (`src/logdw.c`, from mu300-linux) and
 repository is next to this one (`../e5-infoscreen`, or `E5_INFOSCREEN=<dir>`;
 `E5_INFOSCREEN=` leaves it out), its packages and files go into the tree too.
 
+`E5_STANDALONE=1` adds what the directory form takes from the Debian root:
+the firmware (`rootfs/overlay/lib/firmware`: `rootfs/pull-wcn-firmware.sh`,
+`pull-audio-firmware.sh`), the vendor subset (`work/android-subset`:
+`rootfs/extract-android-vendor.sh`), `wwan.ko` and `sipc_wwan.ko` of the
+kernel build (`out_linux`, so the same build as the boot image's kernel), and
+Noto Sans CJK from Debian's `fonts-noto-cjk`; then packs the tree into a
+1 GiB ext4 image (`E5_IMAGE_MB`; about 330 MB used with the info screen).
+The firmware and the vendor subset are this device's own files, not the
+repository's: build the image for your own device.
+
 ## Install
+
+### Standalone
+
+The boot image must know OpenWrt images (`boot/init` from 2026-09-27,
+native18 or later).  From Linux on the device (Debian, or OpenWrt in either
+form), over the USB LAN:
+
+```sh
+openwrt/install-standalone.sh            # install /data/e5linux/openwrt.ext4
+openwrt/install-standalone.sh --try      # install, boot OpenWrt once
+openwrt/install-standalone.sh --switch   # install, make OpenWrt the default
+```
+
+The device fetches the image and runs `device-install-image.sh`, which
+unpacks it next to the installed one and keeps the configuration of the
+OpenWrt already there (the running one, else the installed image, else
+`/openwrt`): `/etc/config`, passwords, SSH keys, the traffic records.
+Packages added with `apk` are not carried over.  From Debian with no OpenWrt
+yet, it takes Debian's APN and hotspot, as `install.sh` does.  Run from the
+standalone OpenWrt itself, the new image is staged as `openwrt.ext4.new` and
+the initramfs swaps it in at the next boot, keeping the previous one as
+`openwrt.ext4.old`.
+
+From rooted Android (Magisk), over adb, for a device that never ran Linux:
+
+```sh
+openwrt/install-standalone.sh --adb --apn <APN> --wifi-key <key>
+boot/flash-trial.sh work/boot-linux-slotb-<name>.img
+```
+
+The APN and the hotspot (`--ssid`, default `E5-Linux`) go to
+`e5linux/openwrt-install.conf` on userdata, for the first boot; without a key
+the hotspot stays off.  Once OpenWrt is up, `e5-next-boot linux` keeps the
+device booting it.  Debian can go afterwards: remove
+`/mnt/e5-data/e5linux/rootfs.ext4` and OpenWrt is the system there is.
+
+### In the Debian image
 
 The E5 runs Debian, and is reachable over the USB LAN (192.168.9.1):
 
@@ -102,8 +155,9 @@ The boot image must be one with the current `boot/init` (native13 or later).
   USB port.  The password is `root` until you change it (`passwd`), as on the
   Debian image.
 * Switch: `e5-os debian` or `e5-os openwrt`, then `reboot`
-  (`e5-os openwrt --once` for one boot; `e5-os status`).  The same command
-  exists on Debian.
+  (`e5-os openwrt --once` for one boot; `e5-os status` lists what is
+  installed).  The same command exists on Debian; the info screen offers
+  Android once, and Debian is left to the command line.
 * Android: `e5-next-boot android`, then `reboot`.
 * APN: LuCI -> Network -> Interfaces -> wan, or
   `uci set network.wan.apn=...; uci commit network; ifup wan`.
@@ -111,7 +165,8 @@ The boot image must be one with the current `boot/init` (native13 or later).
 * **Never** flash an OpenWrt firmware image or run `sysupgrade` with one: it
   is disabled, because an armsr image is a whole-disk image and would
   overwrite the partition table, Android and the bootloaders.  Update
-  packages with `apk upgrade`; rebuild and reinstall the tree from the host.
+  packages with `apk upgrade`; rebuild and reinstall the image (or the tree)
+  from the host.
 
 ## Status
 
@@ -125,6 +180,7 @@ Verified on the device (2026-09-27, from a fresh install with `--try`):
 | WAN | `proto modemmanager`: IPv4 with the default route on `sipa_eth0`, NAT for the LAN; IPv6 on the device and, with the bearer's /64, on every LAN client (SLAAC, no NAT) |
 | hotspot | hostapd, 5 GHz ch149 / 80 MHz, WPA2-PSK with Debian's SSID and key; a phone joins and gets its lease |
 | management | telnet (USB port only), SSH, LuCI; `e5-os`, `e5-next-boot`, `e5-at` |
+| standalone | installed from Debian with `--try`: booted from `openwrt.ext4` (loop, 287 MB used), the configuration and traffic records of `/openwrt` kept, modem, WAN, hotspot and info screen up with the image's own firmware, vendor subset, modules and fonts; an update from inside it staged and swapped in at the next boot |
 
 Not verified yet: LuCI's ModemManager pages, SMS from OpenWrt, `--switch` as
 the default for many boots.

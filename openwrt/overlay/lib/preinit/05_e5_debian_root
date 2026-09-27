@@ -6,9 +6,11 @@
 # kernel wants -- bound in before anything can ask for them, not copied, so
 # there is one set.  The initramfs binds them before switch_root (boot/init:
 # the WCN firmware is asked for at about that moment); this is the fallback
-# for an initramfs that does not.
+# for an initramfs that does not.  OpenWrt in an image of its own (the
+# standalone form) has them in the image, and no Debian root.
 e5_bind_debian_root() {
 	local d=/mnt/e5-disk src dst
+	[ -d $d/usr/lib ] || return 0
 	for pair in usr/lib/firmware:/lib/firmware opt/e5/android:/opt/e5/android; do
 		src=$d/${pair%%:*}; dst=${pair#*:}
 		[ -d "$src" ] || { echo "e5: missing $src" > /dev/kmsg; continue; }

@@ -1,43 +1,74 @@
 #!/bin/sh
-# Choose which Linux the E5 starts: Debian (the root image itself) or a system
-# installed in a directory on it (/openwrt, openwrt/install.sh).
+# Choose which Linux the E5 starts: Debian (the root image rootfs.ext4) or
+# OpenWrt -- in an image of its own (openwrt.ext4, openwrt/install-standalone.sh)
+# or in a directory of the Debian image (/openwrt, openwrt/install.sh).
 #
 #   e5-os openwrt          OpenWrt from now on
 #   e5-os openwrt --once   OpenWrt for the next boot only, then back to the current one
 #   e5-os debian           Debian from now on
 #   e5-os status
 #
-# The initramfs (boot/init, pick_root) reads e5linux/boot-os on the root image,
-# and e5linux/boot-os-next first, which it deletes as it reads it.  Reboot
-# afterwards.  Which of Android and Linux starts is e5-next-boot's business.
+# The initramfs (boot/init) reads e5linux/boot-os on userdata, and
+# e5linux/boot-os-next first, which it deletes as it reads it; userdata is
+# /mnt/e5-data in the running system.  The same choice goes into the Debian
+# image too, where a boot image older than that reads it.  Reboot afterwards.
+# Which of Android and Linux starts is e5-next-boot's business.
 set -eu
-# the root image: this system's / when it is Debian, /mnt/e5-disk otherwise
-D=/
-[ -d /mnt/e5-disk/e5linux ] || [ -d /mnt/e5-disk/lib ] && D=/mnt/e5-disk
-E=$D/e5linux
-mkdir -p "$E"
+DATA=/mnt/e5-data/e5linux
+# the Debian image: this system's / when it is Debian, /mnt/e5-disk for a
+# system in a directory of it; none for OpenWrt in its own image
+IMG=
+if [ -f /etc/debian_version ]; then IMG=/
+elif [ -d /mnt/e5-disk/lib ] || [ -d /mnt/e5-disk/e5linux ]; then IMG=/mnt/e5-disk
+fi
+
+installed() {
+    { [ -f "$DATA/rootfs.ext4" ] || [ "$IMG" = / ]; } && printf ' debian'
+    if [ -f "$DATA/openwrt.ext4" ]; then printf ' openwrt(image)'
+    elif [ -n "$IMG" ] && [ -x "$IMG/openwrt/sbin/init" ]; then printf ' openwrt(directory)'
+    elif [ -f /etc/openwrt_release ] && [ -z "$IMG" ]; then printf ' openwrt(image)'
+    fi
+}
+
+has() {
+    case "$1" in
+        debian) [ -f "$DATA/rootfs.ext4" ] || [ "$IMG" = / ] ;;
+        openwrt) [ -f "$DATA/openwrt.ext4" ] || { [ -n "$IMG" ] && [ -x "$IMG/openwrt/sbin/init" ]; } ;;
+        *) return 1 ;;
+    esac
+}
+
+# write $1 (boot-os or boot-os-next) = $2 wherever a boot image reads it
+put() {
+    for d in "$DATA" ${IMG:+"$IMG/e5linux"}; do
+        [ "$d" = "$DATA" ] && ! grep -qs " /mnt/e5-data " /proc/mounts && continue
+        mkdir -p "$d"
+        if [ -n "$2" ]; then echo "$2" > "$d/$1"; else rm -f "$d/$1"; fi
+    done
+}
+
+get() {
+    cat "$DATA/$1" 2>/dev/null || { [ -n "$IMG" ] && cat "$IMG/e5linux/$1" 2>/dev/null; } || true
+}
 
 case "${1:-status}" in
-    debian|ubuntu)
-        rm -f "$E/boot-os-next"
-        echo debian > "$E/boot-os"
-        echo "next boot: debian" ;;
     status)
-        echo "boot-os: $(cat "$E/boot-os" 2>/dev/null || echo debian)"
-        [ -f "$E/boot-os-next" ] && echo "boot-os-next: $(cat "$E/boot-os-next") (one boot)"
-        echo "installed: debian$(for d in "$D"/*/; do [ -x "$d/sbin/init" ] && [ -f "$d/etc/openwrt_release" ] && printf ' %s' "$(basename "$d")"; done)"
+        echo "boot-os: $(get boot-os | grep . || echo debian)"
+        n=$(get boot-os-next); [ -n "$n" ] && echo "boot-os-next: $n (one boot)"
+        echo "installed:$(installed)"
         ;;
     -*|'') echo "usage: $0 debian|openwrt [--once]|status" >&2; exit 2 ;;
     *)
         os=$1
-        [ -x "$D/$os/sbin/init" ] || { echo "no system installed in $D/$os" >&2; exit 1; }
+        [ "$os" = ubuntu ] && os=debian
+        has "$os" || { echo "$os is not installed" >&2; exit 1; }
         if [ "${2:-}" = --once ]; then
-            echo "$os" > "$E/boot-os-next"
+            put boot-os-next "$os"
             echo "next boot: $os, once"
         else
-            rm -f "$E/boot-os-next"
-            echo "$os" > "$E/boot-os"
+            put boot-os-next ""
+            put boot-os "$os"
             echo "next boot: $os"
-        fi ;;
+        fi
+        ;;
 esac
-sync

@@ -3833,3 +3833,48 @@ with cage holding the device: a kernel warning in cage's context, the kernel
 tainted `B` (bad page), and the reloaded driver's probe failed (`tlsc6x_hw_init`,
 error -1) -- no touch device until a reboot.  A driver in the initramfs is
 tested with a new boot image.
+
+## 43. OpenWrt without Debian (2026-09-27)
+
+OpenWrt in `/openwrt` of the Debian root image needed Debian for more than
+the space: the firmware, the vendor subset and the modem modules came from the
+Debian root (bound in, section 39), and so did the info screen's CJK font.
+The standalone form is a root image of its own on userdata,
+`e5linux/openwrt.ext4` (1 GiB ext4, about 330 MB used), built by
+`E5_STANDALONE=1 openwrt/build-rootfs.sh` with those files inside:
+`/lib/firmware` from `rootfs/overlay/lib/firmware`, `/opt/e5/android` (chowned
+to root: bionic, section 13), `/lib/modules/<release>/modem` from `out_linux`
+(the vermagic has to be the boot image's kernel's), Noto Sans CJK in
+`/usr/share/fonts/e5-noto` (where the directory form binds it).  `mke2fs -d`
+builds the image from the tree, in Docker, without a loop device on the host.
+
+boot/init (image native18):
+
+* the choice moved to userdata: `e5linux/boot-os(-next)` there, read before
+  the old place inside the Debian image (still read when userdata has none,
+  so a device keeps its choice across the update);
+* `openwrt.ext4` is mounted as the root when chosen, or when there is no
+  `rootfs.ext4` -- so removing Debian leaves OpenWrt as the system;
+* `openwrt.ext4.new`, if present, is swapped in first (the old one kept as
+  `.old`): the running image cannot be replaced under itself, so an update
+  from inside it is staged and takes effect at the next boot;
+* userdata is moved into the new root at `/mnt/e5-data` before
+  `switch_root`, for `e5-os` and the installers.  The initramfs busybox has
+  no `mountpoint` applet, and `/proc` has moved by then: a flag set when the
+  mount succeeded decides;
+* `/run/e5linux/init-features` says what this init can do; the installer
+  declines to reboot into an image under an init that cannot start it.
+
+`openwrt/install-standalone.sh` installs from Linux on the device (Debian or
+either OpenWrt; the configuration of the OpenWrt already there is kept, the
+traffic records with it) or from rooted Android over adb, where the first
+boot's APN and hotspot go to `e5linux/openwrt-install.conf` on userdata for
+`90-e5` to take in.  An older init keeps userdata to itself; the installer
+then mounts the partition a second time -- the same f2fs superblock, not a
+second instance.
+
+Verified: Debian boots unchanged with native18; installed from Debian with
+`--try`, OpenWrt ran from `/dev/loop0` with the modem, WAN, hotspot and the
+info screen up on the image's own files, and the one-shot returned to Debian
+at the next boot; an update run inside the standalone OpenWrt was staged as
+`.new` and swapped in at the following boot.

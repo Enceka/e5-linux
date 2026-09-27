@@ -266,6 +266,7 @@ persist
 # so the Linux root filesystem lives in a file on Android /data, which is
 # f2fs and mounted directly from mmcblk0p70 (no metadata encryption).
 ROOT_FILE=/data/e5linux/rootfs.ext4
+OPENWRT_FILE=/data/e5linux/openwrt.ext4
 data=
 for u in /sys/class/block/mmcblk*p*/uevent; do
     grep -qx PARTNAME=userdata "$u" 2>/dev/null && data=/dev/$(basename "$(dirname "$u")")
@@ -278,13 +279,31 @@ has_init() { [ -x "$1/lib/systemd/systemd" ] || [ -x "$1/sbin/init" ]; }
 # e5linux/boot-os-next does the same for one boot only, and is removed as it is
 # read: a system tried that way (e5-os <name> --once) that does not come up
 # leaves the next boot to the one before it.
-pick_root() {
-    want=$(cat /disk/e5linux/boot-os-next 2>/dev/null)
-    if [ -n "$want" ]; then
-        rm -f /disk/e5linux/boot-os-next
-        log "stage=boot-os-next os=$want (one boot)"
+# The system to start is e5linux/boot-os on userdata (e5-os writes it there),
+# or e5linux/boot-os-next first, removed as it is read (one boot).  An older
+# e5-os kept them inside the Debian root image: read there when userdata has
+# none.
+read_boot_os() {
+    local d=$1 w
+    w=$(cat "$d/e5linux/boot-os-next" 2>/dev/null)
+    if [ -n "$w" ]; then
+        rm -f "$d/e5linux/boot-os-next"
+        log "stage=boot-os-next os=$w (one boot, $d)"
     else
-        want=$(cat /disk/e5linux/boot-os 2>/dev/null)
+        w=$(cat "$d/e5linux/boot-os" 2>/dev/null)
+    fi
+    echo "$w"
+}
+
+# a system in the Debian root image: Debian itself, or one in a directory
+pick_root() {
+    want=$1
+    if [ -n "$want" ]; then
+        # (userdata decided; a one-boot choice an older e5-os left in the image
+        # must not outlive this boot)
+        rm -f /disk/e5linux/boot-os-next
+    else
+        want=$(read_boot_os /disk)
     fi
     for os in $want ubuntu; do
         [ -d "/disk/$os" ] && has_init "/disk/$os" && { echo "/disk/$os"; return; }
@@ -293,15 +312,38 @@ pick_root() {
 }
 
 mkdir -p /newroot /data /disk
-rootdir=
+rootdir= data_mounted=
 if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/datamount.err; then
     log "stage=data-mounted"
-    [ -f "$ROOT_FILE" ] || log "stage=no-rootfile $ROOT_FILE"
-    if [ -f "$ROOT_FILE" ]; then
+    data_mounted=1
+    want=$(read_boot_os /data)
+    # OpenWrt in an image of its own (openwrt/build-rootfs.sh E5_STANDALONE=1,
+    # openwrt/install-standalone.sh): chosen, or the only system there is
+    # an update the running image could not write over itself
+    # (openwrt/device-install-image.sh): swapped in now, the old one kept
+    if [ -f "$OPENWRT_FILE.new" ]; then
+        rm -f "$OPENWRT_FILE.old"
+        [ -f "$OPENWRT_FILE" ] && mv "$OPENWRT_FILE" "$OPENWRT_FILE.old"
+        mv "$OPENWRT_FILE.new" "$OPENWRT_FILE" && log "stage=openwrt-image-updated"
+    fi
+    if [ -f "$OPENWRT_FILE" ] && { [ "$want" = openwrt ] || [ ! -f "$ROOT_FILE" ]; }; then
+        rootloop=$(losetup -f 2>/run/rootmount.err)
+        if [ -n "$rootloop" ] && losetup "$rootloop" "$OPENWRT_FILE" 2>>/run/rootmount.err \
+           && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err \
+           && has_init /disk; then
+            rootdir=/disk
+            log "stage=openwrt-image $OPENWRT_FILE"
+        else
+            log "stage=openwrt-image-fail $(cat /run/rootmount.err 2>/dev/null)"
+            umount /disk 2>/dev/null; [ -n "$rootloop" ] && losetup -d "$rootloop" 2>/dev/null
+        fi
+    fi
+    [ -n "$rootdir" ] || [ -f "$ROOT_FILE" ] || log "stage=no-rootfile $ROOT_FILE"
+    if [ -z "$rootdir" ] && [ -f "$ROOT_FILE" ]; then
         rootloop=$(losetup -f 2>/run/rootmount.err)
         if [ -n "$rootloop" ] && losetup "$rootloop" "$ROOT_FILE" 2>>/run/rootmount.err \
            && mount -t ext4 -o noatime "$rootloop" /disk 2>>/run/rootmount.err \
-           && rootdir=$(pick_root) && [ -n "$rootdir" ]; then
+           && rootdir=$(pick_root "$want") && [ -n "$rootdir" ]; then
             :
         else
             rootdir=
@@ -338,6 +380,8 @@ if [ -n "$rootdir" ]; then
         restore_slot_a
     fi
     mkdir -p /run/e5linux && cp /etc/misc-bc-slot-a.bin /etc/misc-bc-slot-b-trial.bin /run/e5linux/ 2>/dev/null
+    # what this initramfs can do, for the installers of the running system
+    echo "openwrt-image userdata-boot-os" > /run/e5linux/init-features
     [ -n "$misc" ] && echo "$misc" > /run/e5linux/misc-dev
     [ -n "$data" ] && echo "$data" > /run/e5linux/data-dev
     init=/sbin/init
@@ -348,7 +392,7 @@ if [ -n "$rootdir" ]; then
     # is Debian's (systemd units, NetworkManager profiles, udev rules), and a
     # system in a directory of its own (/openwrt, openwrt/build-rootfs.sh)
     # brings its own configuration.
-    if [ -d /e5-overlay ] && [ "$rootdir" = /disk ]; then
+    if [ -d /e5-overlay ] && [ "$rootdir" = /disk ] && [ -f /newroot/etc/debian_version ]; then
         # Copy file by file: the Debian root has /lib, /bin and /sbin as symlinks
         # into /usr, and a single cp -a of the whole tree refuses to merge into
         # those ("target '/newroot/./lib' is not a directory"), which left the
@@ -493,6 +537,12 @@ if [ -n "$rootdir" ]; then
     mount --move /proc /newroot/proc
     mount --move /sys /newroot/sys
     mount --move /run /newroot/run 2>/dev/null
+    # userdata, where the root images and e5linux/boot-os live, for e5-os and
+    # the installers of the running system (no mountpoint applet here, and
+    # /proc has just moved)
+    if [ -n "$data_mounted" ]; then
+        mkdir -p /newroot/mnt/e5-data && mount --move /data /newroot/mnt/e5-data
+    fi
     exec switch_root /newroot $init
 fi
 

@@ -173,7 +173,7 @@ FINDINGS.
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
-| openwrt | OpenWrt 25.12.5 in `/openwrt` of the root image, booted by `boot-os`/`boot-os-next` (`e5-os`); WAN by ModemManager (+ patch `06`), LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; `openwrt/README.md`, FINDINGS 39 |
+| openwrt | OpenWrt 25.12.5 in `/openwrt` of the root image, booted by `boot-os`/`boot-os-next` (`e5-os`); WAN by ModemManager (+ patch `06`), LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; `openwrt/README.md`, FINDINGS 39; standalone as `/data/e5linux/openwrt.ext4` with its own firmware, vendor subset, modem modules and fonts, no Debian needed (native18, FINDINGS 43) |
 
 ## Open questions
 

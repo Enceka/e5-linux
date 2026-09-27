@@ -24,7 +24,25 @@
 #
 # The firmware and the Android vendor subset are not in the tarball: they are
 # the Debian root's, bound in at boot (overlay/lib/preinit/05_e5_debian_root).
-# Needs Docker with arm64 (native on Apple silicon).
+#
+# E5_STANDALONE=1 builds OpenWrt for a device without Debian instead:
+# out/openwrt/e5-openwrt-<version>.ext4.gz, a root image of its own that
+# boot/init starts from /data/e5linux/openwrt.ext4 (openwrt/install-standalone.sh
+# puts it there).  What the tree would take from the Debian root is in the
+# image then:
+#
+#  * the firmware pulled from the device (rootfs/overlay/lib/firmware:
+#    rootfs/pull-wcn-firmware.sh, pull-audio-firmware.sh, and the Debian-signed
+#    regulatory.db) -> /lib/firmware;
+#  * the Android vendor subset (work/android-subset,
+#    rootfs/extract-android-vendor.sh) -> /opt/e5/android;
+#  * the modem's WWAN modules of the kernel build (out_linux: wwan.ko,
+#    sipc_wwan.ko) -> /lib/modules/<release>/modem;
+#  * Noto Sans CJK (Debian's fonts-noto-cjk) -> /usr/share/fonts/e5-noto, for
+#    the info screen.
+#
+# E5_IMAGE_MB sets the image's size (default 1024).  Needs Docker with arm64
+# (native on Apple silicon).
 set -euo pipefail
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -39,6 +57,11 @@ BUSYBOX=${E5_BUSYBOX:-$TOP/work/busybox/ext/usr/bin/busybox}
 INFOSCREEN=${E5_INFOSCREEN-$TOP/../e5-infoscreen}
 [ -n "$INFOSCREEN" ] && [ -f "$INFOSCREEN/packages.txt" ] && [ -d "$INFOSCREEN/root" ] || INFOSCREEN=""
 NAME=e5-openwrt-$VER-rootfs.tar.gz
+STANDALONE=${E5_STANDALONE:-}
+IMAGE_MB=${E5_IMAGE_MB:-1024}
+FIRMWARE=${E5_FIRMWARE:-$TOP/rootfs/overlay/lib/firmware}
+ANDROID=${E5_ANDROID_SUBSET:-$TOP/work/android-subset}
+KBUILD=${E5_KBUILD:-$TOP/out_linux}
 mkdir -p "$WORK" "$OUT"
 
 ls "$OUT"/modemmanager-1*.apk >/dev/null 2>&1 || {
@@ -59,6 +82,41 @@ docker run --rm --platform linux/arm64 -v "$HERE/src":/src:ro -v "$WORK":/out al
         gcc -static -Os -s -o /out/logdw /src/logdw.c &&
         gcc -static -Os -s -Wall -o /out/e5-vibrate /src/e5-vibrate.c'
 
+# what a standalone image carries of the device's own (the Debian root's in the
+# directory form); an empty directory each otherwise
+SA="$WORK/standalone"
+rm -rf "$SA" && mkdir -p "$SA/firmware" "$SA/android" "$SA/modem" "$SA/fonts"
+if [ -n "$STANDALONE" ]; then
+    NAME=e5-openwrt-$VER-standalone-rootfs.tar.gz
+    for f in wcnmodem.bin regulatory.db sprd/marlin3lite_pskey.bin; do
+        [ -f "$FIRMWARE/$f" ] || { echo "no $FIRMWARE/$f -- pull the firmware first (rootfs/pull-wcn-firmware.sh)" >&2; exit 1; }
+    done
+    [ -x "$ANDROID/vendor/bin/modem_control" ] ||
+        { echo "no vendor subset at $ANDROID -- rootfs/extract-android-vendor.sh" >&2; exit 1; }
+    cp -a "$FIRMWARE/." "$SA/firmware/"
+    cp -a "$ANDROID/." "$SA/android/"
+    for f in drivers/net/wwan/wwan.ko drivers/unisoc_platform/modem/sipc/sipc_wwan.ko; do
+        [ -f "$KBUILD/$f" ] || { echo "no $KBUILD/$f -- build the kernel first (kernel/build-linux.sh)" >&2; exit 1; }
+        cp "$KBUILD/$f" "$SA/modem/"
+    done
+    REL=$(strings "$SA/modem/wwan.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1)
+    [ -n "$REL" ] || { echo "no vermagic in wwan.ko" >&2; exit 1; }
+    echo "$REL" > "$SA/modem/release"
+    echo "standalone: firmware $(du -sh "$SA/firmware" | cut -f1), vendor subset $(du -sh "$SA/android" | cut -f1), modules for $REL"
+    # Noto Sans CJK from Debian's package, once
+    if ! ls "$WORK/fonts/"NotoSansCJK-Regular.ttc >/dev/null 2>&1; then
+        mkdir -p "$WORK/fonts"
+        docker run --rm --platform linux/arm64 -v "$WORK/fonts":/out debian:trixie-slim sh -euc '
+            cd /tmp && apt-get update -qq && apt-get download -qq fonts-noto-cjk &&
+            dpkg-deb -x fonts-noto-cjk_*.deb x &&
+            cp x/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
+               x/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc /out/'
+    fi
+    cp "$WORK/fonts/"NotoSansCJK-*.ttc "$SA/fonts/"
+fi
+
+# (the standalone tree is only the image's source)
+TAROUT=$OUT; [ -z "$STANDALONE" ] || TAROUT=$WORK
 docker import --platform linux/arm64 "$WORK/$TARBALL" e5-openwrt-base:$VER >/dev/null
 # (an empty directory stands for no info screen)
 mkdir -p "$WORK/no-infoscreen"
@@ -69,7 +127,8 @@ docker run --rm --platform linux/arm64 \
     -v "$HERE/overlay":/in/overlay:ro -v "$TOP/rootfs/overlay/opt/e5":/in/opt-e5:ro \
     -v "$OUT":/in/apk:ro -v "$BUSYBOX":/in/busybox:ro -v "$WORK/logdw":/in/logdw:ro \
     -v "$WORK/e5-vibrate":/in/e5-vibrate:ro -v "${INFOSCREEN:-$WORK/no-infoscreen}":/in/infoscreen:ro \
-    -v "$OUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
+    -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" \
+    -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
     e5-openwrt-base:$VER /bin/sh -euc '
 mkdir -p /var/lock /var/run /tmp
 apk update >/dev/null
@@ -146,7 +205,35 @@ for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-cha
 done
 # no kernel of its own
 rm -rf $R/lib/modules/* $R/boot
+if [ -n "$STANDALONE" ]; then
+    # the device'"'"'s own files, where the directory form binds the Debian root'"'"'s
+    cp -a /in/sa/firmware/. $R/lib/firmware/
+    mkdir -p $R/opt/e5/android && cp -a /in/sa/android/. $R/opt/e5/android/
+    # (bionic refuses a property area that is not root'"'"'s: docs/FINDINGS.md 13)
+    chown -R 0:0 $R/opt/e5/android $R/lib/firmware
+    rel=$(cat /in/sa/modem/release)
+    mkdir -p $R/lib/modules/$rel/modem && cp /in/sa/modem/*.ko $R/lib/modules/$rel/modem/
+    mkdir -p $R/usr/share/fonts/e5-noto && cp /in/sa/fonts/*.ttc $R/usr/share/fonts/e5-noto/
+    rmdir $R/mnt/e5-disk
+    mkdir -p $R/mnt/e5-data
+    mkdir -p $R/etc/e5 && printf "standalone\n" > $R/etc/e5/image-form
+fi
 mkdir -p $R/etc/e5 && printf "%s\n" "$VERSION" > $R/etc/e5/image-version
 cd $R && tar -czf /out/$NAME .
 ls -la /out/$NAME
 '
+
+[ -n "$STANDALONE" ] || exit 0
+# the tree as an ext4 image (mke2fs -d: no loop device, no root on the host)
+IMG=e5-openwrt-$VER.ext4
+docker run --rm --platform linux/arm64 -v "$WORK":/w -v "$OUT":/out \
+    -e NAME="$NAME" -e IMG="$IMG" -e MB="$IMAGE_MB" alpine:3.22 sh -euc '
+apk add -q e2fsprogs >/dev/null
+rm -rf /tmp/r && mkdir /tmp/r && tar -xzf /w/$NAME -C /tmp/r
+rm -f /w/$IMG
+mke2fs -q -t ext4 -L e5-openwrt -m 1 -d /tmp/r /w/$IMG ${MB}M
+e2fsck -fn /w/$IMG >/dev/null
+gzip -1 -c /w/$IMG > /out/$IMG.gz.part && mv /out/$IMG.gz.part /out/$IMG.gz
+rm -f /w/$IMG
+echo "used: $(du -sh /tmp/r | cut -f1) of ${MB} MiB"
+ls -la /out/$IMG.gz'

@@ -20,7 +20,14 @@
 #    root's password where there is none yet (root/root,
 #    as the Debian image; change it with passwd).
 # openwrt/install.sh leaves the carrier's APN in /etc/e5/install.conf (the one
-# the Debian image uses on this device).
+# the Debian image uses on this device).  An image installed from Android
+# (openwrt/install-standalone.sh --adb) finds it on userdata instead,
+# e5linux/openwrt-install.conf, taken in here (91-e5-wireless reads it after).
+if [ ! -f /etc/e5/install.conf ] && [ -f /mnt/e5-data/e5linux/openwrt-install.conf ]; then
+	mkdir -p /etc/e5
+	(umask 077; cp /mnt/e5-data/e5linux/openwrt-install.conf /etc/e5/install.conf) &&
+		rm -f /mnt/e5-data/e5linux/openwrt-install.conf
+fi
 E5_APN=
 [ -f /etc/e5/install.conf ] && . /etc/e5/install.conf
 # once: a reinstall keeps the configuration (openwrt/device-install.sh),

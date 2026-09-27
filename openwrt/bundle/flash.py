@@ -245,9 +245,11 @@ def android_checks():
 
 # ------------------------------------------------------ the device's files
 
-def pull_device_files(work):
+def pull_device_files(work, out=None):
     """The firmware off Android, converted here; the vendor subset collected
-    and everything packed on the device (collect-device-files.sh)."""
+    and everything packed on the device (collect-device-files.sh), into out
+    (the install's device-files.tar by default)."""
+    out = out or f'{D}/device-files.tar'
     say('从这台设备提取固件和基带文件 / the firmware and baseband files of this device')
     st = f'{TMP}/e5pull'
     su(f'rm -rf {st}; mkdir -p {st}')
@@ -309,10 +311,10 @@ def pull_device_files(work):
     adb('push', fwtar, f'{TMP}/e5-firmware.tar', check=True)
     adb('push', os.path.join(F, 'collect-device-files.sh'), f'{TMP}/e5-collect.sh', check=True)
     with busy('在手机上打包 vendor 文件 / packing the vendor files on the phone'):
-        out = su(f'mkdir -p {D}; sh {TMP}/e5-collect.sh {D}/device-files.tar {TMP}/e5-firmware.tar; rm -f {TMP}/e5-collect.sh')
-    if 'E5-COLLECT-OK' not in out:
-        die('collecting the device files failed: ' + out.strip()[-300:])
-    print('   device-files.tar: ' + out.split('E5-COLLECT-OK')[-1].strip() + ' bytes (stays on the device)')
+        res = su(f'mkdir -p {os.path.dirname(out)}; sh {TMP}/e5-collect.sh {out} {TMP}/e5-firmware.tar; rm -f {TMP}/e5-collect.sh')
+    if 'E5-COLLECT-OK' not in res:
+        die('collecting the device files failed: ' + res.strip()[-300:])
+    return res.split('E5-COLLECT-OK')[-1].strip()
 
 
 # ------------------------------------------------------------------ modes
@@ -353,7 +355,8 @@ def install(a):
         die("the hotspot key must have 8-63 characters, and no ' anywhere")
 
     with tempfile.TemporaryDirectory() as work:
-        pull_device_files(work)
+        size = pull_device_files(work)
+        print(f'   device-files.tar: {size} bytes (stays on the device)')
 
         say(f'写入 OpenWrt / OpenWrt -> {D}/openwrt.ext4')
         push(os.path.join(F, 'openwrt.ext4.gz'), f'{TMP}/openwrt.ext4.gz', 'openwrt.ext4.gz')
@@ -401,9 +404,13 @@ def check(a):
     live = od_hex(None)
     print('   boot control block: ' + ('as expected' if live == boot_json()['misc_slot_a_hex'] else 'NOT as expected: ' + live))
     print('   free on /data: ' + su('df -k /data | tail -1').split()[3] + ' KiB')
+    # packed as for an install, to see that it works, and deleted again: a
+    # check leaves nothing on the device
     with tempfile.TemporaryDirectory() as work:
-        pull_device_files(work)
-    say('检查完成，没有写入任何分区 / checked; no partition written')
+        size = pull_device_files(work, f'{TMP}/e5-check-device-files.tar')
+    su(f'rm -f {TMP}/e5-check-device-files.tar')
+    print(f'   device-files.tar: {size} bytes (a trial, deleted again)')
+    say('检查完成，设备上什么都没有写入 / checked; nothing written to the device')
 
 
 def boot_openwrt(a):
@@ -417,6 +424,9 @@ def boot_openwrt(a):
     head = su(f'dd if=/dev/block/by-name/boot_b bs=1048576 count={mb} 2>/dev/null | sha256sum').split()[0:1]
     if head != [bj['sha256_head56m']]:
         die('boot_b holds another boot image: use the package it was flashed with, or a first install')
+    # OpenWrt the default again, not only for this boot (the screen's "boot
+    # Android" made Android the default); /etc/init.d/e5-boot-ok takes it
+    su(f'echo linux > {D}/openwrt-default-boot')
     arm_slot_b()
     say('正在重启进 OpenWrt / rebooting into OpenWrt')
     adb('reboot')

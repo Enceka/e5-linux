@@ -63,7 +63,7 @@
 * 屏幕：高级 → 系统 → 下次启动 Android；
 * 或 SSH 里：`e5-next-boot android && reboot`。
 
-从 Android 再回到 OpenWrt（不重装，设置都在）：连上电脑运行
+从 Android 再回到 OpenWrt（不重装，设置都在，之后默认启动也恢复为 OpenWrt）：连上电脑运行
 
 ```sh
 flash.cmd --boot-openwrt          (Windows；macOS / Linux：./flash.sh --boot-openwrt)

@@ -6,5 +6,13 @@
 START=99
 
 start() {
+	# flash.py --boot-openwrt from Android asks for OpenWrt as the default
+	# again, taken once the system is up (a boot that fails keeps Android)
+	local f=/mnt/e5-data/e5linux/openwrt-default-boot
+	if [ "$(cat $f 2>/dev/null)" = linux ]; then
+		rm -f $f
+		/opt/e5/e5-next-boot linux 2>&1 | logger -t e5-boot-ok
+		return
+	fi
 	/opt/e5/e5-next-boot --rearm 2>&1 | logger -t e5-boot-ok
 }

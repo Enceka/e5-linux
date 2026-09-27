@@ -74,8 +74,8 @@ What it does:
 * On the panel: 高级 -> 系统 -> 下次启动 Android (Settings -> System -> Boot Android once);
 * or over SSH: `e5-next-boot android && reboot`.
 
-From Android back to OpenWrt, with nothing reinstalled (the settings stay):
-connect the E5 and run
+From Android back to OpenWrt, with nothing reinstalled (the settings stay,
+and OpenWrt is the default boot again): connect the E5 and run
 
 ```sh
 flash.cmd --boot-openwrt          (Windows; macOS / Linux: ./flash.sh --boot-openwrt)

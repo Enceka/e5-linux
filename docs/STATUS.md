@@ -1,6 +1,6 @@
 # Status
 
-_Last updated 2026-09-27._
+_Last updated 2026-09-28._
 
 Reasoning, evidence and dead ends live in `docs/FINDINGS.md`; traps found the hard
 way are collected in its sections 24.8 and 28.  This file is only the work list.
@@ -9,6 +9,56 @@ FINDINGS.
 
 ## Now (目前要做)
 
+- **Android no longer boots: it stays on the logo (found 2026-09-28, after the mainline
+  M6 trial).  A full stock-system reflash is planned; the failure requires investigation.**
+  What is known (evidence in `logs/android-stuck-20260928/`):
+  1. Timeline: the last Android boot seen working was ~02:05 on 2026-09-28 (the DSI-fix
+     trial was flashed from it).  Six mainline trials followed, all flashed from the
+     running OpenWrt trial (`upstream/trial-from-openwrt.sh`), never through Android;
+     the sixth (M6: charger manager, UMP96xx fuel gauge, AW32257, vendor thermal, the
+     USB pin mux built in) never came back on USB or adb.  The device then stood on the
+     Android logo -- with its own `boot_a`, with a stock boot, and after a userdata wipe.
+  2. Recovery/fastbootd from slot a works; normal boot does not.  LK is not the
+     difference: in `uboot_log` the stuck boot and a good one from before get the same
+     slot, `androidboot.mode=normal` (not calibration or factory mode) and the same
+     `androidboot.*` fixups; LK hands over to the kernel both times.  So it hangs in
+     the Android kernel or init.
+  3. Slot a vs slot b, read from the 5.15 rescue system: equal -- `vendor_boot`, `dtb`,
+     `dtbo`, all `vbmeta*`, `uboot`, `sml`, `trustos`, `teecfg`, `l_agdsp`, `ch_sys`,
+     `pm_sys`, `nr_modem`, `nr_phy`, `nr_deltanv`, `avbmeta_rs`, `common_rs2`,
+     `hypervsior`, and `mmcblk0boot0`/`boot1` (the two SPLs).  Different -- `boot`
+     (b is Linux; a is the existing Magisk-patched boot), `init_boot` (a is
+     Magisk-patched, as it has long been), `nr_fixnv1`, `nr_fixnv2`, `common_rs1`.
+     The NV pair is the prime suspect of what the Linux side writes: the mainline
+     trials ran `modem_control`/`cp_diskserver` with `androidboot.slot_suffix=_b` from
+     the bootconfig (vendor-start rewrites only `/proc/cmdline`), the `_b` by-name
+     links pointing at `_a`.  Whether a/b NV differ on a healthy device is not known.
+     Other candidates: PMIC/charger state left by the M6 drivers (persists while the
+     battery is connected), `prodnv`/`miscdata`, Trusty's RPMB storage.  Not the
+     cause: userdata (wiped, same hang), `boot_a`/`init_boot_a` (the previously working images).
+  4. No Android kernel log yet: a long press is a cold reset and pstore came back
+     empty.  After the reflash, before anything Linux touches the device: dump every
+     partition (above all `nr_fixnv*`, `nr_runtimenv*`, `prodnv`, `miscdata`,
+     `common_rs1`) so a later difference can be pinned, and get Android's log of a
+     stuck boot some other way (adb if it comes up, or a warm reset).
+  5. This LK's A/B rules, learned on the way: a slot that is not successful and has
+     1 try left is taken as failed at once ("slot 0 booted fail, rolling back spl and
+     reboot into normal", "exchange boot slot!!!" -- it swaps the eMMC boot partition;
+     harmless while boot0 = boot1); with 2 tries it is attempted.  One such swap
+     happened on 2026-09-28, from a misc block written by hand; the log shows no other.
+  State left: slot a active, `misc` bootloader_control the original slot-a block
+  (`5f61...0be17146`), `boot_b` = `work/boot-linux-slotb-bundle.img` (5.15; with no
+  root image it runs the standalone rescue on 192.168.77.1, telnet, and restores slot
+  a itself), userdata wiped.
+- **Mainline 6.18 (`upstream/`, `linux-lts-e5`) is paused** until Android is back.
+  Done and seen on the device: M1-M4 (modem on 5G NR with data), M5 mostly (panel,
+  fbcon, backlight, touch, keys, vibrator, RGB LED), M8 (panfrost).  Ported and building
+  without warnings but never run: M6 (charging, fuel gauge, thermal) and M7 (the vendor
+  ASoC stack with Unisoc's sprd-dma).  `upstream/README.md` has the details; no more
+  trials before the Android question is answered, and the next one only from Android.
+  `linux-lts-e5` could not be pushed: the clone is shallow at v6.18.54, and GitHub
+  wants the history behind it -- fork `gregkh/linux` as the remote instead (or graft
+  a new root; `--unshallow` would mean a >2 GB push).
 - **Audio: the speaker plays through plain ALSA and PipeWire, every stream (2026-09-26).**
   FINDINGS 24.8 has the chain (kernel `0012`-`0014`, UCM route, profile selects,
   WirePlumber rule); FINDINGS 34 the three faults that left only the first sound after
@@ -173,6 +223,7 @@ FINDINGS.
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
+| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`, local only): M1-M5, M8 run on the device, M6/M7 build only; paused (see Now) |
 | openwrt | OpenWrt 25.12.5 in `/openwrt` of the root image, booted by `boot-os`/`boot-os-next` (`e5-os`); WAN by ModemManager (+ patch `06`), LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; `openwrt/README.md`, FINDINGS 39; standalone as `/data/e5linux/openwrt.ext4` with its own firmware, vendor subset, modem modules and fonts, no Debian needed (native18, FINDINGS 43) |
 
 ## Open questions

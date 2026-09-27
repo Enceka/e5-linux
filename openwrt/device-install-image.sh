@@ -90,8 +90,9 @@ if [ -n "$from" ]; then
     for f in image-version image-form; do
         cp "$N/etc/e5/$f" "/tmp/e5-img.$f" 2>/dev/null || rm -f "/tmp/e5-img.$f"
     done
+    # (etc/e5-infoscreen: the apps installed on the info screen)
     for p in etc/config etc/shadow etc/passwd etc/group etc/dropbear etc/e5 etc/e5linux \
-             etc/uhttpd.crt etc/uhttpd.key etc/vnstat; do
+             etc/uhttpd.crt etc/uhttpd.key etc/vnstat etc/e5-infoscreen; do
         [ -e "$from/$p" ] || continue
         if [ -d "$from/$p" ] && [ -d "$N/$p" ]; then
             cp -a "$from/$p/." "$N/$p/"

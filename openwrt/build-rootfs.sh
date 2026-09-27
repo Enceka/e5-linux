@@ -249,7 +249,7 @@ cp /in/busybox $R/opt/e5/bin/busybox && chmod 755 $R/opt/e5/bin/busybox
 # the ones the full busybox really has
 have=$(/in/busybox --list)
 for a in mountpoint timeout seq stat chroot od losetup telnetd cut tr basename dirname \
-         find xargs head tail wc sort uniq awk readlink; do
+         find xargs head tail wc sort uniq awk readlink unzip; do
     chroot $R /bin/sh -c "command -v $a" >/dev/null 2>&1 && continue
     if printf "%s\n" "$have" | grep -qx "$a"; then
         ln -sf /opt/e5/bin/busybox $R/usr/bin/$a; echo "busybox applet: $a"
@@ -297,6 +297,8 @@ if [ -n "$STANDALONE" ]; then
     mkdir -p $R/etc/e5 && printf "standalone\n" > $R/etc/e5/image-form
 fi
 mkdir -p $R/etc/e5 && printf "%s\n" "$VERSION" > $R/etc/e5/image-version
+# when the image was built (seconds since 1970, UTC): 高级 -> 系统 shows it
+date -u +%s > $R/etc/e5/build-time
 cd $R && tar -czf /out/$NAME .
 ls -la /out/$NAME
 '

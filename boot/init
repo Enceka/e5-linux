@@ -356,6 +356,26 @@ fi
 if [ -n "$rootdir" ]; then
     if [ "$rootdir" = /disk ]; then
         mount --move /disk /newroot
+        # An OpenWrt image of its own that was built without the device's
+        # files (openwrt/build-rootfs.sh E5_DEVICE_FILES=0, the one handed to
+        # others) gets them from userdata: the firmware and the Android vendor
+        # subset this device's installer pulled (openwrt/make-flash-bundle.sh).
+        # Before switch_root -- the WCN driver asks for its firmware at about
+        # that moment -- and again whenever the archive changed or an update
+        # brought an image without them.
+        dft=/data/e5linux/device-files.tar
+        if [ -f /newroot/etc/e5/image-form ] && [ -f "$dft" ]; then
+            stamp=$(sha256sum "$dft" | cut -d' ' -f1)
+            if [ ! -f /newroot/lib/firmware/wcnmodem.bin ] ||
+               [ "$(cat /newroot/etc/e5/device-files.stamp 2>/dev/null)" != "$stamp" ]; then
+                if tar -xf "$dft" -C /newroot 2>/run/devfiles.err; then
+                    echo "$stamp" > /newroot/etc/e5/device-files.stamp
+                    log "stage=device-files unpacked"
+                else
+                    log "stage=device-files-fail $(cat /run/devfiles.err)"
+                fi
+            fi
+        fi
     else
         mount --bind "$rootdir" /newroot
         mkdir -p /newroot/mnt/e5-disk && mount --move /disk /newroot/mnt/e5-disk

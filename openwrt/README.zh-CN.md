@@ -47,7 +47,8 @@ E5 另外需要的东西在 `overlay/` 里：
 | `etc/init.d/e5-boot-ok` | 启动成功后重新武装 slot b（`e5-next-boot`） |
 | `etc/hotplug.d/wwan/26-e5-sipa-eth`、`lib/udev/rules.d/78-e5-mm-sipc.rules` | 没有 udev 时的 ModemManager 衔接：AT 端口出现后再交出数据口，不探测 tty |
 | `etc/hotplug.d/iface/10-e5-usb0` | 把 `usb0` 加进 `br-lan`，netifd 不碰它：NCM gadget 绝不能 down |
-| `etc/uci-defaults/90-e5`、`91-e5-wireless` | 首次启动：LAN、WAN、DHCP、把承载的 IPv6 /64 放到 LAN、热点 |
+| `etc/uci-defaults/90-e5`、`91-e5-wireless`、`92-e5-default-boot` | 首次启动：LAN、WAN、DHCP、把承载的 IPv6 /64 放到 LAN、热点；从 Android 安装时把 Linux 设为默认启动 |
+| `etc/init.d/e5-apn-auto`、`usr/libexec/e5-apn-auto` | 没有指定 APN 时（`network.wan.apn_auto=1`），每次启动按 SIM 卡运营商（MCC+MNC）自动设置 APN |
 | `etc/init.d/e5-sms-notify`、`usr/libexec/e5-sms-notify` | 新短信时震动（`e5-vibrate`，设置在 `/etc/config/e5-notify`），并记为未读（`/tmp/run/e5-sms/unread`，`e5-sms-notify read` 清除） |
 | `etc/init.d/e5-charge`、`usr/libexec/e5-charge` | 充电控制：到上限停止充电，降到下限重新充电，可临时充满一次（`/etc/config/e5-charge`，通过 charger-manager 的 `stop_charge`） |
 | `usr/libexec/e5-sysupgrade` | 替换 `sysupgrade`：刷固件镜像会覆盖 eMMC |
@@ -116,6 +117,22 @@ APN 和热点（`--ssid`，默认 `E5-Linux`）写到 userdata 上的
 `e5linux/openwrt-install.conf`，供首次启动使用；不给密码时热点保持关闭。OpenWrt 起来后
 运行 `e5-next-boot linux`，设备就会一直启动它。之后可以删掉 Debian：删除
 `/mnt/e5-data/e5linux/rootfs.ext4`，OpenWrt 就成了唯一的系统。
+
+### 给别人用的一键刷入包
+
+```sh
+openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<版本>-<git>.tar.gz
+```
+
+一个压缩包，解压后在装有 adb 的 macOS 或 Linux 上运行 `./flash.sh`：从 Android 给已解锁
+bootloader、装了 Magisk 的 E5 安装 OpenWrt；之后可通过 USB 网络更新（`--update`，保留设置），
+或从 Android 再次启动它（`--boot-openwrt`）。说明书是 `bundle/README.zh-CN.md`。包里是通用镜像
+（`E5_DEVICE_FILES=0`）和不带 Debian overlay 的 boot 镜像，不含本机的任何文件：本机的固件和
+vendor 文件属于厂商，且带有本机身份信息（pskey 里的蓝牙地址、Android 属性里的序列号），overlay
+里还有本机的 MAC 地址和热点配置。`flash.sh` 用 `rootfs/pull-wcn-firmware.sh`、
+`pull-audio-firmware.sh` 和 `extract-android-vendor.sh` 提取每台设备自己的文件，打包成 userdata
+上的 `e5linux/device-files.tar`，由 boot/init 解到镜像里。没有指定 APN 时按 SIM 卡自动选择
+（`e5-apn-auto`）。
 
 ### 装在 Debian 镜像里
 

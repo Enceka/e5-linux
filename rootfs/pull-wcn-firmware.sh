@@ -16,8 +16,10 @@
 #
 # usage: rootfs/pull-wcn-firmware.sh   (device in Android, adb + su working)
 set -e
+SU=${E5_SU:-su}
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OVL="$HERE/overlay"
+# (E5_OVERLAY: somewhere else, e.g. the flash package collecting one device's files)
+OVL="${E5_OVERLAY:-$HERE/overlay}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -25,19 +27,19 @@ pull() {  # pull SRC_IN_ANDROID  NAME
     # Not every path exists on every unit: /vendor/firmware/tsx_data is a symlink
     # into the factory-data partition, and on this device that target is a dangling
     # link (Android's own Wi-Fi works anyway, so it is not fatal).  Skip, do not die.
-    if ! adb shell "su -c 'cp -f $1 /data/local/tmp/$2'" >/dev/null 2>&1; then
+    if ! adb shell "$SU -c 'cp -f $1 /data/local/tmp/$2'" >/dev/null 2>&1; then
         echo "  skip $1: not a copyable file on this unit"
         return 0
     fi
     adb pull "/data/local/tmp/$2" "$STAGE/$2" >/dev/null
-    adb shell "su -c 'rm -f /data/local/tmp/$2'" >/dev/null
+    adb shell "$SU -c 'rm -f /data/local/tmp/$2'" >/dev/null
     echo "  $1 -> $STAGE/$2 ($(wc -c < "$STAGE/$2") bytes)"
 }
 
 echo "== WCN firmware and board configs (/odm/firmware) =="
 pull /odm/firmware/wcnmodem.bin wcnmodem.bin
 pull /odm/firmware/gnssmodem.bin gnssmodem.bin
-for f in $(adb shell "su -c 'ls /odm/firmware/'" | tr -d '\r' | grep '^wifi_board_config.*\.ini$'); do
+for f in $(adb shell "$SU -c 'ls /odm/firmware/'" | tr -d '\r' | grep '^wifi_board_config.*\.ini$'); do
     pull "/odm/firmware/$f" "$f"
 done
 

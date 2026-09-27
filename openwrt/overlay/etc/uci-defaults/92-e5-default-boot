@@ -1,0 +1,10 @@
+#!/bin/sh
+# E5 first boot of an image installed from Android (the flash package,
+# openwrt/make-flash-bundle.sh): E5_DEFAULT_BOOT=linux in the install settings
+# makes Linux the default boot, as `e5-next-boot linux` does -- otherwise the
+# initramfs gives the next boot back to Android.
+E5_DEFAULT_BOOT=
+[ -f /etc/e5/install.conf ] && . /etc/e5/install.conf
+[ "$E5_DEFAULT_BOOT" = linux ] || exit 0
+[ -f /etc/e5linux/default-boot ] && exit 0
+/opt/e5/e5-next-boot linux

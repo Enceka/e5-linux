@@ -24,7 +24,8 @@
 # usage: rootfs/pull-audio-firmware.sh   (device in Android, adb working)
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OVL="$HERE/overlay"
+# (E5_OVERLAY: somewhere else, e.g. the flash package collecting one device's files)
+OVL="${E5_OVERLAY:-$HERE/overlay}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -33,7 +34,7 @@ trap 'rm -rf "$STAGE"' EXIT
 if [ "$(adb shell id 2>/dev/null | tr -d '\r' | grep -c 'uid=0')" -ge 1 ]; then
     dev() { adb shell "$1" | tr -d '\r'; }
 else
-    dev() { adb shell "su -c '$1'" | tr -d '\r'; }
+    dev() { adb shell "${E5_SU:-su} -c '$1'" | tr -d '\r'; }
 fi
 
 echo "== AGDSP image (l_agdsp_a, 6 MiB) =="

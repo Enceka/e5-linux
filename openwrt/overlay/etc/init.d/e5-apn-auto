@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+# The APN from the SIM when network.wan.apn_auto is on (/usr/libexec/e5-apn-auto):
+# once per boot, in the background, after ModemManager.
+START=96
+USE_PROCD=1
+
+start_service() {
+	[ "$(uci -q get network.wan.apn_auto)" = 1 ] || return 0
+	procd_open_instance
+	procd_set_param command /usr/libexec/e5-apn-auto
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}

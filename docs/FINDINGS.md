@@ -3878,3 +3878,28 @@ Verified: Debian boots unchanged with native18; installed from Debian with
 info screen up on the image's own files, and the one-shot returned to Debian
 at the next boot; an update run inside the standalone OpenWrt was staged as
 `.new` and swapped in at the following boot.
+
+Later the same day, a flash package for other people's E5s
+(`openwrt/make-flash-bundle.sh`, `openwrt/bundle/`).  The image and the boot
+image flashed here cannot be handed on: the firmware and the vendor subset are
+proprietary, the BT pskey carries this unit's address and the Android property
+area its serial number, and the boot image's initramfs embeds the Debian
+overlay (MAC files, hotspot profile).  So the package has the generic image
+(`E5_DEVICE_FILES=0`: the Debian-signed regulatory.db, the modem modules and
+the fonts, nothing of a device), a boot image built without `--overlay`, and
+the pull scripts: `flash.sh` collects the recipient's own files from their
+Android into `e5linux/device-files.tar` on userdata, and boot/init unpacks it
+into the image before `switch_root` whenever the image lacks the WCN firmware
+or the archive changed (a sha256 stamp in `/etc/e5`).  `device-install-image.sh`
+does the same for updates, and makes the archive from the running system's
+files when there is none.  The first boot of an install from Android makes
+Linux the default (`92-e5-default-boot`, `E5_DEFAULT_BOOT=linux`).
+
+The APN: nothing in uficode detects it (it reads the IMSI and names the
+operator).  `e5-apn-auto` takes ModemManager's SIM `operator-code` (46015 on
+this SIM) to the operator's public APN -- cmnet, 3gnet, ctnet, cbnet -- and
+leaves it empty for others (the network assigns its default at attach); it
+runs at every boot while `network.wan.apn_auto` is 1, so another SIM or the
+other slot gets its own.  Checked on the device: a wrong staged APN was
+replaced by cbnet and the WAN came back.
+

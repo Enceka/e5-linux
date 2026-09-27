@@ -1,0 +1,57 @@
+#!/bin/sh
+# E5: the data APN from the SIM, for a SIM put in without anyone typing an
+# APN.  The SIM's operator (MCC+MNC from the IMSI, as ModemManager reports it)
+# picks the operator's public APN; for an operator not in the table the APN
+# stays empty, and the network assigns its default at attach.
+#
+# Runs when network.wan.apn_auto is 1 (the first boot sets it when the
+# installer gave no APN; the info screen's APN choice "automatic" sets it,
+# a chosen APN clears it): at every boot (/etc/init.d/e5-apn-auto), so a
+# SIM of another operator -- or the other slot -- gets its own APN.
+#
+#   e5-apn-auto          set the APN if apn_auto is on and it changed
+#   e5-apn-auto --show   print the SIM's operator code and its APN
+set -u
+apn_for() {
+	case "$1" in
+		46000|46002|46004|46007|46008|46013) echo cmnet ;;   # China Mobile
+		46001|46006|46009|46010) echo 3gnet ;;               # China Unicom
+		46003|46005|46011|46012) echo ctnet ;;               # China Telecom
+		46015) echo cbnet ;;                                 # China Broadnet
+	esac
+}
+log() { logger -t e5-apn-auto "$*"; echo "$*"; }
+
+sim_code() {
+	mmcli -i any -J 2>/dev/null | jsonfilter -e '@.sim.properties["operator-code"]' 2>/dev/null
+}
+
+if [ "${1:-}" = --show ]; then
+	code=$(sim_code)
+	echo "sim operator: ${code:-unknown}, apn: $(apn_for "$code")"
+	exit 0
+fi
+
+[ "$(uci -q get network.wan.apn_auto)" = 1 ] || exit 0
+
+# the SIM comes a while after ModemManager (the CP boots first)
+code= i=0
+while [ $i -lt 180 ]; do
+	code=$(sim_code)
+	[ -n "$code" ] && break
+	sleep 3; i=$((i + 3))
+done
+[ -n "$code" ] || { log "no SIM operator after 180 s"; exit 1; }
+
+apn=$(apn_for "$code")
+cur=$(uci -q get network.wan.apn)
+[ "$apn" = "$cur" ] && exit 0
+if [ -n "$apn" ]; then
+	uci set network.wan.apn="$apn"
+	log "SIM operator $code: APN $apn"
+else
+	uci -q delete network.wan.apn
+	log "SIM operator $code: no APN known, the network's default"
+fi
+uci commit network
+ifup wan

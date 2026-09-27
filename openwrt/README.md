@@ -54,7 +54,8 @@ What the E5 needs besides, in `overlay/`:
 | `etc/init.d/e5-boot-ok` | re-arms slot b after a good boot (`e5-next-boot`) |
 | `etc/hotplug.d/wwan/26-e5-sipa-eth`, `lib/udev/rules.d/78-e5-mm-sipc.rules` | ModemManager without udev: the data port once the AT port exists, no tty probing |
 | `etc/hotplug.d/iface/10-e5-usb0` | puts `usb0` into `br-lan` without netifd touching it: the NCM gadget must never go down |
-| `etc/uci-defaults/90-e5`, `91-e5-wireless` | first boot: LAN, WAN, DHCP, the bearer's IPv6 /64 on the LAN, hotspot |
+| `etc/uci-defaults/90-e5`, `91-e5-wireless`, `92-e5-default-boot` | first boot: LAN, WAN, DHCP, the bearer's IPv6 /64 on the LAN, hotspot; Linux as the default boot for an install from Android |
+| `etc/init.d/e5-apn-auto`, `usr/libexec/e5-apn-auto` | the APN from the SIM's operator (MCC+MNC) when none was given (`network.wan.apn_auto=1`), at every boot |
 | `etc/init.d/e5-sms-notify`, `usr/libexec/e5-sms-notify` | a new SMS vibrates (`e5-vibrate`, `/etc/config/e5-notify`) and is counted unread (`/tmp/run/e5-sms/unread`, `e5-sms-notify read`) |
 | `etc/init.d/e5-charge`, `usr/libexec/e5-charge` | charge control: stop at an upper limit, resume at a lower one, charge to full once (`/etc/config/e5-charge`, through charger-manager's `stop_charge`) |
 | `usr/libexec/e5-sysupgrade` | replaces `sysupgrade`: a firmware image would overwrite the eMMC |
@@ -132,6 +133,26 @@ The APN and the hotspot (`--ssid`, default `E5-Linux`) go to
 the hotspot stays off.  Once OpenWrt is up, `e5-next-boot linux` keeps the
 device booting it.  Debian can go afterwards: remove
 `/mnt/e5-data/e5linux/rootfs.ext4` and OpenWrt is the system there is.
+
+### A flash package for others
+
+```sh
+openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<version>-<git>.tar.gz
+```
+
+One archive, unpacked and run as `./flash.sh` on macOS or Linux with adb:
+it installs OpenWrt on an E5 with an unlocked bootloader and Magisk, from
+Android, and later updates it over the USB LAN (`--update`, settings kept)
+or boots it again from Android (`--boot-openwrt`).  `bundle/README.md` is its
+manual.  It carries the generic image (`E5_DEVICE_FILES=0`) and a boot image
+without the Debian overlay -- no file of this device: its firmware and vendor
+files are proprietary and carry its identity (the BT address in the pskey, the
+serial number among the Android properties), and the overlay holds its MAC
+addresses and hotspot profile.  `flash.sh` pulls each device's own with
+`rootfs/pull-wcn-firmware.sh`, `pull-audio-firmware.sh` and
+`extract-android-vendor.sh`, packed as `e5linux/device-files.tar` on
+userdata, which boot/init unpacks into the image.  The APN comes from the
+SIM (`e5-apn-auto`) unless one is given.
 
 ### In the Debian image
 

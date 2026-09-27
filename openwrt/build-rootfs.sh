@@ -41,6 +41,14 @@
 #  * Noto Sans CJK (Debian's fonts-noto-cjk) -> /usr/share/fonts/e5-noto, for
 #    the info screen.
 #
+# E5_DEVICE_FILES=0 leaves the device's own files out (the firmware but the
+# regulatory database, the vendor subset): e5-openwrt-<version>-generic.ext4.gz,
+# the image to give to others (openwrt/make-flash-bundle.sh).  Those files
+# are proprietary, and some carry the unit's identity (the BT address in the
+# pskey, the serial number among the Android properties); each device pulls
+# its own, which boot/init unpacks into the image from
+# e5linux/device-files.tar on userdata.
+#
 # E5_IMAGE_MB sets the image's size (default 1024).  Needs Docker with arm64
 # (native on Apple silicon).
 set -euo pipefail
@@ -58,6 +66,7 @@ INFOSCREEN=${E5_INFOSCREEN-$TOP/../e5-infoscreen}
 [ -n "$INFOSCREEN" ] && [ -f "$INFOSCREEN/packages.txt" ] && [ -d "$INFOSCREEN/root" ] || INFOSCREEN=""
 NAME=e5-openwrt-$VER-rootfs.tar.gz
 STANDALONE=${E5_STANDALONE:-}
+DEVICE_FILES=${E5_DEVICE_FILES:-1}
 IMAGE_MB=${E5_IMAGE_MB:-1024}
 FIRMWARE=${E5_FIRMWARE:-$TOP/rootfs/overlay/lib/firmware}
 ANDROID=${E5_ANDROID_SUBSET:-$TOP/work/android-subset}
@@ -88,13 +97,20 @@ SA="$WORK/standalone"
 rm -rf "$SA" && mkdir -p "$SA/firmware" "$SA/android" "$SA/modem" "$SA/fonts"
 if [ -n "$STANDALONE" ]; then
     NAME=e5-openwrt-$VER-standalone-rootfs.tar.gz
-    for f in wcnmodem.bin regulatory.db sprd/marlin3lite_pskey.bin; do
-        [ -f "$FIRMWARE/$f" ] || { echo "no $FIRMWARE/$f -- pull the firmware first (rootfs/pull-wcn-firmware.sh)" >&2; exit 1; }
-    done
-    [ -x "$ANDROID/vendor/bin/modem_control" ] ||
-        { echo "no vendor subset at $ANDROID -- rootfs/extract-android-vendor.sh" >&2; exit 1; }
-    cp -a "$FIRMWARE/." "$SA/firmware/"
-    cp -a "$ANDROID/." "$SA/android/"
+    [ -f "$FIRMWARE/regulatory.db" ] || { echo "no $FIRMWARE/regulatory.db" >&2; exit 1; }
+    if [ "$DEVICE_FILES" = 0 ]; then
+        NAME=e5-openwrt-$VER-generic-rootfs.tar.gz
+        # Debian's wireless-regdb, signed with the key this kernel trusts: no device's
+        cp "$FIRMWARE/regulatory.db" "$FIRMWARE/regulatory.db.p7s" "$SA/firmware/"
+    else
+        for f in wcnmodem.bin sprd/marlin3lite_pskey.bin; do
+            [ -f "$FIRMWARE/$f" ] || { echo "no $FIRMWARE/$f -- pull the firmware first (rootfs/pull-wcn-firmware.sh)" >&2; exit 1; }
+        done
+        [ -x "$ANDROID/vendor/bin/modem_control" ] ||
+            { echo "no vendor subset at $ANDROID -- rootfs/extract-android-vendor.sh" >&2; exit 1; }
+        cp -a "$FIRMWARE/." "$SA/firmware/"
+        cp -a "$ANDROID/." "$SA/android/"
+    fi
     for f in drivers/net/wwan/wwan.ko drivers/unisoc_platform/modem/sipc/sipc_wwan.ko; do
         [ -f "$KBUILD/$f" ] || { echo "no $KBUILD/$f -- build the kernel first (kernel/build-linux.sh)" >&2; exit 1; }
         cp "$KBUILD/$f" "$SA/modem/"
@@ -199,7 +215,7 @@ grep -q "^ttyGS0:" $R/etc/inittab || echo "ttyGS0::askfirst:/usr/libexec/login.s
 mv $R/sbin/sysupgrade $R/sbin/sysupgrade.openwrt
 mv $R/usr/libexec/e5-sysupgrade $R/sbin/sysupgrade
 # enable the services ("rc.common enable" wants ubus, which is not running here)
-for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge dbus modemmanager $screen; do
+for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto dbus modemmanager $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
@@ -226,6 +242,7 @@ ls -la /out/$NAME
 [ -n "$STANDALONE" ] || exit 0
 # the tree as an ext4 image (mke2fs -d: no loop device, no root on the host)
 IMG=e5-openwrt-$VER.ext4
+[ "$DEVICE_FILES" != 0 ] || IMG=e5-openwrt-$VER-generic.ext4
 docker run --rm --platform linux/arm64 -v "$WORK":/w -v "$OUT":/out \
     -e NAME="$NAME" -e IMG="$IMG" -e MB="$IMAGE_MB" alpine:3.22 sh -euc '
 apk add -q e2fsprogs >/dev/null

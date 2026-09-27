@@ -11,7 +11,8 @@
 # /dev/__properties__ is 1.4 MiB and /system/lib64 86 MiB uncompressed.
 set -eu
 OUT=${1:-work/android-subset}
-SU=/debug_ramdisk/su
+# (E5_SU: another su, e.g. plain "su" where Magisk put one in PATH)
+SU=${E5_SU:-/debug_ramdisk/su}
 
 adb shell "$SU -c id" | grep -q 'uid=0' || {
     echo "need root on Android (Magisk's $SU); the device must be running Android" >&2

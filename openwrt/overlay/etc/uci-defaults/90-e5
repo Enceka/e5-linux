@@ -20,7 +20,8 @@
 #    root's password where there is none yet (root/root,
 #    as the Debian image; change it with passwd).
 # openwrt/install.sh leaves the carrier's APN in /etc/e5/install.conf (the one
-# the Debian image uses on this device).  An image installed from Android
+# the Debian image uses on this device); none there, and e5-apn-auto picks it
+# from the SIM.  An image installed from Android
 # (openwrt/install-standalone.sh --adb) finds it on userdata instead,
 # e5linux/openwrt-install.conf, taken in here (91-e5-wireless reads it after).
 if [ ! -f /etc/e5/install.conf ] && [ -f /mnt/e5-data/e5linux/openwrt-install.conf ]; then
@@ -108,6 +109,12 @@ fi
 # piece: one "ct helper" rule it cannot take and there is no firewall (and no
 # NAT) at all
 uci -q set firewall.@defaults[0].auto_helper='0'
+
+# no APN given (or "auto"): e5-apn-auto takes it from the SIM's operator
+case "$E5_APN" in
+	''|auto) uci -q delete network.wan.apn; uci set network.wan.apn_auto='1' ;;
+	*) uci set network.wan.apn_auto='0' ;;
+esac
 
 uci commit system
 uci commit network

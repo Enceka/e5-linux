@@ -12,8 +12,8 @@
 #   openwrt/install-standalone.sh [--try|--switch] [IMAGE]
 #
 # From rooted Android, over adb (the way rootfs/install-rootfs.sh puts the
-# Debian image there); the settings for the first boot come from the options,
-# Wi-Fi stays off without a key:
+# Debian image there); the settings for the first boot come from the options
+# (no APN: from the SIM), Wi-Fi stays off without a key:
 #
 #   openwrt/install-standalone.sh --adb [--apn APN] [--ssid SSID] [--wifi-key KEY] [IMAGE]
 #
@@ -94,6 +94,7 @@ conf=$(mktemp)
     echo "E5_WIFI_SSID=$(q "$SSID")"
     echo "E5_WIFI_KEY=$(q "$KEY")"
     echo "E5_WIFI_CHANNEL='149'"
+    echo "E5_DEFAULT_BOOT='linux'"
 } > "$conf"
 adb push "$conf" /data/local/tmp/openwrt-install.conf >/dev/null
 rm -f "$conf"
@@ -105,4 +106,4 @@ if su_do "[ -f $DIR/rootfs.ext4 ] && echo yes" | grep -q yes; then
     echo "Debian is installed as well: boot-os set to openwrt (e5-os debian switches back)"
 fi
 echo "installed. next: flash the boot image, boot/flash-trial.sh work/boot-linux-slotb-<name>.img,"
-echo "and once OpenWrt is up, e5-next-boot linux to keep booting it"
+echo "(OpenWrt makes Linux the default boot at its first start)"

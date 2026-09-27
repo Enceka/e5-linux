@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the E5's mainline kernel (linux-lts-e5) in the e5-mainline-build container:
-# upstream/out/Image, Image.lk (for LK), modules.builtin*, config, System.map.
+# upstream/out/Image, Image.lk (for LK), modules/ (flat) and modules.tar (lib/modules), config, System.map.
 #
 #   docker build -t e5-mainline-build upstream/     (once)
 #   upstream/build.sh                                (from the host; runs itself in the container)
@@ -43,7 +43,7 @@ done < /work/e5-mainline.config
 [ -z "$bad" ] || { printf "config options not taken:$bad\n" >&2; exit 1; }
 
 # on failure, the compiler's own messages (a plain grep for "error" also matches object names)
-make O="$O" ARCH=arm64 -j"$(nproc)" Image > "$O/build.log" 2>&1 || {
+make O="$O" ARCH=arm64 -j"$(nproc)" Image modules > "$O/build.log" 2>&1 || {
     grep -n -E ": (fatal )?error: |-Werror|treated as errors|undefined reference|No such file|Killed|internal compiler error|\*\*\*" -A3 "$O/build.log" | head -80 || true
     echo "--- end of build.log:"; tail -25 "$O/build.log"
     exit 1
@@ -53,4 +53,11 @@ cp "$O/arch/arm64/boot/Image" "$O/System.map" "$O/modules.builtin" "$O/modules.b
 cp "$O/.config" /work/out/config
 python3 /work/wrap-image.py /work/out/Image /work/out/Image.lk
 cat "$O/include/config/kernel.release" > /work/out/kernel.release
+# the modules: flat for the boot image (boot/build-boot-image.py --modules), and as lib/modules/<release> for
+# a root filesystem
+rm -rf "$O/mod" /work/out/modules && mkdir -p /work/out/modules
+make -s O="$O" ARCH=arm64 INSTALL_MOD_PATH="$O/mod" INSTALL_MOD_STRIP=1 modules_install
+find "$O/mod/lib/modules" -name '*.ko' -exec cp {} /work/out/modules/ \;
+tar -C "$O/mod" -cf /work/out/modules.tar lib/modules
+echo "== modules: $(ls /work/out/modules | wc -l)"
 echo "== $(cat /work/out/kernel.release): $(ls -la /work/out/Image.lk | awk '{print $5}') bytes"

@@ -48,7 +48,7 @@ The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_
 |---|---|
 | M1: the kernel boots on the vendor DTB, reaches /init, resets through the PMIC, leaves its log | **done 2026-09-27** (first try: userspace at 1.58 s, 8 CPUs, 1.5 GB, back in Android) |
 | M2: clocks, PMIC + regulators, PMIC watchdog, eMMC, USB gadget (musb): `boot/init` starts OpenWrt | **done 2026-09-27** (pinctrl and the SD card slot are still to come) |
-| M3: Wi-Fi and Bluetooth (marlin3lite over SDIO: wcn_bsp, sprd_wlan_combo, sprdbt_tty) | |
+| M3: Wi-Fi and Bluetooth (marlin3lite over SDIO: wcn_bsp, sprd_wlan_combo, sprdbt_tty) | **done 2026-09-27** (hotspot on 5745 MHz beaconing, hci0 up with the factory address at boot) |
 | M4: the modem (SIPC, SIPA, modem loader) with ModemManager as on 5.15 | |
 | M5: display (sprd DRM, DSI panel), touch, keypad, vibrator | |
 | M6: charger, fuel gauge, thermal, cpufreq | |
@@ -92,6 +92,23 @@ Traps met on the way (the commits have the details): 6.x no longer puts DT inter
 `wakeup_source_register()` is a NULL stub without PM_SLEEP; userdata cannot be mounted read-write without QUOTA;
 reading an unclocked peripheral through /dev/mem is an SError (boot/init's SoC watchdog diagnostic, now without
 DEVMEM).
+
+### M3 (2026-09-27)
+
+The WCN drivers are Unisoc's 5.15 ones in `linux-lts-e5/drivers/unisoc_platform/` (the vendor's paths and symbols,
+so each file still diffs against its origin), built as modules that `boot/init` loads from the initramfs in the
+order of `module-order.txt`, `wcn_bsp.ko` after it copied the device's WCN firmware from userdata: `unisoc-mailbox`,
+`sprd_power_manager`, `sipc-core` (the WCN core carries the integrated chips' SIPC transport, so the modem's IPC
+comes first), `wcn_bsp`, `sprd_wlan_combo`, `sprdbt_tty`. `tools/port-api.py` does the mechanical part of the
+5.15-to-6.18 move (renames, wakeup sources, void remove, headers 5.15 included through others); the rest is in
+each driver's commit.
+
+On the device: the chip's firmware boots (MARLIN3_20A_RLS2_W24.17.7), OpenWrt's hostapd runs the hotspot on channel
+149/VHT80 (seen from a Mac at -40 dBm), and bluetoothd powers hci0 with the factory address (the vendor setup of
+kernel/patches/0018 applies to 6.18 as it is; mu300-linux's link policy commit instead of 0008); a scan finds
+devices. Two traps: `RFKILL_INPUT` (on by default, off on 5.15) lets the WCN tty's persistent, blocked switch block
+every bluetooth switch, so hci0 refused to come up (ERFKILL) -- off, under EXPERT like the GKI config; and the
+tool's first cut dropped `wakeup_source_remove()` where the vendor code has no destroy after it.
 
 ### What the vendor DT asks for
 

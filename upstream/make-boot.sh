@@ -5,7 +5,9 @@
 #   boot/flash-trial.sh work/boot-mainline.img (from Android: one trial boot, then back to Android)
 #   tools/collect-logs.sh                      (the pstore record, back in Android)
 #
-# The kernel's command line is its own (CONFIG_CMDLINE_FORCE); no modules yet.
+# The kernel's command line is its own (CONFIG_CMDLINE_FORCE).  The modules of upstream/module-order.txt come
+# from out/modules (boot/init loads them in that order; wcn_bsp.ko after the device's WCN firmware); the
+# probe init gets none.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
@@ -14,7 +16,9 @@ OUT=${2:-$TOP/work/boot-mainline.img}
 [ -f "$HERE/out/Image.lk" ] || { echo "no upstream/out/Image.lk: run upstream/build.sh" >&2; exit 1; }
 empty=$(mktemp)
 trap 'rm -f "$empty"' EXIT
+order=$empty
+[ "$(basename "$INIT")" = init-bringup ] || order=$HERE/module-order.txt
 python3 "$TOP/boot/build-boot-image.py" --stock-boot "$TOP/dumps/boot_b.img" --misc-head "$TOP/dumps/misc-head.bin" \
-    --kernel "$HERE/out/Image.lk" --module-order "$empty" --init "$INIT" \
+    --kernel "$HERE/out/Image.lk" --modules "$HERE/out/modules" --module-order "$order" --init "$INIT" \
     --busybox "$TOP/work/busybox/ext/usr/bin/busybox" --cmdline "" --out "$OUT" | tail -2
-echo "$OUT: $(cat "$HERE/out/kernel.release"), init $(basename "$INIT")"
+echo "$OUT: $(cat "$HERE/out/kernel.release"), init $(basename "$INIT"), $(grep -c . "$order") modules"

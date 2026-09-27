@@ -1,0 +1,6 @@
+unisoc-mailbox.ko
+sprd_power_manager.ko
+sipc-core.ko
+wcn_bsp.ko
+sprd_wlan_combo.ko
+sprdbt_tty.ko

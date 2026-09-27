@@ -65,9 +65,11 @@ if [ "$MODE" = update ]; then
     U=http://$LOCAL_IP:$PORT
     say "更新 / updating $HOST"
     E5_TELNET_WAIT=1800 python3 "$B/scripts/tools/e5-telnet.py" \
-        "cd /tmp && wget -q -O dfb.sh $U/device-flash-boot.sh && wget -q -O dii.sh $U/device-install-image.sh && sh dfb.sh $U/boot-head.img $(jget sha256_head56m) $MB && sh dii.sh $U/openwrt.ext4.gz && d=/mnt/e5-data/e5linux && rm -f \$d/boot-os-next && echo openwrt > \$d/boot-os && echo E5-UPDATE-\$((1+1)) && sync && (sleep 2; reboot &)" \
+        "cd /tmp && wget -q -O dfb.sh $U/device-flash-boot.sh && wget -q -O dii.sh $U/device-install-image.sh && sh dfb.sh $U/boot-head.img $(jget sha256_head56m) $MB && sh dii.sh $U/openwrt.ext4.gz && d=/mnt/e5-data/e5linux && rm -f \$d/boot-os-next && echo openwrt > \$d/boot-os && sync && echo E5-UPDATE-\$((1+1))" \
         | tee "$S/log" | grep -E '^(==|installed|WARNING|E5-UPDATE)' || true
     grep -q E5-UPDATE-2 "$S/log" || { tail -20 "$S/log"; die "the update did not finish (the log is above)"; }
+    # the reboot on its own: a session the reboot cuts never sees its end
+    E5_TELNET_WAIT=20 python3 "$B/scripts/tools/e5-telnet.py" '( (sleep 2; reboot) >/dev/null 2>&1 & )' >/dev/null 2>&1 || true
     say "完成，设备正在重启 / done, the E5 is rebooting"
     exit 0
 fi

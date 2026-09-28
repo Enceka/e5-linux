@@ -25,7 +25,8 @@
 #  * a full static busybox (the boot image's own) for the applets OpenWrt's
 #    leaves out, logdw (openwrt/src/logdw.c) for the vendor chroot's log, and
 #    e5-vibrate (openwrt/src/e5-vibrate.c) for the motor, e5-ctl-raw
-#    (openwrt/src/e5-ctl-raw.c) for the audio DSP's profile selects;
+#    (openwrt/src/e5-ctl-raw.c) for the audio DSP's profile selects, and
+#    e5-modemd (openwrt/src/e5-modemd.c) for the CP's resets;
 #  * the speaker: the 24 vendor audio modules of the kernel build (out_linux)
 #    in /lib/modules/<release>/audio, alsa-utils, the card's UCM profile
 #    (rootfs/overlay/usr/share/alsa/ucm2), e5-audio-dsp, and e5-volume;
@@ -110,12 +111,13 @@ want=$(curl -fsSL "$URL/sha256sums" | sed -n "s/^\([0-9a-f]*\) \*$TARBALL$/\1/p"
 have=$(shasum -a 256 "$WORK/$TARBALL" 2>/dev/null || sha256sum "$WORK/$TARBALL")
 [ -n "$want" ] && [ "${have%% *}" = "$want" ] || { echo "checksum mismatch for $TARBALL" >&2; exit 1; }
 
-# logdw and e5-vibrate, static: OpenWrt has no compiler of its own
+# logdw, e5-vibrate, e5-ctl-raw and e5-modemd, static: OpenWrt has no compiler of its own
 docker run --rm --platform linux/arm64 -v "$HERE/src":/src:ro -v "$WORK":/out alpine:3.22 \
     sh -euc 'apk add -q gcc musl-dev linux-headers >/dev/null &&
         gcc -static -Os -s -o /out/logdw /src/logdw.c &&
         gcc -static -Os -s -Wall -o /out/e5-vibrate /src/e5-vibrate.c &&
-        gcc -static -Os -s -Wall -o /out/e5-ctl-raw /src/e5-ctl-raw.c'
+        gcc -static -Os -s -Wall -o /out/e5-ctl-raw /src/e5-ctl-raw.c &&
+        gcc -static -Os -s -Wall -o /out/e5-modemd /src/e5-modemd.c'
 
 # what a standalone image carries of the device's own (the Debian root's in the
 # directory form); an empty directory each otherwise
@@ -176,6 +178,7 @@ docker run --rm --platform linux/arm64 \
     -v "$OUT":/in/apk:ro -v "$BUSYBOX":/in/busybox:ro -v "$WORK/logdw":/in/logdw:ro \
     -v "$WORK/e5-vibrate":/in/e5-vibrate:ro -v "${INFOSCREEN:-$WORK/no-infoscreen}":/in/infoscreen:ro \
     -v "$WORK/e5-ctl-raw":/in/e5-ctl-raw:ro -v "$TOP/rootfs/overlay/usr/share/alsa":/in/alsa:ro \
+    -v "$WORK/e5-modemd":/in/e5-modemd:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
@@ -242,6 +245,7 @@ done
 cp /in/logdw $R/opt/e5/bin/logdw && chmod 755 $R/opt/e5/bin/logdw
 cp /in/e5-vibrate $R/usr/bin/e5-vibrate && chmod 755 $R/usr/bin/e5-vibrate
 cp /in/e5-ctl-raw $R/opt/e5/e5-ctl-raw && chmod 755 $R/opt/e5/e5-ctl-raw
+cp /in/e5-modemd $R/usr/sbin/e5-modemd && chmod 755 $R/usr/sbin/e5-modemd
 # the card'"'"'s UCM profile: applied by e5-audio-dsp with amixer (OpenWrt has no alsaucm)
 mkdir -p $R/usr/share/alsa && cp -a /in/alsa/ucm2 $R/usr/share/alsa/
 cp /in/busybox $R/opt/e5/bin/busybox && chmod 755 $R/opt/e5/bin/busybox

@@ -2,6 +2,7 @@ sprd_time_sync.ko
 sprd_time_sync_ch.ko
 sprd_time_sync_cp.ko
 trusty-log.ko
+sprd_soc_thm.ko
 sprd_shm.ko
 sprd_power_manager.ko
 unisoc-mailbox.ko

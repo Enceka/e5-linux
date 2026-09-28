@@ -2,7 +2,6 @@
 # /lib/modules/<release>/ (the trial scripts put them into the trial root):
 #   modem/  sipc_wwan once the CP's AT channel exists (/etc/init.d/e5-sipc-wwan)
 #   audio/  the audio stack, once the DSP can run (/opt/e5/e5-audio-dsp, from /etc/init.d/e5-audio)
-#   thermal/ the vendor sensors while their readings are checked by hand (not loaded by anything)
 modem/sipc_wwan.ko
 audio/agdsp_pd.ko
 audio/audio_mem.ko
@@ -28,7 +27,3 @@ audio/snd-soc-sprd-vbc-fe.ko
 audio/sprd-compr-2stage-dma.ko
 audio/sprd-platform-pcm-routing.ko
 audio/sprd-dmaengine-pcm.ko
-thermal/sprd_thermal_r5p0.ko
-thermal/sprd_ump96xx_tsensor.ko
-thermal/sprd_shell_thm.ko
-thermal/sprd_soc_thm.ko

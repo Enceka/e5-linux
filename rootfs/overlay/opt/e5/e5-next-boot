@@ -4,6 +4,7 @@
 #   e5-next-boot android  the next reboot, and every one after it, goes to Android
 #   e5-next-boot --rearm  used by e5-boot-ok after a successful boot
 #   e5-next-boot status
+#   e5-next-boot next     what the next reboot boots, "linux" or "android", from misc as it is
 #
 # Slot b is armed with tries=2 and successful=0 (misc-bc-slot-b-trial.bin).  LK decrements
 # tries on every boot, so if Linux never reaches e5-boot-ok the next boot sees tries=1 and
@@ -47,11 +48,30 @@ slot_state() {
     echo "  slot a info: ${b:24:2}  slot b info: ${b:28:2}  (prio<<0|tries<<4|successful<<7)"
 }
 
+# What LK boots next, read from the block as it stands: the bootable slot of the higher
+# priority, where this LK takes a slot that is not successful and has one try left as failed
+# (it rolls back at once), and one with two or more as worth a try.  LK takes a try off slot
+# b as it boots it, so during a trial boot the block already says android -- until e5-boot-ok
+# re-arms it, which it does only when Linux is the default.
+next_target() {
+    b=$(dd if="$MISC" bs=1 skip=2048 count=32 2>/dev/null | od -An -tx1 -v | tr -d ' \n')
+    [ ${#b} -eq 64 ] || { echo unknown; return; }
+    a=$((16#${b:24:2})) s=$((16#${b:28:2}))
+    bootable() { [ $(($1 & 15)) -gt 0 ] && { [ $(($1 >> 7 & 1)) = 1 ] || [ $(($1 >> 4 & 7)) -ge 2 ]; }; }
+    if bootable $s && { ! bootable $a || [ $((s & 15)) -gt $((a & 15)) ]; }; then
+        echo linux
+    else
+        echo android
+    fi
+}
+
 case "${1:-status}" in
     linux)   mkdir -p /etc/e5linux; echo linux > "$CONF"; write_bc "$BC_B"; echo "default boot: linux (slot b armed)" ;;
     android) mkdir -p /etc/e5linux; echo android > "$CONF"; write_bc "$BC_A"; echo "next boot: android (slot a)" ;;
     --rearm) [ "$(cat "$CONF" 2>/dev/null)" = linux ] && write_bc "$BC_B" && echo "slot b re-armed" || echo "default boot is not linux, nothing to do" ;;
     status)  echo "default boot: $(cat "$CONF" 2>/dev/null || echo android)"
+             echo "next boot: $(next_target)"
              slot_state ;;
-    *) echo "usage: $0 linux|android|status" >&2; exit 2 ;;
+    next)    next_target ;;
+    *) echo "usage: $0 linux|android|status|next" >&2; exit 2 ;;
 esac

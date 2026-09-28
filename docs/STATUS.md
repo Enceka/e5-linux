@@ -90,8 +90,23 @@ FINDINGS.
     24/24 modules, the card registers, image written, `start` accepted, no panic; the
     audio modules are back in `upstream/root-modules.txt`.  Then `/etc/init.d/e5-audio`
     ran in full on the trial (profiles, speaker route, volume 10/15, PulseAudio up), no
-    oops; **playback requires on-device listening validation** with the info screen's 声音 -> 播放测试音
-    (`e5-volume play beep`) -- result to note here.  Seen on the way: the card's rebind
+    oops.
+  * **M7: the speaker plays on 6.18 (2026-09-28, evening; audibly verified).**  It
+    was silent because every stream failed in `hw_params`: `request dma
+    channel(fast_p) failed!(-19)` -- `CONFIG_DMADEVICES` was never set, so the
+    ported vendor sprd-dma (`0015e503b`) was not built and the AGCP DMA
+    (`56650000`) had no driver.  `e5-volume` sends aplay's error to /dev/null,
+    hence no error anywhere.  `upstream/e5-mainline.config` builds it in, as 5.15
+    does (`SPRD_DMA=y`); `6.18.54-e5-00057-g8048e353a785`, trialled from the running
+    trial (`trial-from-openwrt.sh`): the stream starts, the aw87xxx goes to `Music`
+    and back to `Off` when idle, the beep is heard.  Found with
+    `upstream/audio-diag.sh` (card, PA, mixer, PCM status, DAPM, interrupts and the
+    kernel's lines during a tone; `logs/mainline-m7-dma-20260928`).  Capture, the
+    earpiece and call audio are not checked on 6.18 yet.
+  * One trial boot showed no USB gadget on the Mac at all (the device returned to
+    Android); the next two did (gadget at ~25 s, OpenWrt's DHCP at ~50 s), and the
+    initramfs log of the silent one had the gadget bound and `usb0` with carrier.
+    Not reproduced.  Seen on the way: the card's rebind
     in `e5-audio-dsp` logs two `WARNING`s at `drivers/regulator/core.c:2478`
     (`sprd_headset_remove` -> `sprd_headset_power_deinit` puts the headset regulators
     still enabled); harmless, a disable before the put would silence it.
@@ -265,7 +280,7 @@ FINDINGS.
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
-| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`): M1-M6, M8 run on the device under OpenWrt, M7 (audio) loads and boots the DSP, playback untested; both SIM cards (FINDINGS 47) |
+| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`): M1-M6, M8 run on the device under OpenWrt, M7 (audio): the speaker plays (capture, earpiece, calls not yet checked); both SIM cards (FINDINGS 47) |
 | openwrt | OpenWrt 25.12.5 in `/openwrt` of the root image, booted by `boot-os`/`boot-os-next` (`e5-os`); WAN by ModemManager (+ patch `06`), LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; `openwrt/README.md`, FINDINGS 39; standalone as `/data/e5linux/openwrt.ext4` with its own firmware, vendor subset, modem modules and fonts, no Debian needed (native18, FINDINGS 43) |
 
 ## Open questions

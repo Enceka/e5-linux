@@ -71,7 +71,17 @@ FINDINGS.
     is what the modules were for.
   * M4 re-verified without a SIM (none inserted): CP booted by the vendor chroot, SIPC
     up, `sipc_wwan` loads by hand and gives `/dev/wwan0at0`, ModemManager lists the
-    modem.  `e5-sipc-wwan` did not load it by itself this time (why: open).
+    modem.  (`e5-sipc-wwan` not loading it by itself was the trial root's old script:
+    it insmodded `wwan.ko`, which mainline builds in -- FINDINGS 47.7.)
+  * **The panel lights at 7 s** instead of 32 s (linux-lts-e5 `aab3f8f6d`: `of_iommu`
+    no longer waits for the vendor's display IOMMU), so fbcon shows the boot's log.
+  * **Both SIM cards, switchable (FINDINGS 47)**: `sipc_wwan card=` (`cfbb848c9`,
+    `9ec968c3b`), the unisoc plugin's two-card bring-up, `+SPSWDATA` and SIM slots
+    (OpenWrt E5REV 5), `e5-sim`, the info screen's "SIM 卡" and status-bar card; data
+    on `sipa_eth0`/`sipa_eth8`.  Every card needs its band lock, or the CP asserts
+    (`DRM_SPR_RF`, Android too).  `e5-modemd` answers the CP's asserts: a reset in
+    4-5 s instead of 300.  All on the trial root by hand so far: the next rootfs build
+    (and flash bundle) carries it.
   * **M7 panicked the first full trial**: e5-audio runs at OpenWrt first boot, loaded
     the 24 modules and e5-audio-dsp's write into `audiocp_boot`'s sysfs died in
     `memset_io` on NULL+0x400 (`dev_attr_store`, `logs/mainline-full-20260928`) -- the
@@ -213,10 +223,12 @@ FINDINGS.
   routes the codec (mic, earpiece/speaker) into the CP's VoLTE voice path.  Needs the
   vendor voice route in ALSA (the AGDSP's voice scene, as the Android audio HAL sets
   it up in a call), a UCM "Voice Call" verb, and callaudiod to switch it.
-- **The CP's 300 s dump wait after an assert** (FINDINGS 30): modem_control waits for
-  a "dump complete" that only Android's CP log daemon sends.  Recovery itself should
-  be automatic now (the AT port leaves and comes back with the channel, ModemManager
-  re-creates the modem, NetworkManager reconnects); the five minutes offline are not.
+- **The CP's 300 s dump wait after an assert** (FINDINGS 30): answered on OpenWrt by
+  `e5-modemd` (FINDINGS 47.6); the Debian root has no such client yet.
+- **SIM hot plug** (FINDINGS 47.7): the plugin drops the CP's `+ECIND: 3,<v>`; capture
+  what the CP reports on a real plug, then have ModemManager re-read the card.
+- **The info screen's "默认频段" unlocks NR**, which this baseband cannot take
+  (FINDINGS 47.2): use the validated device band lock as the default (b1+b41, n41+n78) or drop it.
 - **Suspend is unusable** while the modem data path refuses it
   (`sipa 25220000.sipa: thread prepare suspend err`), which is why the power key
   cannot mean "suspend".
@@ -246,7 +258,7 @@ FINDINGS.
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
-| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`, local only): M1-M5, M8 run on the device, M6/M7 build only; paused (see Now) |
+| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`): M1-M6, M8 run on the device under OpenWrt, M7 (audio) out; both SIM cards (FINDINGS 47) |
 | openwrt | OpenWrt 25.12.5 in `/openwrt` of the root image, booted by `boot-os`/`boot-os-next` (`e5-os`); WAN by ModemManager (+ patch `06`), LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; `openwrt/README.md`, FINDINGS 39; standalone as `/data/e5linux/openwrt.ext4` with its own firmware, vendor subset, modem modules and fonts, no Debian needed (native18, FINDINGS 43) |
 
 ## Open questions

@@ -2971,6 +2971,8 @@ Measured on the image with all of it (load2):
 
 ## 30. A CP reset nobody recovered from, and IPv6 for the hotspot (2026-09-26)
 
+(The 300 s wait for the dump: answered by `e5-modemd` since 2026-09-28, section 47.6.)
+
 **The CP asserts, and the device stays offline.**  At 00:24:11 the modem firmware
 asserted on its own -- `/var/log/e5-android-log.txt` (modem_control's log through
 `logdw.py`):
@@ -4013,3 +4015,157 @@ filters the generated order); nothing depends on it.  Recovered from Android wit
 boot/flash-trial.sh and the rebuilt boot image; the updated image, its settings
 and the installed apps were all there.
 
+
+## 47. Two SIM cards, and a CP that asserts without a band lock (2026-09-28)
+
+Mainline 6.18 trials under OpenWrt, SIM 1 China Broadnet (46015), SIM 2 China Mobile
+(46000); the Android side was read with the RIL's AT log (47.8).  Result: the modem
+switches between the cards (`e5-sim`, the info screen, ModemManager's SIM slots), data
+on `sipa_eth0` for the first card and `sipa_eth8` for the second.
+
+### 47.1 Channels are not cards; `AT+SPACTCARD` is
+
+The vendor RIL opens `stty_nr0`-`5` (and 13, 14), rings 0-2 for the first card and
+3-5 for the second, and the guess was that the ring picks the card.  It does not: on
+ring 4 `+CIMI`, `+CCID` and `+CGSN` answered for the first card.  A command reaches a
+card through **`AT+SPACTCARD=<card>` as a prefix on the same line**
+(`AT+SPACTCARD=1;+CIMI`, as UFI-TOOLS' `RootSttyAT.kt` sends every command), and the
+card **sticks to the channel** until a power change: a bare `AT+CIMI` right after
+answers for the card named last.  urild itself never sends it (not a string in any of
+its libraries).  `sipc_wwan card=<n>` (linux-lts-e5 `9ec968c3b`) puts the prefix in
+front of every `AT+` command a port sends, except one that names its card already;
+with `card=` set on both cards' ports, a channel left on the other card cannot
+mislead ModemManager (it did once: the first card's port without the prefix read the
+second card's SIM, and e5-apn-auto kept the wrong APN).
+
+The **URCs are per card**: the first card's on ring 0, the second's on ring 3.  Both
+rings have to be read.  With the port on ring 4 and nothing reading ring 0, the CP's
+AT server stopped answering everybody within a minute or two, with no assert, until
+the CP was reset; `sipc_wwan` now drains the other card's URC ring (`cfbb848c9`), and
+ring 4 then answered for 5.5 minutes and on.  **Correction:** the first hang of the
+day was put down to a bare `AT+SPACTCARD?`; it was this undrained ring.
+
+### 47.2 The band lock is per card, and a card without one asserts the CP
+
+    Modem Assert: DRM_SPR_RF Task  PHY CP assert in file drm_rfresourcehandle.c
+    line 3925 exp=0 info=[Drm allocate spr rf path fail! res_type=16,
+    <rat,band,rx,tx>:0x68a0201 0x6290400 0x0 0x0 0x0, is_nr_ant_reduce:0,0 ]
+
+came 10-25 s after the second card's data connection came up, every time -- on Linux
+and, it turned out, **on Android too**: with the new card as Android's data card the CP
+reset every 15-30 s (the 12:20 capture already had two).  The observed requirement for this
+device: the baseband (likely its hardware) needs a band lock on every card -- China
+Broadnet and China Mobile on n28 or n41, or they may not register at all; the validated configuration
+uses b1+b41 and n41+n78.  `AT+SPLBAND` is per card:
+
+    AT+SPACTCARD=1;+SPLBAND=0    +SPLBAND: 0,256,0,1,0      LTE b1 b41
+    AT+SPACTCARD=1;+SPLBAND=3    +SPLBAND: 0,0,0            NR: none -> the asserts
+    AT+SPACTCARD=1;+SPLBAND=2,0,0,272,0                     NR n41 n78
+
+The first card had its lock, the freshly inserted second one had LTE but no NR lock.
+With both locked: two minutes of data on the second card, both cards on NR SA, no
+assert (Android), and none on Linux since.  A lock programmed with the configuration tool survived
+the reboot; one sent by hand over `/dev/stty_nr6` on Android was gone at the next CP
+reset.  `e5-sim` warns about a card with no NR lock and never writes one.  Note: the
+info screen's "默认频段" (NR unlocked) is exactly what this device must not do.
+
+### 47.3 Bringing both stacks up: two more asserts, and the order that has none
+
+    T_P_ATC PS CP assert in file mnphone_api.c line 7048
+    T_P_ATC PS CP assert in file mnphone_api.c line 7038
+
+* **7048**: one card's protocol stack brought up (`+SFUN=4` from `+CFUN: 0`) while the
+  other card is attached.  Every time, and in Android's command order too.
+* **7038**: both stacks brought up from a fresh CP without the cards' work modes
+  (`+SPTESTMODEM`).
+* No assert: from a fresh CP (both at `+CFUN: 0`), as the RIL does after a restart --
+  both SIMs on (`AT+SPACTCARD=<n>;+SFUN=2`), each card's work mode
+  (`+SPTESTMODEM=<mode 1>,<mode 2>`, the modes `+SPTESTMODE?` holds), the data card
+  (`+SPSWDATA` on that card), then both stacks, the first card's first.  Both register;
+  the stacks then stay up, and moving the port to the other card never brings a stack
+  up from off.
+
+`AT+SPSWDATA` makes the card it is sent for the one that carries data (`+SPSWDATA?`
+reads it; the CP starts on the first card).  Android sends it on the target card's
+channel for `setPreferredDataModem`, then `CGACT=0`, `CGDCONT`, `CGPCO`, `CGEQREQ`,
+`CGDATA="M-ETHER",1` -- no `CGACT=1`; the plugin's `CGACT=1` then `CGDATA` works as well.
+Not on this CP: `AT+SPSWITCHDATACARD` (the old RIL source's primary-card switch) is
+`+CME ERROR: 4` in every state, and `+SPTESTMODE=<m1>,<m2>,1` answers OK and changes
+nothing.  (`persist.vendor.radio.primarysim` is 1 on Android while its data card is the
+second one; no AT for it was seen.)
+
+### 47.4 The second card's data interface is `sipa_eth8`
+
+The RIL's log names it (`Net interface addr linker = sipa_eth8`, `socket_id= 1`): SIPA
+net id 8 for the second card's context 1, as net id 0 (`sipa_eth0`) is the first
+card's.  No AT names it -- the old source's `AT+SPAPNETID` is not in this RIL.  On
+Linux: bearer up, `sipa_eth8` with the `+CGCONTRDP` address, IPv4/IPv6 ping, DNS and
+HTTP through it.  (An earlier try that saw nothing on any of the 16 interfaces was the
+47.2 assert tearing the bearer down seconds after it came up.)  Also: `sipa_eth`'s
+debugfs `stats` prints `tx_errors` in the `rx_errors` field.
+
+### 47.5 The switch
+
+* `sipc_wwan card=` from `/etc/config/e5-sim` (`e5-sipc-wwan`; the 5.15 build has no
+  `card` parameter and loads without it for the first card);
+* the unisoc plugin (patch 01, OpenWrt release E5REV 5): the 47.3 bring-up from
+  `+CFUN: 0`, `+SPSWDATA` before every dial, context 1 on the modem's own net port (not
+  `sipa_eth0` by name), and **SIM slots**: both cards listed (the other one's ICCID and
+  IMSI read with its prefix), `SetPrimarySimSlot` runs `e5-sim` (detached: it restarts
+  ModemManager).  LuCI's ModemManager page shows both then;
+* `26-e5-sipa-eth` hands the card's interface to ModemManager and withdraws the other
+  card's from its event cache (both are tagged as the modem's net port);
+* `e5-sim <0|1>`: `ifdown wan`, stop ModemManager, the port for the other card, start
+  ModemManager, the card's APN (`e5-apn-auto`), `ifup wan` -- about 45 s, no CP reset;
+  `e5-sim` alone lists both cards and their band locks.
+
+Seen on the device: SIM 1 -> 2 from the info screen, 2 -> 1 with `e5-sim 0`, 1 -> 2 with
+`mmcli --set-primary-sim-slot=2`, and a fresh CP straight onto the second card; data
+each time, no assert.  The second card has no own number: `AT+CNUM` is `Not found` on
+it (the SIM holds no MSISDN), so ModemManager shows none.  Its ICCID has an `F` in it
+(`898600642825F7137081`), as on Android.
+
+### 47.6 CP resets in seconds: `e5-modemd`
+
+`modem_control` waits for the CP log daemon's `SLOGMODEM DUMP COMPLETE` before it resets
+an asserted CP -- 300 s without one (section 30).  `openwrt/src/e5-modemd.c` is that
+client on the abstract socket `@modemd`: it answers every `Modem Assert` (and `Modem
+State: Assert` for a client that connects during one) and `Modem Blocked`, which
+`modem_control` resets after the same dump ("block, later reset").  Reset to `Modem
+Alive` in 4-5 s, a dozen times today.  `e5-modemd blocked` sends `Modem Blocked` itself:
+a CP reset on demand, for an AT server that hangs without an assert.  (It first
+answered only `Assert`, and a `blocked` then sat unanswered.)
+
+### 47.7 Traps on the way
+
+* ModemManager without udev reads only rule files named `77-mm-*` to `80-mm-*`
+  (`mm-kernel-device-generic-rules.c`): OpenWrt's `78-e5-mm-sipc.rules` had never been
+  read -- neither its tty ignore nor, later, the `sipa_eth8` tags.  Now
+  `78-mm-e5-sipc.rules`.
+* The trial root was older than the repository: its `e5-sipc-wwan` still insmodded
+  `wwan.ko`, which does not exist on mainline (built in), exited 1 and never loaded
+  `sipc_wwan` -- the "did not load it by itself" of the M4 re-check.
+* The info screen's WebKit keeps its HTTP cache in `/tmp/run/e5-infoscreen/.cache`,
+  which outlives the session; uhttpd sends no `Cache-Control`, so a restarted page ran
+  the old `app.js` until the next boot.  The session clears `WebKitCache` at start.
+* The first `CFUN=0` then `CFUN=1` of the day brought a hot-inserted SIM back (`+CPIN:
+  READY`), unlike section 37's note that nothing does within a boot.  Only seen once.
+* SIM hot plug is not handled: the plugin drops the CP's `+ECIND: 3,<v>` (the RIL's
+  hot-plug report) with its other unused URCs, so a card inserted while running is not
+  seen until the CP reads it again.  Not finished: the CP's report on a real plug was
+  not captured.
+
+### 47.8 Reading the Android RIL's AT log
+
+The AT lines (`RIL-AT`) are logged only when urild starts on a `userdebug` build:
+
+    logcat -G 16M -b radio
+    resetprop ro.build.type userdebug
+    logcat -b radio -v time > /data/local/tmp/radio.log &    (before the restart)
+    setprop ctl.restart vendor.ril-daemon
+    sleep 5; resetprop ro.build.type user
+
+The default 256 KiB radio buffer loses the init sequence within a minute.  `pkill -f`
+with a pattern that is on the running shell's own command line kills that shell (and
+the `resetprop` after it).  For AT on Android next to urild: `/dev/stty_nr6` is free
+(urild holds 0-5, 13 and 14; other daemons 21, 28, 31).

@@ -136,6 +136,10 @@ What it took besides the drivers:
 * `PM_WAKELOCKS` (`/sys/power/wake_lock`), and SIPA's RPS switch looked for rx-0's `rps_cpus` in the ktype's
   default groups, which 6.18 keeps in the queue: a panic at the first burst of data, before the fix.
 
+Both SIM cards (FINDINGS 47): `sipc_wwan card=<n>` puts `AT+SPACTCARD=<n>;` in front of every command the port
+sends and takes that card's rings (`9ec968c3b`), and drains the other card's URC ring, without which the CP's AT
+server stops answering within minutes (`cfbb848c9`); the second card's data is on `sipa_eth8`.
+
 A trial's root is a copy, so its `sipc_wwan.ko` has to be put into the copy's `/lib/modules/<release>/modem`:
 `trial-from-openwrt.sh img upstream/out/modules/sipc_wwan.ko:/lib/modules/<release>/modem/sipc_wwan.ko` does it
 on the way; from Android, loop-mount the copy (SELinux has to be permissive for the loop mount).
@@ -153,6 +157,12 @@ cog's EGL needed: `mali-g57 id 0x9091`, `/dev/dri/renderD128`. Input as on 5.15:
 smart voice), the matrix keypad, the tlsc6x touch panel (on I2C, which mainline's i2c-sprd drives through the
 DT's "sprd,sc9860-i2c" fallback), the PMIC vibrator (mainline, plus UMP9620); the PMIC's RGB LED is mainline's
 leds-sc27xx-bltc plus UMP9620, with 5.15's names (`sc27xx:blue`).
+
+The panel used to light only at ~32 s: the DPU's `iommus` points at the vendor's display IOMMU, whose driver
+never calls `iommu_device_register()`, so `of_iommu_configure()` deferred the DPU until the deferred-probe
+timeout ("ignoring dependency", pushed on by every module load). `aab3f8f6d` has `of_iommu` take the vendor's
+`unisoc,iommu*` nodes as no IOMMU (the drivers map through the vendor's own API): `sprd_drm_bind()` at 6.9 s,
+fbcon on the panel at 7.0 s, so the boot's kernel log scrolls on it.
 
 What 6.18 broke on the way, besides the renames `port-api.py` does: `drm_open()` refuses fops without
 `FOP_UNSIGNED_OFFSET` (the vendor's own fops: every open of card0 was EINVAL, and seatd could not hand it to cage);

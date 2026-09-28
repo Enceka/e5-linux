@@ -88,8 +88,13 @@ FINDINGS.
     -- the DSP's IRAM (SRAM) and its no-map DDR -- and handed back NULL plus the page
     offset.  It ioremaps such memory now, as `ce632be0c` did for sipc.  On the device:
     24/24 modules, the card registers, image written, `start` accepted, no panic; the
-    audio modules are back in `upstream/root-modules.txt`.  Playback not tested (the
-    owner: on hold).
+    audio modules are back in `upstream/root-modules.txt`.  Then `/etc/init.d/e5-audio`
+    ran in full on the trial (profiles, speaker route, volume 10/15, PulseAudio up), no
+    oops; **playback requires on-device listening validation** with the info screen's 声音 -> 播放测试音
+    (`e5-volume play beep`) -- result to note here.  Seen on the way: the card's rebind
+    in `e5-audio-dsp` logs two `WARNING`s at `drivers/regulator/core.c:2478`
+    (`sprd_headset_remove` -> `sprd_headset_power_deinit` puts the headset regulators
+    still enabled); harmless, a disable before the put would silence it.
   * `console=tty0` added (commit `f964cfa`): kernel messages on the panel once the
     display modules load.
   `linux-lts-e5` is on GitHub after all (the fresh clone of 2026-09-28 came from

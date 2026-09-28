@@ -10,13 +10,14 @@
 # on cleanly), and patches/modemmanager-package-*.patch adjusts the package's
 # OpenWrt glue (its hotplug helpers drop virtual netdevs, and sipa_eth0 is one).
 #
-# Built natively on arm64, from OpenWrt's source tree at the release tag: the
-# release SDK exists only as an x86_64 program, which Docker on an arm64 host
-# can run only emulated -- far too slow (hours, for glib2 alone).  The
-# buildroot builds its cross toolchain on any host, so it is set up exactly as
-# the release was built -- the tag, the feeds pinned in the release's
-# feeds.buildinfo, its config.buildinfo -- and the package comes out for the
-# same toolchain (gcc, musl) as the repository's packages it is installed with.
+# Built from OpenWrt's source tree at the release tag, in a container of the
+# host's own architecture: the release SDK exists only as an x86_64 program,
+# which Docker on an arm64 host can run only emulated -- far too slow (hours,
+# for glib2 alone).  The buildroot builds its cross toolchain on any host, so
+# it is set up exactly as the release was built -- the tag, the feeds pinned in
+# the release's feeds.buildinfo, its config.buildinfo -- and the package comes
+# out for the same toolchain (gcc, musl) as the repository's packages it is
+# installed with.
 #
 # The tree lives in the Docker volume e5-openwrt-src and is kept between runs:
 # the first run builds the host tools and the toolchain (tens of minutes), a
@@ -43,7 +44,7 @@ URL=https://downloads.openwrt.org/releases/$VER/targets/armsr/armv8
 mkdir -p "$WORK" "$OUT"
 
 for f in config.buildinfo feeds.buildinfo; do
-    curl -fsSL -o "$WORK/$f" "$URL/$f"
+    curl -fsSL --retry 5 --retry-all-errors -o "$WORK/$f" "$URL/$f"
 done
 
 # the source patches, numbered after OpenWrt's own
@@ -55,8 +56,13 @@ for p in "$TOP"/rootfs/deb-patches/modemmanager-0*.patch; do
 done
 cp "$HERE"/patches/modemmanager-package-*.patch "$WORK/patches/pkg/"
 
-docker run --rm --platform linux/arm64 -v e5-openwrt-src:/build \
-    -v "$WORK":/work:ro -v "$OUT":/out -e VER="$VER" -e E5REV="$E5REV" \
+# the container is the host's architecture (the buildroot cross-compiles for the target either way);
+# E5_DOCKER=podman on a host without docker (SELinux wants the bind mounts relabelled, :z)
+DOCKER=${E5_DOCKER:-docker}
+case "$(uname -m)" in x86_64) PLAT=linux/amd64;; *) PLAT=linux/arm64;; esac
+Z=; [ "$DOCKER" = podman ] && Z=,z
+$DOCKER run --rm --platform $PLAT -v e5-openwrt-src:/build \
+    -v "$WORK":/work:ro$Z -v "$OUT":/out${Z:+:z} -e VER="$VER" -e E5REV="$E5REV" \
     -e JOBS="${E5_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}" \
     debian:trixie bash -euc '
 export DEBIAN_FRONTEND=noninteractive
@@ -72,7 +78,14 @@ cd /build
 cd openwrt
 # the feeds at the commits the release was built from
 cp /work/feeds.buildinfo feeds.conf
-[ -f feeds/packages.index ] || ./scripts/feeds update -a >/dev/null
+# (a feed whose clone failed leaves only its index behind: update until every feed has its tree)
+for try in 1 2 3 4 5; do
+    missing=$(awk "/^src-/{print \$2}" feeds.conf | while read -r f; do [ -d feeds/$f/.git ] || echo $f; done)
+    [ -z "$missing" ] && break
+    echo "feeds to update: "$missing
+    for f in $missing; do rm -rf feeds/$f feeds/$f.*; ./scripts/feeds update $f >/dev/null || true; done
+done
+[ -z "$missing" ] || { echo "feeds not cloned: $missing"; exit 1; }
 ./scripts/feeds install modemmanager >/dev/null
 P=feeds/packages/net/modemmanager
 # the package directory back to the feed state, then the E5 changes on top

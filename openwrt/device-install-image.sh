@@ -87,7 +87,7 @@ N=$NEW_ROOT
 if [ -n "$from" ]; then
     echo "== keeping the configuration of $from"
     # (the new image's own, not the kept ones)
-    for f in image-version image-form; do
+    for f in image-version image-form build-time; do
         cp "$N/etc/e5/$f" "/tmp/e5-img.$f" 2>/dev/null || rm -f "/tmp/e5-img.$f"
     done
     # (etc/e5-infoscreen: the apps installed on the info screen)
@@ -101,7 +101,7 @@ if [ -n "$from" ]; then
             cp -a "$from/$p" "$N/$p"
         fi
     done
-    for f in image-version image-form; do
+    for f in image-version image-form build-time; do
         rm -f "$N/etc/e5/$f"
         [ -f "/tmp/e5-img.$f" ] && mv "/tmp/e5-img.$f" "$N/etc/e5/$f"
     done

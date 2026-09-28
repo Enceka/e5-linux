@@ -43,8 +43,10 @@ if [ -d "$DEST/etc/config" ]; then
             cp -a "$DEST/$p" "$NEW/$p"
         fi
     done
-    # the new image's version, not the kept one
-    tar -xzf "$T" -C "$NEW" ./etc/e5/image-version 2>/dev/null || true
+    # the new image's version and build time, not the kept ones
+    for f in image-version build-time; do
+        tar -xzf "$T" -C "$NEW" ./etc/e5/$f 2>/dev/null || true
+    done
 fi
 
 if [ ! -f "$NEW/etc/e5/install.conf" ]; then

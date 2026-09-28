@@ -56,7 +56,7 @@ FINDINGS.
   `device-files.tar` and the WCN firmware copies on it are gone -- reinstalled from
   the repository and the flash bundle the same day (see the mainline bullet).
 - **Mainline 6.18 M6 runs on the device (2026-09-28, evening): charging, fuel gauge
-  and the charger manager are live; M7 audio panicked and is out for now.**  Built on
+  and the charger manager are live; M7 audio panicked at first, fixed the same day.**  Built on
   the new host (x86_64 Fedora, no docker: `upstream/build-native.sh` with a Bootlin
   aarch64 gcc 15.3 toolchain; `6.18.54-e5-g03e89ea23e7e`, zero warnings) and trialled
   from the reflashed Android through `upstream/trial-from-android.sh` (probe first:
@@ -82,12 +82,14 @@ FINDINGS.
     (`DRM_SPR_RF`, Android too).  `e5-modemd` answers the CP's asserts: a reset in
     4-5 s instead of 300.  All on the trial root by hand so far: the next rootfs build
     (and flash bundle) carries it.
-  * **M7 panicked the first full trial**: e5-audio runs at OpenWrt first boot, loaded
-    the 24 modules and e5-audio-dsp's write into `audiocp_boot`'s sysfs died in
-    `memset_io` on NULL+0x400 (`dev_attr_store`, `logs/mainline-full-20260928`) -- the
-    audiodsp region does not map on 6.18, the no-map class of the sipc fix (`ce632be0c`).
-    The audio modules are out of the trial root (`upstream/root-modules.txt`) until the
-    driver is fixed; playback validation is deferred.
+  * **M7: the DSP boots again** (linux-lts-e5 `8048e353a`): the first full trial had
+    panicked in e5-audio-dsp's write into `audiocp_boot` (`memset_io` on NULL+0x400,
+    `logs/mainline-full-20260928`): `audio_mem_vmap()` vmapped memory that has no pages
+    -- the DSP's IRAM (SRAM) and its no-map DDR -- and handed back NULL plus the page
+    offset.  It ioremaps such memory now, as `ce632be0c` did for sipc.  On the device:
+    24/24 modules, the card registers, image written, `start` accepted, no panic; the
+    audio modules are back in `upstream/root-modules.txt`.  Playback not tested (the
+    owner: on hold).
   * `console=tty0` added (commit `f964cfa`): kernel messages on the panel once the
     display modules load.
   `linux-lts-e5` is on GitHub after all (the fresh clone of 2026-09-28 came from
@@ -258,7 +260,7 @@ FINDINGS.
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
-| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`): M1-M6, M8 run on the device under OpenWrt, M7 (audio) out; both SIM cards (FINDINGS 47) |
+| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`): M1-M6, M8 run on the device under OpenWrt, M7 (audio) loads and boots the DSP, playback untested; both SIM cards (FINDINGS 47) |
 | openwrt | OpenWrt 25.12.5 in `/openwrt` of the root image, booted by `boot-os`/`boot-os-next` (`e5-os`); WAN by ModemManager (+ patch `06`), LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; `openwrt/README.md`, FINDINGS 39; standalone as `/data/e5linux/openwrt.ext4` with its own firmware, vendor subset, modem modules and fonts, no Debian needed (native18, FINDINGS 43) |
 
 ## Open questions

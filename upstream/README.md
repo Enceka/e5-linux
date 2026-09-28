@@ -54,8 +54,8 @@ The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_
 | M3: Wi-Fi and Bluetooth (marlin3lite over SDIO: wcn_bsp, sprd_wlan_combo, sprdbt_tty) | **done 2026-09-27** (hotspot on 5745 MHz beaconing, hci0 up with the factory address at boot) |
 | M4: the modem (SIPC, SIPA, modem loader, Trusty) with ModemManager as on 5.15 | **done 2026-09-28** (5G NR, connected, data on sipa_eth0) |
 | M5: display (sprd DRM, DSI panel), touch, keypad, vibrator | **mostly done 2026-09-28** (panel, fbcon, backlight, touch, keypad, gpio-keys, vibrator, RGB LED; not yet: DPU DVFS, GSP) |
-| M6: charger, fuel gauge, thermal, cpufreq | **ported, builds, not run** (the first trial never came back on USB; Android was found stuck afterwards, `docs/STATUS.md`); cpufreq not ported (not loaded on 5.15 Linux either) |
-| M7: audio (AGDSP, VBC, UMP9620 codec, aw87xxx PA) | **ported, builds, not run** (the vendor ASoC stack with Unisoc's sprd-dma; its modules go into the root, `root-modules.txt`) |
+| M6: charger, fuel gauge, thermal, cpufreq | **charging, fuel gauge and the charger manager run on the device (2026-09-28)**: `aw322xx_charger` charging at 496 mA over USB, `sc27xx-fgu` reads the battery, charger-manager telemetry every 15 s; thermal: the battery zone works, the SoC/board zones register none (`virtual_thermal` -22) -- to check by hand; cpufreq not ported (not loaded on 5.15 Linux either) |
+| M7: audio (AGDSP, VBC, UMP9620 codec, aw87xxx PA) | **panicked the first full trial (2026-09-28)**: the modules load and probe, but e5-audio-dsp's write into `audiocp_boot`'s sysfs dies in `memset_io` on NULL+0x400 -- the audiodsp region does not map on 6.18 (the no-map class of the sipc fix); the modules are out of the trial root (`root-modules.txt`) until the driver maps it like `ce632be0c` did for sipc |
 | M8: GPU (Mali G57) | **done 2026-09-28**, brought forward (panfrost, as on 5.15; the info screen's cog renders through it) |
 
 The target is what works on 5.15 today (`docs/STATUS.md`, `boot/module-order.txt`).

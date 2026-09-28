@@ -50,15 +50,38 @@ FINDINGS.
   (`5f61...0be17146`), `boot_b` = `work/boot-linux-slotb-bundle.img` (5.15; with no
   root image it runs the standalone rescue on 192.168.77.1, telnet, and restores slot
   a itself), userdata wiped.
-- **Mainline 6.18 (`upstream/`, `linux-lts-e5`) is paused** until Android is back.
-  Done and seen on the device: M1-M4 (modem on 5G NR with data), M5 mostly (panel,
-  fbcon, backlight, touch, keys, vibrator, RGB LED), M8 (panfrost).  Ported and building
-  without warnings but never run: M6 (charging, fuel gauge, thermal) and M7 (the vendor
-  ASoC stack with Unisoc's sprd-dma).  `upstream/README.md` has the details; no more
-  trials before the Android question is answered, and the next one only from Android.
-  `linux-lts-e5` could not be pushed: the clone is shallow at v6.18.54, and GitHub
-  wants the history behind it -- fork `gregkh/linux` as the remote instead (or graft
-  a new root; `--unshallow` would mean a >2 GB push).
+- **Android is back (2026-09-28, later): a full stock-system reflash restored Android.**  It
+  now reports Android 13 (was 14), adb + Magisk root work, slot a, `misc` back at the
+  slot-a block; userdata was wiped by the reflash, so the root images,
+  `device-files.tar` and the WCN firmware copies on it are gone -- reinstalled from
+  the repository and the flash bundle the same day (see the mainline bullet).
+- **Mainline 6.18 M6 runs on the device (2026-09-28, evening): charging, fuel gauge
+  and the charger manager are live; M7 audio panicked and is out for now.**  Built on
+  the new host (x86_64 Fedora, no docker: `upstream/build-native.sh` with a Bootlin
+  aarch64 gcc 15.3 toolchain; `6.18.54-e5-g03e89ea23e7e`, zero warnings) and trialled
+  from the reflashed Android through `upstream/trial-from-android.sh` (probe first:
+  `logs/mainline-probe-20260928`; then the full trial: `logs/mainline-full-20260928`)
+  on an OpenWrt root from the c4360f9 flash bundle plus `device-files.tar`:
+  * M6 seen working: `aw322xx_charger` online and **Charging at 496 mA** over USB,
+    `sc27xx-fgu` reads the battery (100 %, 4.35 V, 31.8 C), charger-manager logs its
+    telemetry every 15 s (vbat/vbus/ibat/soc, Tboard 25.0 C, Tbatt 31.9 C) -- snapshots
+    in `logs/mainline-full2-20260928/`.
+  * M6 thermal: the battery zone works; the SoC/board sensors register no zones
+    (`virtual_thermal` probe -22, missing `board-thmzone`) -- to check by hand, which
+    is what the modules were for.
+  * M4 re-verified without a SIM (none inserted): CP booted by the vendor chroot, SIPC
+    up, `sipc_wwan` loads by hand and gives `/dev/wwan0at0`, ModemManager lists the
+    modem.  `e5-sipc-wwan` did not load it by itself this time (why: open).
+  * **M7 panicked the first full trial**: e5-audio runs at OpenWrt first boot, loaded
+    the 24 modules and e5-audio-dsp's write into `audiocp_boot`'s sysfs died in
+    `memset_io` on NULL+0x400 (`dev_attr_store`, `logs/mainline-full-20260928`) -- the
+    audiodsp region does not map on 6.18, the no-map class of the sipc fix (`ce632be0c`).
+    The audio modules are out of the trial root (`upstream/root-modules.txt`) until the
+    driver is fixed; playback validation is deferred.
+  * `console=tty0` added (commit `f964cfa`): kernel messages on the panel once the
+    display modules load.
+  `linux-lts-e5` is on GitHub after all (the fresh clone of 2026-09-28 came from
+  `Enceka/linux-lts-e5` with `e5-6.18` at the M7 commit) -- rooted, shallow history.
 - **Audio: the speaker plays through plain ALSA and PipeWire, every stream (2026-09-26).**
   FINDINGS 24.8 has the chain (kernel `0012`-`0014`, UCM route, profile selects,
   WirePlumber rule); FINDINGS 34 the three faults that left only the first sound after

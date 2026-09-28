@@ -6,13 +6,16 @@
 #   upstream/build.sh                                (from the host; runs itself in the container)
 #
 # E5_KERNEL_TREE  the kernel repository (default: linux-lts-e5 next to upstream/)
+# E5_RELEASE=1    the kernel of a flash package (openwrt/make-flash-bundle.sh E5_MAINLINE=1): the command line
+#                 without e5.openwrt=, so boot/init starts the installed openwrt.ext4 and it can be the default
+#                 boot; into upstream/out-release/, so that the trial scripts (upstream/out/) never take it
 # The objects stay in the docker volume e5-mainline-out (a bind mount would be slower), per kernel release.
 set -eo pipefail
 if [ -z "${E5_IN_CONTAINER:-}" ]; then
     HERE="$(cd "$(dirname "$0")" && pwd)"
     K="${E5_KERNEL_TREE:-$HERE/../linux-lts-e5}"
     K="$(cd "$K" && pwd)"
-    exec docker run --rm -e E5_IN_CONTAINER=1 -v "$K":/src/linux -v e5-mainline-out:/out -v "$HERE":/work \
+    exec docker run --rm -e E5_IN_CONTAINER=1 -e E5_RELEASE="${E5_RELEASE:-}" -v "$K":/src/linux -v e5-mainline-out:/out -v "$HERE":/work \
         e5-mainline-build bash /work/build.sh "$@"
 fi
 
@@ -23,8 +26,15 @@ mkdir -p "$O"
 echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "   (the tree has uncommitted changes: the release gets -dirty)"
 
+CFG=/work/e5-mainline.config DEST=/work/out
+if [ -n "${E5_RELEASE:-}" ]; then
+    CFG=/tmp/e5-mainline-release.config DEST=/work/out-release
+    sed 's/ e5\.openwrt=[A-Za-z0-9._-]*//' /work/e5-mainline.config > "$CFG"
+    ! grep -q 'e5\.openwrt=' "$CFG" || { echo "e5.openwrt= is still in the release command line" >&2; exit 1; }
+    echo "   (release: no e5.openwrt=, into out-release/)"
+fi
 make O="$O" ARCH=arm64 allnoconfig >/dev/null
-./scripts/kconfig/merge_config.sh -m -O "$O" "$O/.config" /work/e5-mainline.config >/dev/null
+./scripts/kconfig/merge_config.sh -m -O "$O" "$O/.config" "$CFG" >/dev/null
 make O="$O" ARCH=arm64 olddefconfig >/dev/null
 # options Kconfig did not take: known ones are listed in config-ignored.txt, any other stops the build
 # (mu300-linux: a silently dropped option has cost a working feature before)
@@ -39,7 +49,7 @@ while IFS= read -r l; do
         fi
         [ "$g" = "$v" ] || grep -qx "$k" /work/config-ignored.txt 2>/dev/null || bad="$bad\nNOT SET: $k want $v got ${g:-unset}";;
     esac
-done < /work/e5-mainline.config
+done < "$CFG"
 [ -z "$bad" ] || { printf "config options not taken:$bad\n" >&2; exit 1; }
 
 # on failure, the compiler's own messages (a plain grep for "error" also matches object names)
@@ -48,16 +58,16 @@ make O="$O" ARCH=arm64 -j"$(nproc)" Image modules > "$O/build.log" 2>&1 || {
     echo "--- end of build.log:"; tail -25 "$O/build.log"
     exit 1
 }
-mkdir -p /work/out
-cp "$O/arch/arm64/boot/Image" "$O/System.map" "$O/modules.builtin" "$O/modules.builtin.modinfo" /work/out/
-cp "$O/.config" /work/out/config
-python3 /work/wrap-image.py /work/out/Image /work/out/Image.lk
-cat "$O/include/config/kernel.release" > /work/out/kernel.release
+mkdir -p $DEST
+cp "$O/arch/arm64/boot/Image" "$O/System.map" "$O/modules.builtin" "$O/modules.builtin.modinfo" $DEST/
+cp "$O/.config" $DEST/config
+python3 /work/wrap-image.py $DEST/Image $DEST/Image.lk
+cat "$O/include/config/kernel.release" > $DEST/kernel.release
 # the modules: flat for the boot image (boot/build-boot-image.py --modules), and as lib/modules/<release> for
 # a root filesystem
-rm -rf "$O/mod" /work/out/modules && mkdir -p /work/out/modules
+rm -rf "$O/mod" $DEST/modules && mkdir -p $DEST/modules
 make -s O="$O" ARCH=arm64 INSTALL_MOD_PATH="$O/mod" INSTALL_MOD_STRIP=1 modules_install
-find "$O/mod/lib/modules" -name '*.ko' -exec cp {} /work/out/modules/ \;
-tar -C "$O/mod" -cf /work/out/modules.tar lib/modules
-echo "== modules: $(ls /work/out/modules | wc -l)"
-echo "== $(cat /work/out/kernel.release): $(ls -la /work/out/Image.lk | awk '{print $5}') bytes"
+find "$O/mod/lib/modules" -name '*.ko' -exec cp {} $DEST/modules/ \;
+tar -C "$O/mod" -cf $DEST/modules.tar lib/modules
+echo "== modules: $(ls $DEST/modules | wc -l)"
+echo "== $(cat $DEST/kernel.release): $(ls -la $DEST/Image.lk | awk '{print $5}') bytes"

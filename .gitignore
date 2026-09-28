@@ -56,6 +56,7 @@ opengl-meson.tgz
 # rootfs build output (out/rootfs.ext4 is 8 GiB) and macOS droppings: the repo
 # carries the scripts that build these, never the results.
 out/
+out-release/
 .DS_Store
 
 # python bytecode left by running the tools

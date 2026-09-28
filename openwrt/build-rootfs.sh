@@ -58,6 +58,9 @@
 # its own, which boot/init unpacks into the image from
 # e5linux/device-files.tar on userdata.
 #
+# E5_ROOT_MODULES=<tar> adds another kernel's root modules (lib/modules/<release>/...: upstream/root-modules.sh,
+# for the mainline kernel) next to the 5.15 ones; the image then runs on either kernel.
+#
 # E5_IMAGE_MB sets the image's size (default 1024).  Needs Docker with arm64
 # (native on Apple silicon).
 set -euo pipefail
@@ -165,6 +168,14 @@ if [ -n "$STANDALONE" ]; then
     cp "$WORK/fonts/"NotoSansCJK-*.ttc "$SA/fonts/"
 fi
 
+# another kernel's root modules (E5_ROOT_MODULES), unpacked here; an empty directory otherwise
+RM="$WORK/root-modules"
+rm -rf "$RM" && mkdir -p "$RM"
+if [ -n "${E5_ROOT_MODULES:-}" ]; then
+    tar -xf "$E5_ROOT_MODULES" -C "$RM"
+    echo "root modules: $(ls "$RM/lib/modules" 2>/dev/null | tr '\n' ' ')($(find "$RM" -name '*.ko' | wc -l | tr -d ' ') modules)"
+fi
+
 # (the standalone tree is only the image's source)
 TAROUT=$OUT; [ -z "$STANDALONE" ] || TAROUT=$WORK
 docker import --platform linux/arm64 "$WORK/$TARBALL" e5-openwrt-base:$VER >/dev/null
@@ -179,7 +190,7 @@ docker run --rm --platform linux/arm64 \
     -v "$WORK/e5-vibrate":/in/e5-vibrate:ro -v "${INFOSCREEN:-$WORK/no-infoscreen}":/in/infoscreen:ro \
     -v "$WORK/e5-ctl-raw":/in/e5-ctl-raw:ro -v "$TOP/rootfs/overlay/usr/share/alsa":/in/alsa:ro \
     -v "$WORK/e5-modemd":/in/e5-modemd:ro \
-    -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" \
+    -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
     e5-openwrt-base:$VER /bin/sh -euc '
@@ -287,6 +298,7 @@ done
 rm -rf $R/lib/modules/* $R/boot
 arel=$(cat /in/sa/audio/release)
 mkdir -p $R/lib/modules/$arel/audio && cp /in/sa/audio/*.ko $R/lib/modules/$arel/audio/
+cp -a /in/root-modules/. $R/ && chown -R 0:0 $R/lib/modules
 if [ -n "$STANDALONE" ]; then
     # the device'"'"'s own files, where the directory form binds the Debian root'"'"'s
     cp -a /in/sa/firmware/. $R/lib/firmware/

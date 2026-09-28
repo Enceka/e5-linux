@@ -4,6 +4,10 @@
 # ./flash.sh (openwrt/bundle/README.md is its manual).
 #
 #   openwrt/make-flash-bundle.sh
+#   E5_MAINLINE=1 openwrt/make-flash-bundle.sh    the mainline 6.18 kernel instead of 5.15:
+#       e5-openwrt-flash-<version>-mainline-<git>; the kernel of E5_RELEASE=1 upstream/build.sh
+#       (upstream/out-release: no e5.openwrt=, so it is no trial), the boot modules of
+#       upstream/module-order.txt, and an image rebuilt with upstream/root-modules.txt in it
 #
 # What goes in, and what does not:
 #
@@ -35,8 +39,19 @@ IMG="$OUT/e5-openwrt-$VER-generic.ext4.gz"
 KERNEL=${E5_KERNEL:-$TOP/work/Image-bt2}
 GIT=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
 NAME=e5-openwrt-flash-$VER-$GIT
-
-if [ ! -f "$IMG" ] || [ -n "${E5_REBUILD:-}" ]; then
+MAINLINE=${E5_MAINLINE:-}
+KOUT=$TOP/upstream/out-release
+if [ -n "$MAINLINE" ]; then
+    NAME=e5-openwrt-flash-$VER-mainline-$GIT
+    KERNEL=$KOUT/Image.lk
+    [ -f "$KERNEL" ] || { echo "no $KERNEL: E5_RELEASE=1 upstream/build.sh" >&2; exit 1; }
+    # (grep -c, not grep -q: see the kernel check below)
+    [ "$(strings "$KERNEL" | grep -c 'e5\.openwrt=' || true)" = 0 ] ||
+        { echo "$KERNEL has e5.openwrt= on its command line: a trial kernel" >&2; exit 1; }
+    E5_UPSTREAM_OUT=$KOUT sh "$TOP/upstream/root-modules.sh"
+    # the image always again: it has to carry this kernel's root modules
+    E5_ROOT_MODULES=$KOUT/root-modules.tar E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
+elif [ ! -f "$IMG" ] || [ -n "${E5_REBUILD:-}" ]; then
     E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
 fi
 echo "== checking the image for device files"
@@ -46,13 +61,27 @@ bad=$(tar -tzf "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz" |
 
 echo "== boot image without the overlay"
 BOOT="$TOP/work/boot-linux-slotb-bundle"
-python3 "$TOP/boot/build-boot-image.py" --stock-boot "$TOP/dumps/boot_b.img" \
-    --misc-head "$TOP/dumps/misc-head.bin" --kernel "$KERNEL" --modules "$TOP/out_modules" \
-    --busybox "$TOP/work/busybox/ext/usr/bin/busybox" --out "$BOOT.img" | tail -1
+if [ -n "$MAINLINE" ]; then
+    # (the kernel's command line is its own, CONFIG_CMDLINE_FORCE: upstream/make-boot.sh)
+    BOOT="$TOP/work/boot-linux-slotb-bundle-mainline"
+    python3 "$TOP/boot/build-boot-image.py" --stock-boot "$TOP/dumps/boot_b.img" \
+        --misc-head "$TOP/dumps/misc-head.bin" --kernel "$KERNEL" --modules "$KOUT/modules" \
+        --module-order "$TOP/upstream/module-order.txt" --cmdline "" \
+        --busybox "$TOP/work/busybox/ext/usr/bin/busybox" --out "$BOOT.img" | tail -1
+else
+    python3 "$TOP/boot/build-boot-image.py" --stock-boot "$TOP/dumps/boot_b.img" \
+        --misc-head "$TOP/dumps/misc-head.bin" --kernel "$KERNEL" --modules "$TOP/out_modules" \
+        --busybox "$TOP/work/busybox/ext/usr/bin/busybox" --out "$BOOT.img" | tail -1
+fi
 [ "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['overlay_files'])" "$BOOT.json")" = 0 ] ||
     { echo "the boot image has an overlay" >&2; exit 1; }
 # the kernel and the image's modem modules have to be one build
 rel=$(strings "$TOP/out_linux/drivers/net/wwan/wwan.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1)
+if [ -n "$MAINLINE" ]; then
+    rel=$(cat "$KOUT/kernel.release")
+    tar -tf "$KOUT/root-modules.tar" | grep -q "^lib/modules/$rel/modem/sipc_wwan.ko$" ||
+        { echo "$KOUT/root-modules.tar is not of $rel" >&2; exit 1; }
+fi
 # (not "strings | grep -q": grep leaves early, and pipefail counts the SIGPIPE)
 grep -q "Linux version $rel " < <(strings "$KERNEL") ||
     { echo "the kernel ($KERNEL) is not the build of out_linux ($rel)" >&2; exit 1; }

@@ -13,12 +13,14 @@ on the ZTE MU300, UMS9620 -- the E5's UMS9621 is the "lite" member of the same q
 | file | what |
 |---|---|
 | `Dockerfile` | the build container (Ubuntu 26.04, gcc 15, native arm64) |
-| `build.sh` | builds `linux-lts-e5` in the container: `out/Image`, `out/Image.lk`, `out/config`, `System.map`, `modules.builtin*` |
+| `build.sh` | builds `linux-lts-e5` in the container: `out/Image`, `out/Image.lk`, `out/config`, `System.map`, `modules.builtin*`, `modules/`; `E5_RELEASE=1`: the kernel of a flash package, without `e5.openwrt=`, into `out-release/` |
 | `e5-mainline.config` | the config fragment, merged on top of `allnoconfig`; an option Kconfig does not take stops the build (`config-ignored.txt` for known exceptions) |
 | `wrap-image.py` | LK copies the kernel to 0x80080000; the stub moves the entry to 0x80200000 (2 MiB aligned) |
 | `init-bringup` | a probe init: logs devices, drivers, deferrals to kmsg and pmsg, warm-reboots |
-| `make-boot.sh` | a slot-b boot image of the kernel and an init (`boot/build-boot-image.py`) |
+| `make-boot.sh` | a slot-b boot image of the kernel and an init (`boot/build-boot-image.py`); `E5_UPSTREAM_OUT` for `out-release/` |
 | `module-order.txt` | the modules `boot/init` loads from the initramfs, in the 5.15 order |
+| `root-modules.txt`, `root-modules.sh` | the modules OpenWrt loads from its root (`sipc_wwan`, the audio stack): `out/root-modules.tar`, which the trial scripts put into the trial root and a flash package's image carries |
+| `audio-diag.sh` | on the device: the card, the PA, the mixer, the PCM's pointer, DAPM and the interrupts while a tone plays |
 | `trial-from-openwrt.sh` | the next trial, flashed from a running OpenWrt trial over the USB LAN (no Android round trip) |
 | `trial-from-android.sh` | the same from Android: `sipc_wwan.ko` into the trial root, then `boot/flash-trial.sh` |
 
@@ -29,6 +31,9 @@ upstream/make-boot.sh                        # work/boot-mainline.img
 boot/flash-trial.sh work/boot-mainline.img   # from Android: one trial boot on slot b
 # back in Android: /sys/fs/pstore/console-ramoops-0 and pmsg-ramoops-0 (tools/collect-logs.sh)
 ```
+
+A flash package of this kernel -- OpenWrt on 6.18 as the installed system, not a trial -- is
+`E5_RELEASE=1 upstream/build.sh` and then `E5_MAINLINE=1 openwrt/make-flash-bundle.sh` (see "Release" below).
 
 A trial boot is safe by construction: slot b is armed with tries=2 and never marked successful, so the next
 boot after it is Android's; a boot that hangs is reset by the PMIC watchdog LK arms (~295 s, FINDINGS 9).
@@ -54,11 +59,30 @@ The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_
 | M3: Wi-Fi and Bluetooth (marlin3lite over SDIO: wcn_bsp, sprd_wlan_combo, sprdbt_tty) | **done 2026-09-27** (hotspot on 5745 MHz beaconing, hci0 up with the factory address at boot) |
 | M4: the modem (SIPC, SIPA, modem loader, Trusty) with ModemManager as on 5.15 | **done 2026-09-28** (5G NR, connected, data on sipa_eth0) |
 | M5: display (sprd DRM, DSI panel), touch, keypad, vibrator | **mostly done 2026-09-28** (panel, fbcon, backlight, touch, keypad, gpio-keys, vibrator, RGB LED; not yet: DPU DVFS, GSP) |
-| M6: charger, fuel gauge, thermal, cpufreq | **charging, fuel gauge and the charger manager run on the device (2026-09-28)**: `aw322xx_charger` charging at 496 mA over USB, `sc27xx-fgu` reads the battery, charger-manager telemetry every 15 s; thermal: the battery zone works, the SoC/board zones register none (`virtual_thermal` -22) -- to check by hand; cpufreq not ported (not loaded on 5.15 Linux either) |
-| M7: audio (AGDSP, VBC, UMP9620 codec, aw87xxx PA) | **the DSP boots again (2026-09-28)**: the 24 modules load, the card `sprdphone-sc2730` registers, and the AGDSP image is written and started through `audiocp_boot` -- the first full trial had panicked there (`memset_io` on NULL+0x400): `audio_mem_vmap()` vmapped memory without pages (the DSP's IRAM, its no-map DDR) and returned NULL plus the page offset; it ioremaps it now (`8048e353a`, the class of `ce632be0c`). **The speaker plays (2026-09-28, heard)**: it had been silent because the DMA engine was not built (`CONFIG_DMADEVICES`: the vendor sprd-dma of `0015e503b` never compiled, every `hw_params` failed with -ENODEV); built in now, as on 5.15. Not checked yet: capture, the earpiece, call audio |
+| M6: charger, fuel gauge, thermal, cpufreq | **done 2026-09-28**: `aw322xx_charger` charging at 496 mA over USB, `sc27xx-fgu` reads the battery, charger-manager telemetry every 15 s; **25 thermal zones as on 5.15** (the SoC's 21 sensors, `soc-thmzone` with its 110 C trip, board/PA/charger, battery; below); cpufreq not ported (not loaded on 5.15 Linux either) |
+| M7: audio (AGDSP, VBC, UMP9620 codec, aw87xxx PA) | **the DSP boots again (2026-09-28)**: the 24 modules load, the card `sprdphone-sc2730` registers, and the AGDSP image is written and started through `audiocp_boot` -- the first full trial had panicked there (`memset_io` on NULL+0x400): `audio_mem_vmap()` vmapped memory without pages (the DSP's IRAM, its no-map DDR) and returned NULL plus the page offset; it ioremaps it now (`8048e353a`, the class of `ce632be0c`). **The speaker plays (2026-09-28, heard)**: it had been silent because the DMA engine was not built (`CONFIG_DMADEVICES`: the vendor sprd-dma of `0015e503b` never compiled, every `hw_params` failed with -ENODEV); built in now, as on 5.15. **Capture works** (2026-09-28): the main mic on `hw:0,2`, mono S16, picks up the speaker's 880 Hz beep (97-345 against 0.1-0.3 of the room). The earpiece: routed as on 5.15, silent to the ear and to the mic -- the E5 may not have one; skipped. Call audio: not on 5.15 either |
 | M8: GPU (Mali G57) | **done 2026-09-28**, brought forward (panfrost, as on 5.15; the info screen's cog renders through it) |
 
-The target is what works on 5.15 today (`docs/STATUS.md`, `boot/module-order.txt`).
+The target is what works on 5.15 today (`docs/STATUS.md`, `boot/module-order.txt`). Of that, not on 6.18 yet:
+pinctrl (the DT's pin states are left as LK set them), the SD card slot (its controller waits for a cd-gpio), the
+DPU's DVFS and the GSP 2D engine, and the USB/UART/JTAG pin mux (left out: the one trial with it built in lost
+USB). Not on either kernel: call audio, cpufreq (5.15 Linux does not load it), the earpiece.
+
+## Release (2026-09-28)
+
+The flash package's kernel is the trial's with one difference: its command line has no `e5.openwrt=`, so
+`boot/init` starts the installed `openwrt.ext4`, OpenWrt can be the default boot, and `e5-next-boot linux` and
+the info screen's "默认启动" accept it. `E5_RELEASE=1 upstream/build.sh` builds it into `out-release/`, which the
+trial scripts never read. `E5_MAINLINE=1 openwrt/make-flash-bundle.sh` then makes
+`out/openwrt/e5-openwrt-flash-<version>-mainline-<git>.{tar.gz,zip}`: the boot image with `module-order.txt`'s
+modules, and the generic OpenWrt image rebuilt with `root-modules.txt` in it (`build-rootfs.sh E5_ROOT_MODULES`,
+next to the 5.15 modules, so the same image runs on either kernel). The package refuses a kernel with
+`e5.openwrt=` in it and root modules of another build. It installs and updates like the 5.15 one (`flash.py`,
+`--update` keeps the settings): first installed on the test E5 on 2026-09-28 by `--update` from 5.15, with
+data, hotspot, modem, info screen, audio, Bluetooth and charging up after the first boot.
+
+A boot that fails still falls back to Android (slot b is armed with two tries, marked successful by
+`e5-boot-ok` once the system is up), as with the 5.15 packages.
 
 ### M1 (2026-09-27)
 
@@ -169,6 +193,19 @@ What 6.18 broke on the way, besides the renames `port-api.py` does: `drm_open()`
 fw_devlink lets the panel attach before the DSI binds (an e5-linux work item initialised in bind was then queued
 uninitialised: a panic); genpd registers a device per domain name, and all the vendor's nodes are `power-domain`;
 the panel created its proc entry again on every deferred probe.
+
+### M6: thermal (2026-09-28)
+
+The SoC's four sensor blocks (`sprd,thermal_r5p0`, 21 zones: the cores, cluster, GPU, MM, LTE/NR, the PHYs)
+stayed deferred without a word: their calibration (`thm*-ratio`, `thm*-sen*`) is in the SoC's AON eFuse
+(`sprd,qogirn6lite-efuse`), which had no driver -- mainline's sprd-efuse with the vendor's QogirN6Lite geometry
+(`2671fb482`: 51 blocks from 53, double). The board, PA and charger zones are mainline's generic-adc-thermal on the
+PMIC ADC. `soc-thmzone` (the vendor's virtual_thermal, the hottest of the SoC's sensors, critical at 110 C) is a
+module loaded from the initramfs, as on 5.15: built in it probes before the zones it is made of and gives up.
+On the device at room temperature: the SoC 38-41 C, board 38-40 C, `soc-thmzone` 40 C; the info screen shows
+`soc-thmzone`. As on 5.15: the PMIC tsensor works in calibration mode only (its probe ends with -22), the shell
+zones front/back read nothing ("fail to get virt temp diff"), and `chg-thmzone` reads ~85 C -- channel 4 of the
+ADC gives 134 mV where the board's and PA's give ~485 mV, with the same driver, scale and table as 5.15.
 
 ### What the vendor DT asks for
 

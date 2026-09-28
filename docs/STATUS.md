@@ -101,8 +101,19 @@ FINDINGS.
     trial (`trial-from-openwrt.sh`): the stream starts, the aw87xxx goes to `Music`
     and back to `Off` when idle, the beep is heard.  Found with
     `upstream/audio-diag.sh` (card, PA, mixer, PCM status, DAPM, interrupts and the
-    kernel's lines during a tone; `logs/mainline-m7-dma-20260928`).  Capture, the
-    earpiece and call audio are not checked on 6.18 yet.
+    kernel's lines during a tone; `logs/mainline-m7-dma-20260928`).
+  * **Capture works on 6.18** (2026-09-28, late): the main mic (`hw:0,2`, mono S16)
+    picks up the speaker's 880 Hz beep.  The earpiece, routed as on 5.15, stayed silent
+    in listening and microphone tests; the E5 may have none -- skipped, as is call
+    audio, which 5.15 does not have either.
+  * **Thermal as on 5.15** (2026-09-28, late): 25 zones.  The SoC's r5p0 blocks had
+    stayed deferred for want of the SoC eFuse (linux-lts-e5 `2671fb482`); board/PA/charger
+    are generic-adc-thermal; `soc-thmzone` a module from the initramfs.  `chg-thmzone`
+    reads ~85 C (ADC channel 4 at 134 mV; same driver and table as 5.15), so the info
+    screen shows `soc-thmzone` now.  Details: `upstream/README.md`, "M6: thermal".
+  * **Released as a flash package** (2026-09-28): `E5_RELEASE=1 upstream/build.sh` (no
+    `e5.openwrt=`), `E5_MAINLINE=1 openwrt/make-flash-bundle.sh`; the test E5 runs
+    it as its installed system, updated from 5.15 with `--update`.
   * One trial boot showed no USB gadget on the Mac at all (the device returned to
     Android); the next two did (gadget at ~25 s, OpenWrt's DHCP at ~50 s), and the
     initramfs log of the silent one had the gadget bound and `usb0` with carrier.
@@ -280,7 +291,7 @@ FINDINGS.
 | keys | 9-key keypad works; volume/power/KEY_F1 events verified; confirm = KP_Enter, back = back+delete; power = logind (short press locks, long press powers off) |
 | disk | 2.0 GiB used, 1.9 GiB free on the 4 GiB loop file |
 | apt | Nanjing University mirror over http (TLS handshakes hang on this bearer) |
-| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`): M1-M6, M8 run on the device under OpenWrt, M7 (audio): the speaker plays (capture, earpiece, calls not yet checked); both SIM cards (FINDINGS 47) |
+| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`): M1-M6, M8 run on the device under OpenWrt, M7 (audio): the speaker and capture (earpiece: no sound, may not exist; calls: not on 5.15 either); thermal as on 5.15; both SIM cards (FINDINGS 47); the flash package of `E5_MAINLINE=1 openwrt/make-flash-bundle.sh` installs it as the system |
 | openwrt | OpenWrt 25.12.5 in `/openwrt` of the root image, booted by `boot-os`/`boot-os-next` (`e5-os`); WAN by ModemManager (+ patch `06`), LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; `openwrt/README.md`, FINDINGS 39; standalone as `/data/e5linux/openwrt.ext4` with its own firmware, vendor subset, modem modules and fonts, no Debian needed (native18, FINDINGS 43) |
 
 ## Open questions

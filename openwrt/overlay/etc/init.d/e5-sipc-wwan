@@ -1,7 +1,8 @@
 #!/bin/sh /etc/rc.common
 # The modem's AT port: load sipc_wwan once the CP has booted and its AT
 # channel (/dev/stty_nr1) exists (e5-sipc-wwan.service on Debian).  Its WWAN
-# port reaches ModemManager through hotplug.  The modules are the ones built
+# port reaches ModemManager through hotplug, for the SIM card /etc/config/e5-sim
+# names (sipc_wwan card=; e5-sim switches).  The modules are the ones built
 # for this kernel: in the image (the standalone form, openwrt/build-rootfs.sh
 # E5_STANDALONE=1), or the Debian root's.
 START=23
@@ -23,8 +24,14 @@ start_service() {
 		mkdir -p /lib/modules/$(uname -r)
 		# (the WWAN core is a module on 5.15, built in on the mainline kernel)
 		[ -d /sys/class/wwan ] || grep -q "^wwan " /proc/modules || insmod $M/wwan.ko || exit 1
-		grep -q "^sipc_wwan " /proc/modules || insmod $M/sipc_wwan.ko || exit 1
-		echo "sipc_wwan loaded"'
+		# card= for the first card too: AT+SPACTCARD sticks to the channel, so
+		# a port without the prefix can still reach the second card (the 5.15
+		# build has no card parameter, and the first card is the CP'"'"'s default)
+		C=$(uci -q get e5-sim.main.card)
+		[ "$C" = 1 ] || C=0
+		grep -q "^sipc_wwan " /proc/modules || insmod $M/sipc_wwan.ko card=$C ||
+			{ [ $C = 0 ] && insmod $M/sipc_wwan.ko; } || exit 1
+		echo "sipc_wwan loaded, SIM card $C"'
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance

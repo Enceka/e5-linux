@@ -34,7 +34,12 @@
 # package for a new one (it does not reinstall a version it has).
 set -euo pipefail
 # 1: +IMSREGADDR/+SPNRINDICATE among the ignored unsolicited reports
-E5REV=1
+# 2: context 1 is the modem's net port (sipa_eth8 for the second SIM card)
+# 3: +SPSWDATA in the power-up from +CFUN: 0 (the port's card as the data card)
+# 4: both cards up from +CFUN: 0, and +SPSWDATA before every dial (SIM card switch)
+# 5: the work modes (+SPTESTMODEM) in that power-up, no stop on the other card's errors,
+#    and the SIM slots (both cards listed; a switch through e5-sim)
+E5REV=5
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"

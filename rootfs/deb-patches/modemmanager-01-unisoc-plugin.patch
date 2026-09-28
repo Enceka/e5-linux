@@ -180,7 +180,7 @@ diff -ruN a/src/plugins/unisoc/77-mm-unisoc-sipc.rules b/src/plugins/unisoc/77-m
 diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c b/src/plugins/unisoc/mm-broadband-bearer-unisoc.c
 --- a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c	1970-01-01 08:00:00
 +++ b/src/plugins/unisoc/mm-broadband-bearer-unisoc.c	2026-09-26 18:38:53
-@@ -0,0 +1,562 @@
+@@ -0,0 +1,597 @@
 +/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 +/*
 + * This program is free software; you can redistribute it and/or modify
@@ -205,6 +205,10 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c b/src/plugins/unisoc
 + * sipa_eth0, the one interface the E5 hands to ModemManager.  (Another
 + * context's traffic does not come out of sipa_eth0 -- measured: context 12,
 + * which the generic profile selection once picked, left sipa_eth0 silent.)
++ * That is the first SIM card's; the second card's context 1 goes to net id
++ * 8, sipa_eth8 (as the vendor RIL names it), which the E5 hands over instead
++ * when the AT port is for that card.  So context 1 is the modem's net port,
++ * whichever it is.
 + */
 +
 +#include <config.h>
@@ -262,6 +266,8 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c b/src/plugins/unisoc
 +    ctx->cid = cid;
 +    if (data)
 +        ctx->data = g_object_ref (data);
++    else if (cid <= 1)
++        ctx->data = mm_base_modem_get_best_data_port (modem, MM_PORT_TYPE_NET);
 +    else {
 +        g_autofree gchar *name = NULL;
 +
@@ -339,6 +345,33 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c b/src/plugins/unisoc
 +}
 +
 +static void
++spswdata_ready (MMBaseModem  *modem,
++                GAsyncResult *res,
++                GTask        *task)
++{
++    CommonContext    *ctx = g_task_get_task_data (task);
++    GError           *error = NULL;
++    g_autofree gchar *cmd = NULL;
++
++    if (!mm_base_modem_at_command_full_finish (modem, res, &error)) {
++        mm_obj_warn (g_task_get_source_object (task), "couldn't make the card the data card: %s",
++                     error->message);
++        g_clear_error (&error);
++    }
++
++    cmd = g_strdup_printf ("+CGACT=1,%u", ctx->cid);
++    mm_base_modem_at_command_full (ctx->modem,
++                                   MM_IFACE_PORT_AT (ctx->primary),
++                                   cmd,
++                                   60,
++                                   FALSE, /* allow_cached */
++                                   FALSE, /* is_raw */
++                                   g_task_get_cancellable (task),
++                                   (GAsyncReadyCallback) cgact_ready,
++                                   task);
++}
++
++static void
 +dial_3gpp (MMBroadbandBearer   *self,
 +           MMBaseModem         *modem,
 +           MMPortSerialAt      *primary,
@@ -355,15 +388,17 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c b/src/plugins/unisoc
 +    if (!task)
 +        return;
 +
-+    cmd = g_strdup_printf ("+CGACT=1,%u", cid);
++    /* the port's card becomes the one that carries data, as the vendor RIL
++     * makes the preferred data card before it sets up a data call: the CP
++     * keeps the data card of the last AT+SPSWDATA, whichever card that was */
 +    mm_base_modem_at_command_full (modem,
 +                                   MM_IFACE_PORT_AT (primary),
-+                                   cmd,
-+                                   60,
++                                   "+SPSWDATA",
++                                   10,
 +                                   FALSE, /* allow_cached */
 +                                   FALSE, /* is_raw */
 +                                   cancellable,
-+                                   (GAsyncReadyCallback) cgact_ready,
++                                   (GAsyncReadyCallback) spswdata_ready,
 +                                   task);
 +}
 +
@@ -799,7 +834,7 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-bearer-unisoc.h b/src/plugins/unisoc
 diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/mm-broadband-modem-unisoc.c
 --- a/src/plugins/unisoc/mm-broadband-modem-unisoc.c	1970-01-01 08:00:00
 +++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c	2026-09-26 21:39:07
-@@ -0,0 +1,1126 @@
+@@ -0,0 +1,1444 @@
 +/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 +/*
 + * This program is free software; you can redistribute it and/or modify
@@ -838,11 +873,18 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 + *    so it is never sent.  The CP comes out of modem_control at +CFUN: 0 with
 + *    the SIM off, though, and the vendor RIL's way up from there is AT+SFUN=2
 + *    (SIM on) and AT+SFUN=4 (protocol stack on): done as soon as the port is
-+ *    open, before initialization reads the SIM, and by power-up.
++ *    open, before initialization reads the SIM, and by power-up.  For both
++ *    cards, as the RIL does (AT+SPACTCARD=<card> as the prefix; cards_on()).
++ *    A card whose stack comes up while the other card is attached asserts
++ *    the CP (mnphone_api.c:7048); with both up from here a switch of the
++ *    port to the other card (sipc_wwan card=) never does that.  The data
++ *    card is the one of the last AT+SPSWDATA: sent in the power-up, and
++ *    again before every dial (the bearer).
 + */
 +
 +#include <config.h>
 +
++#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
 +
@@ -851,7 +893,9 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +
 +#include "ModemManager.h"
 +#include "mm-base-modem-at.h"
++#include "mm-base-sim.h"
 +#include "mm-iface-modem.h"
++#include "mm-modem-helpers.h"
 +#include "mm-iface-modem-signal.h"
 +#include "mm-iface-modem-messaging.h"
 +#include "mm-log-object.h"
@@ -1510,11 +1554,99 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +/*****************************************************************************/
 +/* Power */
 +
-+static const MMBaseModemAtCommand sim_on_sequence[] = {
-+    { "+SFUN=2", 60, FALSE, mm_base_modem_response_processor_no_result_continue },
-+    { "+SFUN=4", 60, FALSE, mm_base_modem_response_processor_no_result_continue },
-+    { NULL }
-+};
++/* Both cards on, from +CFUN: 0, in the vendor RIL's order: the SIMs, each
++ * card's work mode (+SPTESTMODEM, the modes +SPTESTMODE? holds), the port's
++ * card as the data card, then the stacks, the first card's first.  Without
++ * the work modes the second card's stack asserts the CP (mnphone_api.c:7038).
++ * Every command goes on whatever it answers: the second slot may be empty.
++ * The last one leaves the channel on the first card, for a port without the
++ * card prefix. */
++typedef struct {
++    MMBaseModemAtCommandAlloc cmds[9];
++} CardsOnContext;
++
++static void
++cards_on_context_free (CardsOnContext *ctx)
++{
++    guint i;
++
++    for (i = 0; i < G_N_ELEMENTS (ctx->cmds); i++)
++        mm_base_modem_at_command_alloc_clear (&ctx->cmds[i]);
++    g_slice_free (CardsOnContext, ctx);
++}
++
++static gboolean
++cards_on_finish (MMBaseModem   *self,
++                 GAsyncResult  *res,
++                 GError       **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++cards_on_sequence_ready (MMBaseModem  *self,
++                         GAsyncResult *res,
++                         GTask        *task)
++{
++    GError *error = NULL;
++
++    mm_base_modem_at_sequence_finish (self, res, NULL, &error);
++    if (error)
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++cards_on_testmode_ready (MMBaseModem  *self,
++                         GAsyncResult *res,
++                         GTask        *task)
++{
++    CardsOnContext *ctx;
++    const gchar    *response;
++    guint           mode1 = 134, mode2 = 134, a, b, n = 0;
++
++    /* +SPTESTMODE: <card 1>,<card 2>,<primary SIM>,... */
++    response = mm_base_modem_at_command_finish (self, res, NULL);
++    response = response ? strstr (response, "+SPTESTMODE:") : NULL;
++    if (response && sscanf (response, "+SPTESTMODE:%u,%u", &a, &b) == 2) {
++        mode1 = a;
++        mode2 = b;
++    }
++
++    ctx = g_slice_new0 (CardsOnContext);
++    ctx->cmds[n].command = g_strdup ("+SPACTCARD=0;+SFUN=2");
++    ctx->cmds[n++].timeout = 60;
++    ctx->cmds[n].command = g_strdup ("+SPACTCARD=1;+SFUN=2");
++    ctx->cmds[n++].timeout = 60;
++    ctx->cmds[n].command = g_strdup_printf ("+SPACTCARD=1;+SPTESTMODEM=%u,%u", mode1, mode2);
++    ctx->cmds[n++].timeout = 10;
++    ctx->cmds[n].command = g_strdup_printf ("+SPACTCARD=0;+SPTESTMODEM=%u,%u", mode1, mode2);
++    ctx->cmds[n++].timeout = 10;
++    ctx->cmds[n].command = g_strdup ("+SPSWDATA");
++    ctx->cmds[n++].timeout = 10;
++    ctx->cmds[n].command = g_strdup ("+SPACTCARD=0;+SFUN=4");
++    ctx->cmds[n++].timeout = 60;
++    ctx->cmds[n].command = g_strdup ("+SPACTCARD=1;+SFUN=4");
++    ctx->cmds[n++].timeout = 60;
++    ctx->cmds[n].command = g_strdup ("+SPACTCARD=0;+CFUN?");
++    ctx->cmds[n++].timeout = 5;
++    g_task_set_task_data (task, ctx, (GDestroyNotify) cards_on_context_free);
++
++    mm_base_modem_at_sequence (self, (const MMBaseModemAtCommand *) ctx->cmds, NULL, NULL,
++                               (GAsyncReadyCallback) cards_on_sequence_ready, task);
++}
++
++static void
++cards_on (MMBaseModem         *self,
++          GAsyncReadyCallback  callback,
++          gpointer             user_data)
++{
++    mm_base_modem_at_command (self, "+SPTESTMODE?", 5, FALSE,
++                              (GAsyncReadyCallback) cards_on_testmode_ready,
++                              g_task_new (self, NULL, callback, user_data));
++}
 +
 +static gboolean
 +cfun_is_zero (const gchar *response)
@@ -1559,8 +1691,7 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +{
 +    GError *error = NULL;
 +
-+    mm_base_modem_at_sequence_finish (self, res, NULL, &error);
-+    if (error)
++    if (!cards_on_finish (self, res, &error))
 +        g_task_return_error (task, error);
 +    else
 +        g_task_return_boolean (task, TRUE);
@@ -1576,9 +1707,8 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +
 +    response = mm_base_modem_at_command_finish (self, res, NULL);
 +    if (cfun_is_zero (response)) {
-+        mm_obj_dbg (self, "SIM and protocol stack off (+CFUN: 0): AT+SFUN=2, AT+SFUN=4");
-+        mm_base_modem_at_sequence (self, sim_on_sequence, NULL, NULL,
-+                                   (GAsyncReadyCallback) power_sequence_ready, task);
++        mm_obj_dbg (self, "SIM and protocol stack off (+CFUN: 0): AT+SFUN=2 and AT+SFUN=4 for both cards");
++        cards_on (self, (GAsyncReadyCallback) power_sequence_ready, task);
 +        return;
 +    }
 +    mm_base_modem_at_command (self, "+CFUN=1", 30, FALSE,
@@ -1623,9 +1753,8 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +{
 +    GError *error = NULL;
 +
-+    mm_base_modem_at_sequence_finish (self, res, NULL, &error);
-+    if (error) {
-+        mm_obj_warn (self, "couldn't switch the SIM on: %s", error->message);
++    if (!cards_on_finish (self, res, &error)) {
++        mm_obj_warn (self, "couldn't switch the SIMs on: %s", error->message);
 +        g_error_free (error);
 +    }
 +    g_task_return_pointer (task, g_task_get_task_data (task), NULL);
@@ -1642,8 +1771,7 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +    response = mm_base_modem_at_command_finish (self, res, NULL);
 +    if (cfun_is_zero (response)) {
 +        mm_obj_msg (self, "SIM and protocol stack off (+CFUN: 0): switching them on");
-+        mm_base_modem_at_sequence (self, sim_on_sequence, NULL, NULL,
-+                                   (GAsyncReadyCallback) init_sim_on_ready, task);
++        cards_on (self, (GAsyncReadyCallback) init_sim_on_ready, task);
 +        return;
 +    }
 +    g_task_return_pointer (task, g_task_get_task_data (task), NULL);
@@ -1847,6 +1975,227 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +}
 +
 +/*****************************************************************************/
++/* SIM slots: the CP's two cards.  The AT port is for one of them (sipc_wwan
++ * card=, which puts AT+SPACTCARD=<card> in front of every command); the other
++ * is read with the prefix of its own, for the slot list.  A switch is
++ * e5-linux's e5-sim: it moves the port to the other card (a new modem, for
++ * this daemon it restarts) and brings wan up on it. */
++
++#define SIM_SWITCH "/usr/sbin/e5-sim"
++
++/* the card the port is for: sipc_wwan's card parameter; a port without it
++ * (-1, or a kernel whose driver has none) is for the CP's default, the first */
++static guint
++port_card (void)
++{
++    g_autofree gchar *s = NULL;
++
++    if (g_file_get_contents ("/sys/module/sipc_wwan/parameters/card", &s, NULL, NULL) &&
++        g_ascii_strtoll (s, NULL, 10) == 1)
++        return 1;
++    return 0;
++}
++
++typedef struct {
++    guint  card;   /* the port's */
++    gchar *iccid;  /* the other card's */
++    gchar *imsi;
++} LoadSimSlotsContext;
++
++static void
++load_sim_slots_context_free (LoadSimSlotsContext *ctx)
++{
++    g_free (ctx->iccid);
++    g_free (ctx->imsi);
++    g_slice_free (LoadSimSlotsContext, ctx);
++}
++
++static void
++sim_slot_free (MMBaseSim *sim)
++{
++    if (sim)
++        g_object_unref (sim);
++}
++
++static gboolean
++modem_load_sim_slots_finish (MMIfaceModem  *self,
++                             GAsyncResult  *res,
++                             GPtrArray    **sim_slots,
++                             guint         *primary_sim_slot,
++                             GError       **error)
++{
++    LoadSimSlotsContext *ctx;
++    GPtrArray           *slots;
++    guint                i;
++
++    if (!g_task_propagate_boolean (G_TASK (res), error))
++        return FALSE;
++    ctx = g_task_get_task_data (G_TASK (res));
++
++    slots = g_ptr_array_new_full (2, (GDestroyNotify) sim_slot_free);
++    for (i = 0; i < 2; i++) {
++        MMBaseSim        *sim = NULL;
++        g_autofree gchar *operator_id = NULL;
++
++        if (i == ctx->card)
++            /* the port's card: its properties load as any primary SIM's do */
++            sim = mm_base_sim_new_initialized (MM_BASE_MODEM (self), i + 1, TRUE,
++                                               NULL, NULL, NULL, NULL, NULL, NULL);
++        else if (ctx->iccid) {
++            /* (the MNC of every Chinese network has two digits) */
++            if (ctx->imsi && strlen (ctx->imsi) >= 5)
++                operator_id = g_strndup (ctx->imsi, 5);
++            sim = mm_base_sim_new_initialized (MM_BASE_MODEM (self), i + 1, FALSE,
++                                               ctx->iccid, ctx->imsi, NULL, operator_id,
++                                               NULL, NULL);
++        }
++        g_ptr_array_add (slots, sim);
++    }
++    if (sim_slots)
++        *sim_slots = slots;
++    else
++        g_ptr_array_unref (slots);
++    if (primary_sim_slot)
++        *primary_sim_slot = ctx->card + 1;
++    return TRUE;
++}
++
++static void
++other_card_back_ready (MMBaseModem  *self,
++                       GAsyncResult *res,
++                       GTask        *task)
++{
++    mm_base_modem_at_command_finish (self, res, NULL);
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++/* the channel back to the port's card: AT+SPACTCARD sticks, and a port
++ * without the prefix would stay on the other card */
++static void
++other_card_back (MMBaseModem *self,
++                 GTask       *task)
++{
++    LoadSimSlotsContext *ctx = g_task_get_task_data (task);
++    g_autofree gchar    *cmd = NULL;
++
++    cmd = g_strdup_printf ("+SPACTCARD=%u;+CFUN?", ctx->card);
++    mm_base_modem_at_command (self, cmd, 5, FALSE,
++                              (GAsyncReadyCallback) other_card_back_ready, task);
++}
++
++static void
++other_card_cimi_ready (MMBaseModem  *self,
++                       GAsyncResult *res,
++                       GTask        *task)
++{
++    LoadSimSlotsContext *ctx = g_task_get_task_data (task);
++    const gchar         *response;
++
++    response = mm_base_modem_at_command_finish (self, res, NULL);
++    if (response) {
++        g_autofree gchar *imsi = g_strstrip (g_strdup (response));
++
++        if (*imsi && strspn (imsi, "0123456789") == strlen (imsi))
++            ctx->imsi = g_steal_pointer (&imsi);
++    }
++    other_card_back (self, task);
++}
++
++static void
++other_card_ccid_ready (MMBaseModem  *self,
++                       GAsyncResult *res,
++                       GTask        *task)
++{
++    LoadSimSlotsContext *ctx = g_task_get_task_data (task);
++    const gchar         *response;
++    g_autofree gchar    *cmd = NULL;
++    g_autofree gchar    *iccid = NULL;
++
++    /* +CCID: "89861500202430712412"; an error: no SIM in that slot */
++    response = mm_base_modem_at_command_finish (self, res, NULL);
++    if (response) {
++        response = mm_strip_tag (response, "+CCID:");
++        iccid = g_strdup (response);
++        g_strdelimit (iccid, "\"", ' ');
++        g_strstrip (iccid);
++        if (*iccid)
++            ctx->iccid = g_steal_pointer (&iccid);
++    }
++    if (!ctx->iccid) {
++        other_card_back (self, task);
++        return;
++    }
++    cmd = g_strdup_printf ("+SPACTCARD=%u;+CIMI", 1 - ctx->card);
++    mm_base_modem_at_command (self, cmd, 5, FALSE,
++                              (GAsyncReadyCallback) other_card_cimi_ready, task);
++}
++
++static void
++modem_load_sim_slots (MMIfaceModem        *self,
++                      GAsyncReadyCallback  callback,
++                      gpointer             user_data)
++{
++    LoadSimSlotsContext *ctx;
++    GTask               *task;
++    g_autofree gchar    *cmd = NULL;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    ctx = g_slice_new0 (LoadSimSlotsContext);
++    ctx->card = port_card ();
++    g_task_set_task_data (task, ctx, (GDestroyNotify) load_sim_slots_context_free);
++
++    cmd = g_strdup_printf ("+SPACTCARD=%u;+CCID?", 1 - ctx->card);
++    mm_base_modem_at_command (MM_BASE_MODEM (self), cmd, 5, FALSE,
++                              (GAsyncReadyCallback) other_card_ccid_ready, task);
++}
++
++static gboolean
++modem_set_primary_sim_slot_finish (MMIfaceModem  *self,
++                                   GAsyncResult  *res,
++                                   GError       **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++modem_set_primary_sim_slot (MMIfaceModem        *self,
++                            guint                sim_slot,
++                            GAsyncReadyCallback  callback,
++                            gpointer             user_data)
++{
++    GTask            *task;
++    GError           *error = NULL;
++    g_autofree gchar *cmd = NULL;
++    gchar            *argv[] = { (gchar *) "/bin/sh", (gchar *) "-c", NULL, NULL };
++
++    task = g_task_new (self, NULL, callback, user_data);
++    if (sim_slot < 1 || sim_slot > 2)
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                                 "No SIM slot %u: the slots are 1 and 2", sim_slot);
++    else if (sim_slot - 1 == port_card ())
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_EXISTS,
++                                 "SIM slot %u is the primary one already", sim_slot);
++    else if (!g_file_test (SIM_SWITCH, G_FILE_TEST_IS_EXECUTABLE))
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
++                                 "Switching SIM slots needs " SIM_SWITCH);
++    else {
++        /* e5-sim restarts this daemon: run apart from it (the spawn's own
++         * intermediate child leaves it an orphan), once the reply is out */
++        cmd = g_strdup_printf ("sleep 2; exec " SIM_SWITCH " %u </dev/null >/dev/null 2>&1",
++                               sim_slot - 1);
++        argv[2] = cmd;
++        if (!g_spawn_async (NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, &error))
++            g_task_return_error (task, error);
++        else {
++            mm_obj_msg (self, "switching to SIM slot %u (" SIM_SWITCH ")", sim_slot);
++            g_task_return_boolean (task, TRUE);
++        }
++    }
++    g_object_unref (task);
++}
++
++/*****************************************************************************/
 +
 +MMBroadbandModemUnisoc *
 +mm_broadband_modem_unisoc_new (const gchar  *device,
@@ -1887,6 +2236,10 @@ diff -ruN a/src/plugins/unisoc/mm-broadband-modem-unisoc.c b/src/plugins/unisoc/
 +    iface->load_signal_quality_finish = modem_load_signal_quality_finish;
 +    iface->get_cell_info = modem_get_cell_info;
 +    iface->get_cell_info_finish = modem_get_cell_info_finish;
++    iface->load_sim_slots = modem_load_sim_slots;
++    iface->load_sim_slots_finish = modem_load_sim_slots_finish;
++    iface->set_primary_sim_slot = modem_set_primary_sim_slot;
++    iface->set_primary_sim_slot_finish = modem_set_primary_sim_slot_finish;
 +    iface->modem_power_up = modem_power_up;
 +    iface->modem_power_up_finish = modem_power_finish;
 +    iface->modem_power_down = modem_power_down;

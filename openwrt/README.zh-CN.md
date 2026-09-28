@@ -42,10 +42,12 @@ E5 另外需要的东西在 `overlay/` 里：
 | `lib/preinit/05_e5_debian_root` | 把 Debian 根里的固件和 vendor 子集 bind 进来（目录形式） |
 | `etc/init.d/e5-hw` | USB gadget 守护、无线电管制数据库 |
 | `etc/init.d/e5-vendor` | 基带：在 vendor chroot 里运行 `modem_control`、`cp_diskserver`、`refnotify` |
-| `etc/init.d/e5-sipc-wwan` | CP 起来后提供模组的 AT 端口 |
+| `etc/init.d/e5-sipc-wwan` | CP 起来后提供模组的 AT 端口，对应 `/etc/config/e5-sim` 指定的 SIM 卡 |
+| `usr/sbin/e5-sim`、`etc/config/e5-sim` | 上网用的 SIM 卡：`e5-sim` 列出两张卡和各自的锁频，`e5-sim 0\|1` 切换（AT 端口换到另一张卡、重启 ModemManager、按卡设置 APN、拉起 wan；ModemManager 的 SIM 卡槽和信息屏也走这里）——FINDINGS 47 |
+| `etc/init.d/e5-modemd`、`usr/sbin/e5-modemd` | 替 `modem_control` 应答 CP 的 assert（几秒内复位，而不是 300 秒）；`e5-modemd blocked` 可主动复位 CP |
 | `etc/init.d/e5-telnetd` | 救援用 telnet，只对 USB 口开放 |
 | `etc/init.d/e5-boot-ok` | 启动成功后重新武装 slot b（`e5-next-boot`） |
-| `etc/hotplug.d/wwan/26-e5-sipa-eth`、`lib/udev/rules.d/78-e5-mm-sipc.rules` | 没有 udev 时的 ModemManager 衔接：AT 端口出现后再交出数据口，不探测 tty |
+| `etc/hotplug.d/wwan/26-e5-sipa-eth`、`lib/udev/rules.d/78-mm-e5-sipc.rules` | 没有 udev 时的 ModemManager 衔接：AT 端口出现后再交出数据口，不探测 tty |
 | `etc/hotplug.d/iface/10-e5-usb0` | 把 `usb0` 加进 `br-lan`，netifd 不碰它：NCM gadget 绝不能 down |
 | `etc/uci-defaults/90-e5`、`91-e5-wireless`、`92-e5-default-boot` | 首次启动：LAN、WAN、DHCP、把承载的 IPv6 /64 放到 LAN、热点；从 Android 安装时把 Linux 设为默认启动 |
 | `etc/init.d/e5-bt`、`etc/config/e5-bluetooth`、`usr/libexec/e5-bt-connect`、`etc/uci-defaults/94-e5-bluetooth` | 蓝牙：`btattach` 把 WCN 芯片的蓝牙核心挂成 hci0（厂商初始化由内核完成），bluetoothd 用我们打过补丁的 BlueZ（`build-bluez.sh`：SDP MTU），适配器名为“E5”且始终可配对；`e5-bt-connect MAC` 按这颗芯片需要的顺序配对、信任并连接耳机 |

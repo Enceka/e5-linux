@@ -49,10 +49,12 @@ What the E5 needs besides, in `overlay/`:
 | `lib/preinit/05_e5_debian_root` | binds the Debian root's firmware and vendor subset in (the directory form) |
 | `etc/init.d/e5-hw` | USB gadget guard, the regulatory database |
 | `etc/init.d/e5-vendor` | the baseband: `modem_control`, `cp_diskserver`, `refnotify` in the vendor chroot |
-| `etc/init.d/e5-sipc-wwan` | the modem's AT port, once the CP is up |
+| `etc/init.d/e5-sipc-wwan` | the modem's AT port, once the CP is up, for the SIM card `/etc/config/e5-sim` names |
+| `usr/sbin/e5-sim`, `etc/config/e5-sim` | the SIM card that carries data: `e5-sim` lists both cards and their band locks, `e5-sim 0\|1` switches (the port to the other card, ModemManager again, the card's APN, wan up; also ModemManager's SIM slots and the info screen) -- FINDINGS 47 |
+| `etc/init.d/e5-modemd`, `usr/sbin/e5-modemd` | answers the CP's asserts for `modem_control` (a reset in seconds, not 300 s); `e5-modemd blocked` resets the CP on demand |
 | `etc/init.d/e5-telnetd` | telnet for recovery, USB port only |
 | `etc/init.d/e5-boot-ok` | re-arms slot b after a good boot (`e5-next-boot`) |
-| `etc/hotplug.d/wwan/26-e5-sipa-eth`, `lib/udev/rules.d/78-e5-mm-sipc.rules` | ModemManager without udev: the data port once the AT port exists, no tty probing |
+| `etc/hotplug.d/wwan/26-e5-sipa-eth`, `lib/udev/rules.d/78-mm-e5-sipc.rules` | ModemManager without udev: the data port once the AT port exists, no tty probing |
 | `etc/hotplug.d/iface/10-e5-usb0` | puts `usb0` into `br-lan` without netifd touching it: the NCM gadget must never go down |
 | `etc/uci-defaults/90-e5`, `91-e5-wireless`, `92-e5-default-boot` | first boot: LAN, WAN, DHCP, the bearer's IPv6 /64 on the LAN, hotspot; Linux as the default boot for an install from Android |
 | `etc/init.d/e5-bt`, `etc/config/e5-bluetooth`, `usr/libexec/e5-bt-connect`, `etc/uci-defaults/94-e5-bluetooth` | Bluetooth: `btattach` holds the WCN chip's BT core as hci0 (the kernel does the vendor setup), bluetoothd from our patched BlueZ (`build-bluez.sh`: the SDP MTU), the adapter "E5" and always pairable; `e5-bt-connect MAC` pairs, trusts and connects headphones in the order this chip needs |

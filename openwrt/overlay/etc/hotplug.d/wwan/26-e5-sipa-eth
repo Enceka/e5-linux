@@ -5,10 +5,21 @@
 # forget the port for good.  modemmanager.common holds sipa_eth* back until an
 # AT port exists (openwrt/patches/modemmanager-package-sipa-eth.patch); this
 # reports it when the AT port appears.
+#
+# The interface is the port's SIM card's: the CP routes the first card's
+# context 1 to SIPA net id 0 (sipa_eth0), the second card's to net id 8
+# (sipa_eth8, as Android's RIL names it); sipc_wwan's card parameter says
+# which card the AT port is for (e5-sim).  The other card's interface, if a
+# port for that card reported it before, is withdrawn: both are tagged as the
+# modem's net port, and ModemManager would take either.
 [ "$ACTION" = add ] || exit 0
 case "$DEVNAME" in wwan*at*) ;; *) exit 0 ;; esac
-[ -e /sys/class/net/sipa_eth0 ] || exit 0
+IF=sipa_eth0 OTHER=sipa_eth8
+[ "$(cat /sys/module/sipc_wwan/parameters/card 2>/dev/null)" = 1 ] && IF=sipa_eth8 OTHER=sipa_eth0
+[ -e /sys/class/net/$IF ] || exit 0
 . /usr/share/ModemManager/modemmanager.common
-mm_report_event add sipa_eth0 net /sys/devices/virtual/net/sipa_eth0 &&
-	mm_log "info" "add network interface sipa_eth0 (with $DEVNAME): event processed"
+grep -q "^add,$OTHER,net," "$MODEMMANAGER_EVENTS_CACHE" 2>/dev/null &&
+	mm_report_event remove $OTHER net /sys/devices/virtual/net/$OTHER
+mm_report_event add $IF net /sys/devices/virtual/net/$IF &&
+	mm_log "info" "add network interface $IF (with $DEVNAME): event processed"
 exit 0

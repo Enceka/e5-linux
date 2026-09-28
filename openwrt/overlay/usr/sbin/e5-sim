@@ -1,0 +1,101 @@
+#!/bin/sh
+# Which SIM card the modem is for: the AT port (sipc_wwan card=), and with it
+# ModemManager's modem and the wan connection.
+#
+#   e5-sim            the card in use, and both cards' SIM and band lock
+#   e5-sim 0|1        switch to the first / second card (and keep it at boot)
+#
+# As on Android, both cards are up all the time (the unisoc plugin brings up
+# both from the CP's start), and a switch is only which card the data goes
+# through: the AT port moves to the other card -- sipc_wwan card=, which puts
+# AT+SPACTCARD=<card> in front of every command -- ModemManager takes it for a
+# new modem, and its bearer makes that card the CP's data card (AT+SPSWDATA)
+# before it dials.  The data interface follows the card: sipa_eth0 for the
+# first, sipa_eth8 for the second (/etc/hotplug.d/wwan/26-e5-sipa-eth).
+#
+# Every card needs its band lock (AT+SPLBAND, set per card): on this baseband a
+# card left unlocked may not register, or asserts the CP ("Drm allocate spr rf
+# path fail") once it carries data.  Warned about here, never written.
+set -u
+
+log() { logger -t e5-sim "$*"; echo "$*"; }
+
+card_in_use() {
+	c=$(cat /sys/module/sipc_wwan/parameters/card 2>/dev/null)
+	[ "$c" = 1 ] && echo 1 || echo 0
+}
+
+# one AT command for <card>, through ModemManager (the port's one owner): as
+# it is for the port's own card (the port adds the prefix), with the other
+# card's prefix for that one -- taken back at once, as AT+SPACTCARD sticks
+at_card() {
+	c=$1; shift
+	own=$(card_in_use)
+	if [ "$c" = "$own" ]; then
+		out=$(e5-at "$1" 2>/dev/null)
+	else
+		out=$(e5-at "AT+SPACTCARD=$c;+${1#AT+}" 2>/dev/null)
+		e5-at "AT+SPACTCARD=$own;+CFUN?" >/dev/null 2>&1
+	fi
+	printf '%s\n' "$out" | grep -v '^OK$'
+}
+
+# "+SPLBAND: <49-64>,<33-48>,<17-32>,<1-16>,<65-80>" -> "b1 b41"
+lte_bands() {
+	sed -n 's/^+SPLBAND: *//p' | awk -F, '{
+		split("4 3 2 1 5", f, " "); s = ""
+		for (g = 1; g <= 5; g++)
+			for (b = 0; b < 16; b++)
+				if (int($f[g] / 2 ^ b) % 2) s = s " b" (16 * (g - 1) + 1 + b)
+		print s == "" ? " none" : s }'
+}
+
+# "+SPLBAND: <value1>,<0>,<value3>[,<super>]" -> "n41 n78"
+nr_bands() {
+	sed -n 's/^+SPLBAND: *//p' | awk -F, '{
+		split("1 2 3 5 7 8 12 20 25 28 66 70 71 74", v1, " ")
+		split("34 38 39 40 41 50 51 77 78 79", v3, " ")
+		split("75 76 80 81 82 83 84 86", su, " "); s = ""
+		for (b = 0; b < 14; b++) if (int($1 / 2 ^ b) % 2) s = s " n" v1[b + 1]
+		for (b = 0; b < 10; b++) if (int($3 / 2 ^ b) % 2) s = s " n" v3[b + 1]
+		for (b = 0; b < 8; b++) if (int($4 / 2 ^ b) % 2) s = s " n" su[b + 1]
+		print s == "" ? " none" : s }'
+}
+
+show() {
+	own=$(card_in_use)
+	echo "SIM card in use: $own ($(uci -q get e5-sim.main.card || echo 0) at boot)"
+	for c in 0 1; do
+		imsi=$(at_card $c AT+CIMI | grep -E '^[0-9]{6,}$')
+		lte=$(at_card $c AT+SPLBAND=0 | lte_bands)
+		nr=$(at_card $c AT+SPLBAND=3 | nr_bands)
+		echo "card $c: SIM ${imsi:-off or absent}; band lock LTE${lte}, NR${nr}"
+	done
+}
+
+switch() {
+	new=$1
+	[ "$new" = "$(card_in_use)" ] && { echo "already on SIM card $new"; exit 0; }
+	if pidof ModemManager >/dev/null; then
+		nr=$(at_card $new AT+SPLBAND=3 | nr_bands)
+		[ "$nr" = " none" ] &&
+			log "warning: SIM card $new has no NR band lock; it may not register, or crash the CP"
+	fi
+	log "switching to SIM card $new"
+	uci set e5-sim.main.card="$new" && uci commit e5-sim
+
+	ifdown wan
+	/etc/init.d/modemmanager stop
+	/etc/init.d/e5-sipc-wwan restart
+	/etc/init.d/modemmanager start
+	# the APN for the new card's operator (it brings wan up if that changes it)
+	[ "$(uci -q get network.wan.apn_auto)" = 1 ] && /usr/libexec/e5-apn-auto >/dev/null
+	ifup wan
+	log "SIM card $new: APN $(uci -q get network.wan.apn)"
+}
+
+case "${1:-}" in
+	"") show ;;
+	0|1) switch "$1" ;;
+	*) echo "usage: e5-sim [0|1]" >&2; exit 2 ;;
+esac

@@ -65,8 +65,13 @@ next_target() {
     fi
 }
 
+# a trial image (e5.openwrt= on the command line: the mainline kernel's, upstream/) is never the
+# default boot -- boot/init writes android into its default-boot on every boot, and this refuses
+trial() { case " $(cat /proc/cmdline) " in *" e5.openwrt="*) true ;; *) false ;; esac; }
+
 case "${1:-status}" in
-    linux)   mkdir -p /etc/e5linux; echo linux > "$CONF"; write_bc "$BC_B"; echo "default boot: linux (slot b armed)" ;;
+    linux)   trial && { echo "a trial image (e5.openwrt=) is never the default boot" >&2; exit 1; }
+             mkdir -p /etc/e5linux; echo linux > "$CONF"; write_bc "$BC_B"; echo "default boot: linux (slot b armed)" ;;
     android) mkdir -p /etc/e5linux; echo android > "$CONF"; write_bc "$BC_A"; echo "next boot: android (slot a)" ;;
     --rearm) [ "$(cat "$CONF" 2>/dev/null)" = linux ] && write_bc "$BC_B" && echo "slot b re-armed" || echo "default boot is not linux, nothing to do" ;;
     status)  echo "default boot: $(cat "$CONF" 2>/dev/null || echo android)"

@@ -23,6 +23,8 @@ start_service() {
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance
+	# (whether hci0 reached bluetoothd; not from the check's own restart)
+	[ -n "$E5_BT_RETRY" ] || /usr/libexec/e5-bt-check >/dev/null 2>&1 &
 }
 
 # a changed e5-bluetooth: the boot setting only -- the running adapter is left

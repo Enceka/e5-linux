@@ -1,0 +1,11 @@
+#!/bin/sh /etc/rc.common
+# The USB gadget connected again after a cable replug (/usr/libexec/e5-usb-watch).
+START=98
+USE_PROCD=1
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /usr/libexec/e5-usb-watch
+	procd_set_param respawn 3600 5 0
+	procd_close_instance
+}

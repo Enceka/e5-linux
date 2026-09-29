@@ -1,0 +1,45 @@
+#!/bin/sh
+# The USB gadget back on the bus after a replug (docs/STATUS.md): the cable's
+# extcon event leaves the gadget disconnected (soft_connect 0, the UDC "not
+# attached"), and nothing connected it again -- USB networking was gone until
+# a reboot.  While a cable is in (an extcon reports USB=1) from a computer's
+# port (the charger sees SDP or CDP, not a wall charger's DCP) and the UDC
+# stays "not attached" for two polls in a row, it is connected again.  Run by
+# /etc/init.d/e5-usb-watch.
+UDC=/sys/class/udc/$(ls /sys/class/udc 2>/dev/null | head -1)
+[ -f "$UDC/state" ] || { logger -t e5-usb-watch "no USB device controller"; exit 0; }
+
+vbus() {
+	for e in /sys/class/extcon/*/state; do
+		grep -qx 'USB=1' "$e" 2>/dev/null && return 0
+	done
+	return 1
+}
+# the charger's port type, bracketed in usb_type: [SDP] or [CDP] is a host
+host_port() {
+	for p in /sys/class/power_supply/*/usb_type; do
+		[ "$(cat "${p%/usb_type}/online" 2>/dev/null)" = 1 ] || continue
+		grep -qE '\[(SDP|CDP)\]' "$p" 2>/dev/null && return 0
+	done
+	return 1
+}
+
+missed=0 done_for_plug=
+while :; do
+	if vbus; then
+		if [ "$(cat "$UDC/state")" = "not attached" ] && host_port; then
+			missed=$((missed + 1))
+			if [ "$missed" -ge 2 ]; then
+				echo connect > "$UDC/soft_connect"
+				[ -n "$done_for_plug" ] || logger -t e5-usb-watch "cable in, the gadget was not attached: connected again"
+				done_for_plug=1 missed=0
+				sleep 8
+			fi
+		else
+			missed=0
+		fi
+	else
+		missed=0 done_for_plug=
+	fi
+	sleep 2
+done

@@ -109,18 +109,23 @@ binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by h
 
 ## Next (后续要做)
 
-- **Asked for, not started (2026-09-29):**
-  1. **USB: the real link state, and the replug that drops it.**  After a cable
-     replug the kernel's extcon resets the gadget with `soft_connect` 0: the host
-     enumerates nothing and nothing binds it again -- USB networking is gone until
-     a reboot.  Reconnect it on a plug (a kernel fix in musb-sprd, or a watcher
-     writing `connect` to `/sys/class/udc/*/soft_connect`); and the info screen
-     showing what is true: no cable, charging only (not enumerated), enumerated,
-     the host has a lease, the host goes online through the E5 (traffic).
-  2. **An app store for the info screen** over `Enceka/infoscreen-plugins`, with CI
-     that checks the plugins' style and safety.
-  3. **A version for the info screen and an online update**, so an update needs no
-     new image.
+- **Done 2026-09-30, to check on the device after a replug and with a SIM / online:**
+  1. **USB replug** (`/usr/libexec/e5-usb-watch`, procd `e5-usb-watch`): with a
+     cable in from a computer's port (SDP/CDP) and the UDC `not attached` for 4 s, the
+     gadget is connected again (`soft_connect`).  Tested by disconnecting it by hand:
+     connected again after 2 s, enumerated a second later.  Not yet with a real replug.
+     The info screen's 设备 page shows the link as it is (`/api/status` `.usb.link`:
+     none, charger, host, enumerated, lease, online).
+  2. **The app store**: `Enceka/infoscreen-plugins` (local in `../infoscreen-plugins`,
+     **to create on GitHub and push, with Pages from Actions**): `tools/check.py`,
+     `tools/build.py`, CI, `bigclock`; on the screen 高级 -> 应用管理 -> 应用商店.
+     Tested against a local copy of the store: install, SHA-256 mismatch refused.
+  3. **The screen's online update** (e5-infoscreen `3df5807`, VERSION 1.1.0):
+     `update fetch | apply | rollback`, 高级 -> 系统; tested against a local release.
+     The first real release (v1.1.0 on `Enceka/e5-infoscreen`) is to be uploaded.
+  4. **Bluetooth "no adapter"** (`/usr/libexec/e5-bt-check`, from `e5-bt`): hci0 was
+     there but DOWN and never reported to bluetoothd -- the attach's failed setup of
+     the leftovers below; the check brings it up or attaches again.
 - **Install on the SD card**, not in userdata (see Now): the root image and the
   device files on the card, userdata read-only or not mounted at all.
 - **An idle blank does not lock the session** (Debian/Phosh, FINDINGS 18).

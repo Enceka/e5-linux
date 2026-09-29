@@ -1,0 +1,36 @@
+#!/bin/sh
+# hci0 into bluetoothd after all (docs/STATUS.md, Bluetooth leftovers): now and
+# then the attach's setup fails at boot -- the first HCI Reset before the
+# chip's BT channel is up -- and the kernel then never reports hci0 to
+# bluetoothd ("No default controller available", the info screen's "no
+# adapter"), and nothing tried again.  Run by /etc/init.d/e5-bt after it
+# attached: waits up to 30 s for bluetoothd to list the controller; if not,
+# brings hci0 up (which runs the setup again), then attaches again, three
+# times at most.  With e5-bluetooth.main.autostart 0 the adapter is powered
+# off again afterwards, as it would have stayed.
+[ "$(uci -q get e5-bluetooth.main.enabled)" = 0 ] && exit 0
+listed() {
+	i=0
+	while [ "$i" -lt "$1" ]; do
+		[ -n "$(timeout 5 bluetoothctl list 2>/dev/null)" ] && return 0
+		sleep 2; i=$((i + 2))
+	done
+	return 1
+}
+done_ok() {
+	[ "$(uci -q get e5-bluetooth.main.autostart)" = 0 ] && timeout 5 bluetoothctl power off >/dev/null 2>&1
+	exit 0
+}
+listed 30 && exit 0
+for try in 1 2 3; do
+	if [ -e /sys/class/bluetooth/hci0 ]; then
+		logger -t e5-bt "hci0 is not in bluetoothd (its setup failed at attach?): hci0 up ($try)"
+		hciconfig hci0 up >/dev/null 2>&1
+		listed 10 && done_ok
+	fi
+	logger -t e5-bt "hci0 is not in bluetoothd: attaching again ($try)"
+	E5_BT_RETRY=1 /etc/init.d/e5-bt restart
+	listed 30 && done_ok
+done
+logger -t e5-bt "hci0 did not come up in bluetoothd after three tries"
+exit 1

@@ -179,6 +179,45 @@ fi
 # (the standalone tree is only the image's source)
 TAROUT=$OUT; [ -z "$STANDALONE" ] || TAROUT=$WORK
 docker import --platform linux/arm64 "$WORK/$TARBALL" e5-openwrt-base:$VER >/dev/null
+# Packages OpenWrt's repository dropped -- cog and WPE WebKit left 25.12.5's feed when it was regenerated on
+# 2026-09-28 -- are taken from the last image that had them: their files, apk database entries and
+# dependencies, out of that image's rootfs archive into $WORK/transplant once (kept there).  The build uses
+# them only while the repository has none of them.
+TP="$WORK/transplant"
+if [ ! -f "$TP/installed" ] && [ -f "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz" ]; then
+    python3 - "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz" "$TP" cog libcogcore libwpewebkit <<'PY'
+import os, sys, tarfile
+src, tp, names = sys.argv[1], sys.argv[2], set(sys.argv[3:])
+t = tarfile.open(src)
+members = {m.name.lstrip('./'): m for m in t.getmembers()}
+db = t.extractfile(members['lib/apk/db/installed']).read().decode()
+blocks = [b for b in db.split('\n\n') if b.strip()]
+keep = [b for b in blocks if any(l == 'P:' + n for l in b.split('\n') for n in names)]
+assert len(keep) == len(names), 'not all of %s in %s' % (sorted(names), src)
+paths, provides, deps = [], set(names), set()
+for b in keep:
+    d = None
+    for l in b.split('\n'):
+        if l.startswith('F:'): d = l[2:]; paths.append(d)
+        elif l.startswith('R:'): paths.append(d + '/' + l[2:])
+        elif l.startswith('p:'): provides.update(x.split('=')[0] for x in l[2:].split())
+        elif l.startswith('D:'): deps.update(x for x in l[2:].split())
+os.makedirs(tp + '/root', exist_ok=True)
+for p in paths:
+    m = members.get(p)
+    if m is not None and not m.isdir():
+        t.extract(m, tp + '/root')
+    elif m is not None:
+        os.makedirs(tp + '/root/' + p, exist_ok=True)
+open(tp + '/installed', 'w').write('\n\n'.join(keep) + '\n\n')
+dep = sorted(x for x in deps if x.split('=')[0].split('<')[0].split('>')[0] not in provides and not x.startswith('!'))
+open(tp + '/deps', 'w').write(' '.join(dep) + '\n')
+open(tp + '/names', 'w').write('\n'.join(sorted(names)) + '\n')
+print('transplant: %d packages, %d paths, deps: %s' % (len(keep), len(paths), ' '.join(dep)))
+PY
+fi
+mkdir -p "$TP"
+
 # (an empty directory stands for no info screen)
 mkdir -p "$WORK/no-infoscreen"
 echo "info screen: ${INFOSCREEN:-(none)}"
@@ -191,7 +230,7 @@ docker run --rm --platform linux/arm64 \
     -v "$WORK/e5-ctl-raw":/in/e5-ctl-raw:ro -v "$TOP/rootfs/overlay/usr/share/alsa":/in/alsa:ro \
     -v "$WORK/e5-modemd":/in/e5-modemd:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
-    -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" \
+    -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" -v "$TP":/in/transplant:ro \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
     e5-openwrt-base:$VER /bin/sh -euc '
 mkdir -p /var/lock /var/run /tmp
@@ -227,7 +266,20 @@ apk add --allow-untrusted $EXTRA_LIST >/dev/null
 echo "argon: $(sed -n "/^P:luci-theme-argon$/{n;s/^V://p}" /lib/apk/db/installed)"
 # the info screen'"'"'s packages (cage, cog, Mesa, ...), when there is one
 if [ -f /in/infoscreen/packages.txt ]; then
-    apk add $(grep -v "^#" /in/infoscreen/packages.txt) >/dev/null
+    # (the transplant above: used when the repository has none of those packages)
+    : > /tmp/tp
+    if [ -f /in/transplant/names ]; then
+        for p in $(cat /in/transplant/names); do apk search -e "$p" 2>/dev/null | grep -q . || echo "$p" >> /tmp/tp; done
+    fi
+    grep -v "^#" /in/infoscreen/packages.txt | grep -vxF -f /tmp/tp > /tmp/pk || true
+    apk add $(cat /tmp/pk) >/dev/null
+    if [ -s /tmp/tp ]; then
+        apk add $(cat /in/transplant/deps) >/dev/null
+        cp -a /in/transplant/root/. /
+        cat /in/transplant/installed >> /lib/apk/db/installed
+        cat /in/transplant/names >> /etc/apk/world
+        echo "transplanted from an earlier image: $(tr "\n" " " < /in/transplant/names)"
+    fi
 fi
 # (apk info <name> describes the repository'"'"'s package; the installed one is here)
 echo "modemmanager $(sed -n "/^P:modemmanager$/{n;s/^V://p}" /lib/apk/db/installed) installed"

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Whether the adapter is powered on at boot: e5-bluetooth.main.autostart
+# (default 1) as bluetoothd's AutoEnable in /etc/bluetooth/main.conf, read at
+# bluetoothd's start.  Off: the adapter stays off after boot -- and so does the
+# chip's BT core, which the kernel enables only while the adapter is powered --
+# until it is turned on (the info screen, bluetoothctl power on).  Run by
+# /etc/init.d/e5-bt before bluetoothd starts, and when the setting changes.
+F=/etc/bluetooth/main.conf
+[ -f "$F" ] || exit 0
+v=true
+[ "$(uci -q get e5-bluetooth.main.autostart)" = 0 ] && v=false
+if grep -q '^\[Policy\]' "$F"; then
+	if sed -n '/^\[Policy\]/,/^\[/p' "$F" | grep -qE '^#? *AutoEnable *='; then
+		sed -i "/^\[Policy\]/,/^\[/ s|^#\{0,1\} *AutoEnable *=.*|AutoEnable = $v|" "$F"
+	else
+		sed -i "/^\[Policy\]/a AutoEnable = $v" "$F"
+	fi
+else
+	printf '\n[Policy]\nAutoEnable = %s\n' "$v" >> "$F"
+fi

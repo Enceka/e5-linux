@@ -1,0 +1,11 @@
+{
+	"luci-app-e5-bluetooth": {
+		"description": "Grant access to the E5's Bluetooth settings",
+		"read": {
+			"uci": [ "e5-bluetooth" ]
+		},
+		"write": {
+			"uci": [ "e5-bluetooth" ]
+		}
+	}
+}

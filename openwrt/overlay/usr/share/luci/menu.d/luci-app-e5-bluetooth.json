@@ -1,0 +1,13 @@
+{
+	"admin/services/e5-bluetooth": {
+		"title": "蓝牙",
+		"order": 56,
+		"action": {
+			"type": "view",
+			"path": "e5-bluetooth/settings"
+		},
+		"depends": {
+			"acl": [ "luci-app-e5-bluetooth" ]
+		}
+	}
+}

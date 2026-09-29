@@ -68,7 +68,34 @@ FINDINGS.
 
 ## To test (待测试)
 
-Written and committed, not yet run on the device.
+Written and committed, not yet run on the device.  None of it is in a flash
+package: the OpenWrt overlay goes into the image (a host with docker or an arm64
+binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by hand).
+
+- **Text messages** (e5-linux `b90eead`, e5-infoscreen `7834ba8`):
+  `/usr/libexec/e5-sms` (list, send, delete, forward), LuCI 服务 -> 短信, the info
+  screen's `POST /api/sms-send` and `e5.sms.send()`.  To check:
+  1. LuCI lists the messages of the card in use, the header naming the card and
+     operator; delete and 回复 work.
+  2. Sending from the card in use, then from the other card: LuCI switches first
+     (`e5-sim`), waits for the registration (up to 2 min), then sends; the message
+     arrives, long ones in parts.
+  3. The forward: a preset, the test button (needs curl -- in the image from now
+     on; `apk add curl` on an older one), then a real message: forwarded once all
+     its parts are in, `{text}` with quotes, newlines and Chinese intact in JSON
+     and in a form body; a failing URL is tried three times and logged.
+  4. `e5-sms-notify` still vibrates, and forwards only with the forward on.
+  5. A plugin's `e5.sms.send(number, text)`.
+  Known limit: ModemManager has one modem, the card in use; the other card's new
+  messages are not seen (its URC ring is drained, FINDINGS 47.1) until it is
+  switched to.  Real dual-card messaging needs the other card's ring as a second
+  AT port (sipc_wwan) and a reader of its own.
+- **Bluetooth 开机启动** (e5-linux, e5-infoscreen `Bluetooth: 开机启动`):
+  `e5-bluetooth.main.autostart` -> bluetoothd's AutoEnable
+  (`/usr/libexec/e5-bt-autostart`, run by `e5-bt` at start and on a config
+  change).  To check: off in 高级 -> 蓝牙 (or LuCI 服务 -> 蓝牙), reboot: the adapter
+  is off, `bluetoothctl show` says `Powered: no`; turning it on in 高级 -> 蓝牙
+  works and a headset connects; on again, reboot: powered at boot as before.
 
 ## Next (后续要做)
 

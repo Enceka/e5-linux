@@ -18,20 +18,26 @@ FINDINGS.
   it; the vendor kernel never showed it.  Until it is understood, every Linux boot
   that mounts userdata read-write risks Android's data -- the plan is to install on
   the SD card and leave userdata alone (read-only at most).
+  **A fourth time on 2026-09-29, 00:29** (`logs/linux-fail-20260929/`): after a clean
+  unmount (`data-last-cp flags=0x45 clean-unmount`) the next Linux boot's mount failed
+  with -EUCLEAN, boot/init fell to the rescue and then to Android, whose fsck repaired it
+  (no fsck log kept).  **Until this is solved, the E5 stays in Android: no Linux boot
+  that mounts userdata.**
   Next steps, in order:
-  1. **A durability test that can see it** (`work/mmctest/tagwrite.c` could not: an
-     older generation of the same block passed): on `blackbox` (backed up), write
-     every block, flush, power off through the normal path (with the cable in, the
-     PMIC powers the E5 up again by itself), then every block must hold the last
-     generation.  Variants: a hard PMIC power off right after the flush, without
-     the mmc shutdown; writes after the last flush (then: no block older than the
-     flush).  About 10 cycles; boot/init must not mount userdata meanwhile.
-  2. If flushed data is lost: compare the vendor's eMMC path (FINDINGS 48.4) -- the
-     cache (turn it off as a test: `CACHE_CTRL` 0), the shutdown sequence (a delay
-     or CMD5 sleep before the PMIC cuts power), HSQ vs the vendor's swcq, discard.
-  3. If it is not lost there: the F2FS side -- mount options as Android's
-     (`fsync_mode=nobarrier` is not safer; `discard` off to test), a loop image on
-     top.
+  1. ~~A durability test that can see it~~ -- **done 2026-09-29: flushed data is not
+     lost** (FINDINGS 48.2): 10 power cycles and resets of every kind over the whole
+     `blackbox`, every block held the generation flushed last.  So step 2 (the
+     vendor's eMMC path) is not indicated by it.
+  2. **The F2FS side**, on `blackbox` formatted as Android's userdata is (`make_f2fs`
+     with its features; backed up in `logs/durability-20260929/blackbox.img.gz`):
+     mainline mounts it with boot/init's options, a loop-mounted ext4 image in it as
+     OpenWrt's root is, a workload of writes, fsyncs and checkpoints, then the same
+     power cycles; after each, the next boot's mount must succeed, and at the end
+     Android's `fsck.f2fs -f` must find nothing.  Then vary: `discard` off, the loop
+     device's discard/direct-IO, Android's mount options (`checkpoint_merge`,
+     `fsync_mode=nobarrier`, `reserve_root`).
+  3. Only if that does not reproduce it: the eMMC path of 48.4 after all (the cache,
+     the shutdown sequence, HSQ vs swcq, discard granularity) under an F2FS load.
 - **To test on the device (written 2026-09-29, not yet run):** see the section
   below.
 - **Two SIM cards of one operator: only one is recognised** (reported 2026-09-29,

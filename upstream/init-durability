@@ -1,0 +1,97 @@
+#!/bin/sh
+# Durability test of the eMMC under mainline (docs/STATUS.md "Now", FINDINGS 48): does a block the kernel
+# flushed survive a power off or a reset?  Each boot verifies the blackbox partition (upstream/tools/blkgen:
+# every block must hold the generation written and flushed last), then writes the next generation, flushes,
+# and ends the boot the way the plan says; with the cable in, the PMIC powers the E5 up again by itself.
+# Userdata is never mounted.  Slot b is re-armed every cycle; after the plan (or `touch /tmp/stop` over
+# telnet in the first 25 s of a boot) slot a is restored and the E5 goes back to Android.  A boot that
+# hangs is reset by the PMIC watchdog, and slot b, left with one try, then counts as failed: Android.
+#
+#   upstream/make-boot.sh (see upstream/README.md, "Durability test")
+#   results: `blkgen /dev/block/by-name/blackbox showlog` in Android, and pmsg / boot_b's log
+/bin/busybox mkdir -p /proc /sys /dev /tmp
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null
+/bin/busybox --install -s /bin
+PLAN="poweroff poweroff poweroff poweroff poweroff-dirty poweroff-dirty reset reset sysrq-b sysrq-b"
+BLKGEN=/e5-overlay/blkgen
+log() {
+    echo "E5-DURABILITY: $*" > /dev/kmsg
+    [ -c /dev/pmsg0 ] && echo "E5-DURABILITY: $*" > /dev/pmsg0
+}
+part() {
+    for u in /sys/class/block/mmcblk0p*/uevent; do
+        grep -qx "PARTNAME=$1" "$u" 2>/dev/null && { echo "/dev/$(basename "$(dirname "$u")")"; return; }
+    done
+}
+write_bc() { dd if="$1" of="$MISC" bs=1 seek=2048 conv=notrunc 2>/dev/null && sync; }
+finish() {
+    write_bc /etc/misc-bc-slot-a.bin
+    "$BLKGEN" "$BB" log "$(date -u +%FT%TZ) cycle $cycle: $1; slot a restored, to Android"
+    log "$1: slot a restored, rebooting to Android"
+    sleep 2
+    reboot -f
+}
+
+# the eMMC's partitions appear a moment after userspace starts
+for i in $(seq 1 50); do BB=$(part blackbox); [ -b "$BB" ] && break; sleep 0.2; done
+MISC=$(part misc)
+log "up $(uname -r) blackbox=$BB misc=$MISC"
+[ -b "$BB" ] && [ -b "$MISC" ] && [ -x "$BLKGEN" ] || { log "missing blackbox, misc or blkgen: back to Android"; write_bc /etc/misc-bc-slot-a.bin; sleep 5; reboot -f; }
+boot=$(grep -E 'mode|reason|cause' /proc/bootconfig 2>/dev/null | tr -d '" ' | tr '\n' ' ')
+
+cycle=$("$BLKGEN" "$BB" cycle)
+result=$("$BLKGEN" "$BB" verify); rc=$?
+log "cycle $cycle: $result (rc=$rc) boot: $boot"
+"$BLKGEN" "$BB" log "$(date -u +%FT%TZ) cycle $cycle boot [$boot]: $result"
+
+# the USB link, to watch and to stop it (the gadget of init-bringup)
+udc=$(ls /sys/class/udc 2>/dev/null | head -1)
+if [ -n "$udc" ]; then
+    mkdir -p /config && mount -t configfs configfs /config
+    g=/config/usb_gadget/linux
+    mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409" "$g/functions/ncm.usb0"
+    echo 0x0525 > "$g/idVendor"; echo 0xa4a1 > "$g/idProduct"; echo 0x0200 > "$g/bcdUSB"
+    echo E5LINUX > "$g/strings/0x409/serialnumber"; echo Unisoc > "$g/strings/0x409/manufacturer"
+    echo "E5 Linux USB Ethernet (durability test)" > "$g/strings/0x409/product"
+    echo 250 > "$g/configs/c.1/MaxPower"
+    echo 02:50:00:00:e5:01 > "$g/functions/ncm.usb0/dev_addr"
+    echo 02:50:00:00:e5:02 > "$g/functions/ncm.usb0/host_addr"
+    ln -s "$g/functions/ncm.usb0" "$g/configs/c.1/f1"
+    echo "$udc" > "$g/UDC"
+    ifconfig lo 127.0.0.1 up
+    ifconfig usb0 192.168.9.1 netmask 255.255.255.0 up
+    mkdir -p /var/lib/misc && touch /var/lib/misc/udhcpd.leases
+    printf 'start 192.168.9.2\nend 192.168.9.2\ninterface usb0\noption subnet 255.255.255.0\nopt lease 600\n' > /tmp/udhcpd.conf
+    udhcpd /tmp/udhcpd.conf
+    mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+    ( while :; do telnetd -F -b 192.168.9.1 -p 23 -l /bin/sh; sleep 1; done ) &
+fi
+for i in $(seq 1 25); do [ -e /tmp/stop ] && finish "stopped by hand"; sleep 1; done
+[ "$rc" -eq 1 ] && [ -e /tmp/stop-on-loss ] && finish "stopped on a loss"
+
+set -- $PLAN
+[ "$cycle" -ge $# ] && finish "the plan is done ($# cycles)"
+shift "$cycle"
+variant=$1
+next=$((cycle + 1))
+# LK took one of slot b's tries for this boot: two again for the next
+write_bc /etc/misc-bc-slot-b-trial.bin
+"$BLKGEN" "$BB" cycle "$next" >/dev/null
+# the log line first: blkgen's log flushes, which would take the dirty blocks of poweroff-dirty with it
+"$BLKGEN" "$BB" log "$(date -u +%FT%TZ) cycle $next: writing generation $next, then $variant"
+case "$variant" in
+    poweroff-dirty) w=$("$BLKGEN" "$BB" write "$next" 4000) ;;
+    *) w=$("$BLKGEN" "$BB" write "$next") ;;
+esac
+log "cycle $next: $w; then $variant"
+case "$variant" in
+    poweroff) poweroff -f ;;
+    poweroff-dirty) poweroff -f -n ;;   # (-n: no sync(), which would write the dirty blocks out)
+    reset) reboot -f ;;
+    sysrq-b) echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger ;;
+esac
+sleep 30
+log "still up after $variant"
+finish "$variant did not end the boot"

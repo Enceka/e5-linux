@@ -207,6 +207,32 @@ On the device at room temperature: the SoC 38-41 C, board 38-40 C, `soc-thmzone`
 zones front/back read nothing ("fail to get virt temp diff"), and `chg-thmzone` reads ~85 C -- channel 4 of the
 ADC gives 134 mV where the board's and PA's give ~485 mV, with the same driver, scale and table as 5.15.
 
+### Durability test (FINDINGS 48)
+
+Does the eMMC keep what mainline flushed, across a power off or a reset?  `upstream/init-durability` is an init
+that never mounts userdata: each boot it verifies the `blackbox` partition with `upstream/tools/blkgen` (every
+4 KiB block tagged with its number and a generation, a pattern derived from both), then writes the next
+generation to every block in a random order, `fdatasync`s (the block layer's cache flush), records the
+generation as done, flushes again, and ends the boot the way its plan says -- `poweroff -f` (with the cable in
+the PMIC powers the E5 up again, in charger mode), `poweroff -f -n` with 4000 blocks written after the last
+flush, `reboot -f`, or SysRq-B.  Slot b is re-armed each cycle; after the plan (or `touch /tmp/stop` over
+telnet in a boot's first 25 s) slot a is restored and the E5 is back in Android.  A block older than the done
+generation is a flushed write lost; newer ones (written after the flush) are allowed.
+
+```sh
+# blkgen, static arm64, in the build container:
+docker run --rm -v "$PWD/upstream/tools":/src:ro -v "$PWD/work/durability":/out e5-mainline-build \
+    gcc -O2 -Wall -static -o /out/blkgen /src/blkgen.c
+mkdir -p work/durability/overlay && cp work/durability/blkgen work/durability/overlay/
+: > work/durability/no-modules.txt
+python3 boot/build-boot-image.py --stock-boot dumps/boot_b.img --misc-head dumps/misc-head.bin \
+    --kernel upstream/out/Image.lk --modules upstream/out/modules --module-order work/durability/no-modules.txt \
+    --init upstream/init-durability --overlay work/durability/overlay \
+    --busybox work/busybox/ext/usr/bin/busybox --cmdline "" --out work/durability/boot-durability.img
+boot/flash-trial.sh work/durability/boot-durability.img      # from Android; back up blackbox first
+# the results, in Android: blkgen /dev/block/by-name/blackbox showlog (or its log area, the last MiB)
+```
+
 ### What the vendor DT asks for
 
 `upstream/tools/compat-map.py <dts> linux-lts-e5 kernel_sprd_ums9158` lists every enabled node's compatible

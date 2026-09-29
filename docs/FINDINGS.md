@@ -4214,6 +4214,21 @@ there.  That is what a write cache that loses writes it had acknowledged looks l
   older generation of the same block counted as fine.  The test to do (STATUS):
   everything written and flushed, then the power cycle, then every block must be the
   last generation.
+* **The durability test (2026-09-29, `upstream/init-durability` + `upstream/tools/blkgen.c`;
+  `logs/durability-20260929/`): flushed data is not lost.**  On `blackbox` (500 MiB,
+  127 743 blocks of 4 KiB, backed up first), each cycle wrote a new generation to every
+  block in a random order through the page cache, `fdatasync` (the cache flush), marked
+  it done, flushed again, then ended the boot; the next boot, under 6.18.54 at
+  `1684c0ccb` with userdata never mounted, read every block back.  4 x `poweroff -f`
+  (the PMIC power off; the cable in, back up in charger mode), 2 x `poweroff -f -n` with
+  4000 blocks written after the last flush, 2 x `reboot -f`, 2 x SysRq-B: every block
+  held the generation flushed last, every time (the 4000 unflushed ones had landed as
+  well); no torn block, none with another block's data.  So neither the power off
+  nor a reset loses what the kernel flushed on this eMMC path, and 48.4's eMMC
+  differences are not what corrupts userdata by themselves -- which fits 48.1 better
+  anyway: the damaged blocks held *other* metadata blocks' contents (a NAT block
+  holding a SIT or a checkpoint block), wrong data at the right place rather than a
+  lost write.  Next: the F2FS side (STATUS).
 * Earlier (sequential, parallel random, FUA checkpoint stress with verification) and
   one Linux -> Android reboot: clean.
 * Reliable writes: the vendor kernel strips `REQ_FUA` from every mmc0 request

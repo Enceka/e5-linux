@@ -185,6 +185,29 @@ timer_job=$!
 # pass: the eMMC is only probed about 9 s into the boot, after the pass has
 # begun, but it is there by then.  userdata is mounted for the copy and let go
 # again; the root filesystem section mounts it for good.
+# userdata's last F2FS checkpoint, before anything mounts it: whether the
+# system before shut down cleanly (CP_UMOUNT) or left it dirty under the reset
+# (a roll-forward at this mount).  Userdata's F2FS was twice found with foreign
+# blocks in its NAT after a reset; this says what the reset before was.
+f2fs_last_cp() {
+    local dev=$1 cp bpseg base tot ver tail fl best= bestfl=
+    [ -z "$f2fs_cp_logged" ] || return 0
+    f2fs_cp_logged=1
+    u32() { od -A n -t u4 -j "$2" -N 4 "$1" 2>/dev/null | tr -d ' '; }
+    [ "$(u32 "$dev" 1024)" = 4076150800 ] || { log "stage=data-last-cp no-f2fs"; return 0; }
+    cp=$(u32 "$dev" 1100) bpseg=$((1 << $(u32 "$dev" 1044)))
+    for base in "$cp" $((cp + bpseg)); do
+        ver=$(u32 "$dev" $((base * 4096)))
+        tot=$(u32 "$dev" $((base * 4096 + 136)))
+        [ -n "$tot" ] && [ "$tot" -gt 0 ] && [ "$tot" -lt 64 ] || continue
+        tail=$(u32 "$dev" $(((base + tot - 1) * 4096)))
+        fl=$(u32 "$dev" $((base * 4096 + 132)))
+        [ "$ver" = "$tail" ] && { [ -z "$best" ] || [ "$ver" -gt "$best" ]; } && best=$ver bestfl=$fl
+    done
+    [ -n "$best" ] || { log "stage=data-last-cp none-valid"; return 0; }
+    log "stage=data-last-cp ver=$(printf %x "$best") flags=0x$(printf %x "$bestfl") $([ $((bestfl & 1)) = 1 ] && echo clean-unmount || echo dirty)"
+}
+
 early_device_firmware() {
     local n=0 dev=
     [ -f /lib/firmware/wcnmodem.bin ] && return 0
@@ -196,6 +219,7 @@ early_device_firmware() {
     done
     [ -n "$dev" ] || { log "stage=device-firmware-early no userdata"; return 0; }
     [ -b "$dev" ] || mdev -s
+    f2fs_last_cp "$dev"
     mkdir -p /data /tmp/devfiles
     if mount -t f2fs -o noatime,nodiratime "$dev" /data 2>/run/early-data.err; then
         if [ -f /data/e5linux/device-files.tar ] &&
@@ -355,6 +379,7 @@ pick_root() {
 
 mkdir -p /newroot /data /disk
 rootdir= data_mounted=
+[ -n "$data" ] && f2fs_last_cp "$data"
 if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/datamount.err; then
     log "stage=data-mounted"
     data_mounted=1

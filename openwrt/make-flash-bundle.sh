@@ -8,6 +8,9 @@
 #       e5-openwrt-flash-<version>-mainline-<date>-<git>; the kernel of E5_RELEASE=1 upstream/build.sh
 #       (upstream/out-release: no e5.openwrt=, so it is no trial), the boot modules of
 #       upstream/module-order.txt, and an image rebuilt with upstream/root-modules.txt in it
+#   E5_IMAGE_FROM=<openwrt.ext4.gz> (with E5_MAINLINE=1)   no image rebuilt (build-rootfs.sh needs docker):
+#       that one, a flash package's files/openwrt.ext4.gz, with this kernel's root modules written in
+#       (openwrt/image-add-modules.sh) -- only for an image whose sources did not change since
 #
 # What goes in, and what does not:
 #
@@ -50,13 +53,33 @@ if [ -n "$MAINLINE" ]; then
     [ "$(strings "$KERNEL" | grep -c 'e5\.openwrt=' || true)" = 0 ] ||
         { echo "$KERNEL has e5.openwrt= on its command line: a trial kernel" >&2; exit 1; }
     E5_UPSTREAM_OUT=$KOUT sh "$TOP/upstream/root-modules.sh"
-    # the image always again: it has to carry this kernel's root modules
-    E5_ROOT_MODULES=$KOUT/root-modules.tar E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
+    if [ -n "${E5_IMAGE_FROM:-}" ]; then
+        bash "$HERE/image-add-modules.sh" "$E5_IMAGE_FROM" "$KOUT/root-modules.tar" "$IMG"
+    else
+        # the image always again: it has to carry this kernel's root modules
+        E5_ROOT_MODULES=$KOUT/root-modules.tar E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
+    fi
 elif [ ! -f "$IMG" ] || [ -n "${E5_REBUILD:-}" ]; then
     E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
 fi
 echo "== checking the image for device files"
-bad=$(tar -tzf "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz" |
+S0=$(mktemp -d)
+trap 'rm -rf "$S0"' EXIT
+image_files() {
+    if [ -n "${E5_IMAGE_FROM:-}" ]; then
+        # (the image itself: there is no rootfs tarball of it here)
+        local d; d=$(mktemp -d)
+        zcat "$IMG" > "$d/img"
+        mkdir "$d/r" && debugfs -R "rdump / $d/r" "$d/img" >/dev/null 2>&1
+        (cd "$d/r" && find . | sed 's|^\./||')
+        rm -rf "$d"
+    else
+        tar -tzf "$WORK/e5-openwrt-$VER-generic-rootfs.tar.gz"
+    fi
+}
+image_files > "$S0/files"
+grep -qx 'sbin/init' "$S0/files" || grep -qx './sbin/init' "$S0/files" || { echo "no listing of the image" >&2; exit 1; }
+bad=$(cat "$S0/files" |
       grep -E 'lib/firmware/(wcnmodem|gnssmodem|l_agdsp|wifi_board|sprd/)|opt/e5/android/.|etc/e5/install\.conf|mnt/vendor/.|attendedsysupgrade' || true)
 [ -z "$bad" ] || { echo "the generic image carries what it must not (device files, attended sysupgrade):" >&2; echo "$bad" | head >&2; exit 1; }
 
@@ -77,10 +100,11 @@ fi
 [ "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['overlay_files'])" "$BOOT.json")" = 0 ] ||
     { echo "the boot image has an overlay" >&2; exit 1; }
 # the kernel and the image's modem modules have to be one build
-rel=$(strings "$TOP/out_linux/drivers/net/wwan/wwan.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1)
-if [ -n "$MAINLINE" ]; then
+if [ -z "$MAINLINE" ]; then
+    rel=$(strings "$TOP/out_linux/drivers/net/wwan/wwan.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1)
+else
     rel=$(cat "$KOUT/kernel.release")
-    tar -tf "$KOUT/root-modules.tar" | grep -q "^lib/modules/$rel/modem/sipc_wwan.ko$" ||
+    grep -qx "lib/modules/$rel/modem/sipc_wwan.ko" < <(tar -tf "$KOUT/root-modules.tar") ||
         { echo "$KOUT/root-modules.tar is not of $rel" >&2; exit 1; }
 fi
 # (not "strings | grep -q": grep leaves early, and pipefail counts the SIGPIPE)
@@ -88,7 +112,7 @@ grep -q "Linux version $rel " < <(strings "$KERNEL") ||
     { echo "the kernel ($KERNEL) is not the build of out_linux ($rel)" >&2; exit 1; }
 
 S=$(mktemp -d)
-trap 'rm -rf "$S"' EXIT
+trap 'rm -rf "$S0" "$S"' EXIT
 P=$S/$NAME
 mkdir -p "$P/files" "$P/scripts/tools"
 # the flasher: flash.py (Windows, macOS, Linux), started by flash.cmd / flash.sh

@@ -450,6 +450,8 @@ def update(a):
     if not ip.startswith('192.168.9.') and not ip.startswith('192.168.77.'):
         die("no address on the E5's USB LAN (192.168.9.x): is it connected and running OpenWrt?")
     pw = os.environ.get('E5_TELNET_PASS')
+    if pw is None and (a.y or not sys.stdin.isatty()):
+        pw = 'root'     # (-y: the default, not asked)
     if pw is None:
         import getpass
         pw = getpass.getpass('root password of the E5 [root]: ') or 'root'

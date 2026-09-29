@@ -1,0 +1,322 @@
+#!/usr/bin/ucode
+// The E5's text messages under OpenWrt, through ModemManager (mmcli): one tool
+// for LuCI (服务 -> 短信, rpcd object e5-sms), the info screen (POST
+// /api/sms-send) and e5-sms-notify (the forward of a new message).
+//
+//   e5-sms list                  {"messages": [...], "sim"}, newest first; "direction": in|out
+//   e5-sms sim                   the card in use: {"card": 0|1, "name": "SIM1"|"SIM2", "operator"}
+//   e5-sms send NUMBER FILE [CARD]  the text in FILE (any characters: no quoting
+//                                on a command line) -> {"ok", "error"}; CARD 0|1
+//                                another than the one in use: switched to first
+//   e5-sms delete ID             -> {"ok"}
+//   e5-sms forward PATH|ID       the message to the webhook of e5-notify.forward
+//   e5-sms forward-test          a made-up message to it, enabled or not
+//   e5-sms forward-log           the last forwards
+//
+// The cards: ModemManager has one modem, the card in use (e5-sim: sipc_wwan
+// card=, the data card too); the other card's URCs are drained by sipc_wwan
+// (FINDINGS 47.1), so its new messages are not seen -- they stay in its
+// storage and are listed once that card is the one in use.  Every message
+// listed is the card in use's; sending from the other card switches to it
+// (e5-sim, the data connection moves with it).
+//
+// The forward (/etc/config/e5-notify, section "forward") is one HTTP request
+// by curl: url, method (GET|POST), content_type, body, header (a list), timeout.
+// In the url and the body {from} {text} {time} {sim} {device} are the
+// message's -- escaped for where they stand: URL-encoded in the url and in a
+// form body, JSON-escaped (without the quotes) in a JSON one.  A 2xx answer
+// is a success; a failure is tried again twice, 10 and 30 s later.
+'use strict';
+
+import { popen, readfile, writefile, unlink, open, stat } from 'fs';
+import { cursor } from 'uci';
+
+const SMS_PATH = '/org/freedesktop/ModemManager1/SMS/';
+const STATE = '/tmp/run/e5-sms';
+const LOG = `${STATE}/forward.log`;
+const LOG_KEEP = 50;
+
+function q(s) {
+	return "'" + replace(`${s}`, "'", "'\\''") + "'";
+}
+
+function sh(cmd) {
+	let p = popen(cmd, 'r');
+	if (!p)
+		return { rc: -1, out: '' };
+	let out = p.read('all') ?? '';
+	let rc = p.close();
+	return { rc, out };
+}
+
+function sh_json(cmd) {
+	let r = sh(cmd);
+	try {
+		return json(r.out);
+	}
+	catch (e) {
+		return null;
+	}
+}
+
+function out(obj) {
+	print(sprintf('%J\n', obj));
+}
+
+// mmcli prints "--" for an empty value
+function mm_val(v) {
+	return (v == null || v == '--' || v == '') ? null : v;
+}
+
+function sms_id(p) {
+	let m = match(`${p}`, /^(?:\/org\/freedesktop\/ModemManager1\/SMS\/)?([0-9]+)$/);
+	return m ? +m[1] : null;
+}
+
+function sms_get(id) {
+	let s = sh_json(`mmcli -J -m any --timeout=5 -s ${SMS_PATH}${id} 2>/dev/null`)?.sms;
+	if (!s)
+		return null;
+	let c = s.content ?? {}, p = s.properties ?? {};
+	let type = mm_val(p['pdu-type']);
+	return {
+		id,
+		number: mm_val(c.number) ?? '',
+		text: mm_val(c.text) ?? '',
+		time: mm_val(p.timestamp),
+		state: mm_val(p.state),
+		direction: (type == 'submit') ? 'out' : 'in'
+	};
+}
+
+function card_in_use() {
+	return (trim(readfile('/sys/module/sipc_wwan/parameters/card') ?? '0') == '1') ? 1 : 0;
+}
+
+function sim_info() {
+	let card = card_in_use();
+	let m = sh_json('mmcli -J -m any --timeout=5 2>/dev/null')?.modem;
+	return {
+		card, name: card ? 'SIM2' : 'SIM1',
+		operator: mm_val(m?.['3gpp']?.['operator-name']),
+		state: mm_val(m?.generic?.state)
+	};
+}
+
+// after a switch: ModemManager takes the port for a new modem, which has to
+// come up to registered before it sends
+function wait_modem(secs) {
+	for (let i = 0; i < secs / 2; i++) {
+		let st = mm_val(sh_json('mmcli -J -m any --timeout=5 2>/dev/null')?.modem?.generic?.state);
+		if (st == 'registered' || st == 'connected' || st == 'connecting')
+			return true;
+		sleep(2000);
+	}
+	return false;
+}
+
+function sms_list() {
+	let sim = sim_info();
+	let lj = sh_json('mmcli -J -m any --timeout=5 --messaging-list-sms 2>/dev/null');
+	if (lj == null)
+		return { messages: [], sim, error: 'no modem' };
+	let paths = lj['modem.messaging.sms'] ?? lj.modem?.messaging?.sms ?? [];
+	let list = [];
+	for (let p in paths) {
+		let id = sms_id(p);
+		let m = (id != null) ? sms_get(id) : null;
+		if (m)
+			push(list, { ...m, sim: sim.name });
+	}
+	list = sort(list, (a, b) => (a.time == b.time) ? b.id - a.id : ((a.time ?? '') < (b.time ?? '') ? 1 : -1));
+	return { messages: list, sim };
+}
+
+function sms_send(number, file, card) {
+	number = replace(`${number ?? ''}`, /[ -]/g, '');
+	if (!match(number, /^\+?[0-9]{3,20}$/))
+		return { ok: false, error: 'bad number' };
+	let st = stat(file ?? '');
+	if (!st || st.size == 0)
+		return { ok: false, error: 'no text' };
+	if (st.size > 4000)
+		return { ok: false, error: 'text too long' };
+	if (card != null && card != '' && `${card}` != `${card_in_use()}`) {
+		if (`${card}` != '0' && `${card}` != '1')
+			return { ok: false, error: 'bad card' };
+		system(`logger -t e5-sms 'switching to SIM${+card + 1} to send'`);
+		if (system(`e5-sim ${card} >/dev/null 2>&1`) != 0 || `${card_in_use()}` != `${card}`)
+			return { ok: false, error: `switching to SIM${+card + 1} failed` };
+		if (!wait_modem(120))
+			return { ok: false, error: `SIM${+card + 1} did not register` };
+	}
+	let r = sh(`mmcli -m any --timeout=10 --messaging-create-sms=${q('number=' + number)} --messaging-create-sms-with-text=${q(file)} 2>&1`);
+	let m = match(r.out, /\/SMS\/([0-9]+)/);
+	if (r.rc != 0 || !m)
+		return { ok: false, error: trim(r.out) || 'create failed' };
+	let s = sh(`mmcli -s ${SMS_PATH}${m[1]} --send --timeout=60 2>&1`);
+	if (s.rc != 0)
+		return { ok: false, id: +m[1], error: trim(s.out) || 'send failed' };
+	system(`logger -t e5-sms 'sent a message to ${number} from SIM${card_in_use() + 1}'`);
+	return { ok: true, id: +m[1], sim: card_in_use() ? 'SIM2' : 'SIM1' };
+}
+
+function sms_delete(id) {
+	id = sms_id(id);
+	if (id == null)
+		return { ok: false, error: 'bad id' };
+	let r = sh(`mmcli -m any --timeout=10 --messaging-delete-sms=${SMS_PATH}${id} 2>&1`);
+	return { ok: r.rc == 0, error: r.rc == 0 ? null : trim(r.out) };
+}
+
+/* ---------- the forward ---------- */
+
+function urlenc(s) {
+	let o = '';
+	for (let i = 0; i < length(s); i++) {
+		let c = ord(s, i);
+		let ch = substr(s, i, 1);
+		o += match(ch, /[A-Za-z0-9_.~-]/) ? ch : sprintf('%%%02X', c);
+	}
+	return o;
+}
+
+function jsonenc(s) {
+	// sprintf's %J quotes the string: the quotes off
+	let j = sprintf('%J', `${s}`);
+	return substr(j, 1, length(j) - 2);
+}
+
+function fill(tpl, vals, enc) {
+	return replace(tpl ?? '', /\{(from|text|time|sim|device)\}/g, (all, k) => enc(vals[k] ?? ''));
+}
+
+function sim_name() {
+	return card_in_use() ? 'SIM2' : 'SIM1';
+}
+
+function log_add(entry) {
+	system(`mkdir -p ${STATE}`);
+	let lines = filter(split(readfile(LOG) ?? '', '\n'), (l) => l != '');
+	push(lines, sprintf('%J', entry));
+	if (length(lines) > LOG_KEEP)
+		lines = slice(lines, length(lines) - LOG_KEEP);
+	writefile(LOG, join('\n', lines) + '\n');
+}
+
+function forward_cfg() {
+	let c = cursor();
+	let g = (k, d) => c.get('e5-notify', 'forward', k) ?? d;
+	let hdr = c.get('e5-notify', 'forward', 'header');
+	return {
+		enabled: g('enabled', '0') == '1',
+		url: g('url', ''),
+		method: uc(g('method', 'POST')),
+		content_type: g('content_type', 'application/json'),
+		body: g('body', ''),
+		headers: (type(hdr) == 'array') ? hdr : (hdr ? [ hdr ] : []),
+		timeout: int(g('timeout', '10')) || 10
+	};
+}
+
+// one try: {ok, code, error}
+function forward_once(cfg, vals) {
+	if (system('command -v curl >/dev/null 2>&1') != 0)
+		return { ok: false, error: 'curl is not installed (apk add curl)' };
+	if (!match(cfg.url, /^https?:\/\//))
+		return { ok: false, error: 'no http(s) url' };
+	let url = fill(cfg.url, vals, urlenc);
+	let ct = cfg.content_type;
+	let enc = match(ct, /json/) ? jsonenc : match(ct, /x-www-form-urlencoded/) ? urlenc : (s) => s;
+	let args = [ 'curl', '-sS', '-m', `${cfg.timeout}`, '-X', cfg.method, '-o', '/dev/null', '-w', '%{http_code}' ];
+	for (let h in cfg.headers)
+		if (h != '')
+			push(args, '-H', h);
+	let tmp = null;
+	if (cfg.method != 'GET' && cfg.body != '') {
+		let c = clock(true);
+		tmp = `${STATE}/forward.${c[0]}${c[1]}`;
+		system(`mkdir -p ${STATE}`);
+		writefile(tmp, fill(cfg.body, vals, enc));
+		push(args, '-H', `Content-Type: ${ct}`, '--data-binary', `@${tmp}`);
+	}
+	push(args, url);
+	let r = sh(join(' ', map(args, q)) + ' 2>&1');
+	if (tmp)
+		unlink(tmp);
+	let code = +(match(r.out, /([0-9]{3})\s*$/)?.[1] ?? 0);
+	if (code >= 200 && code < 300)
+		return { ok: true, code };
+	return { ok: false, code, error: trim(replace(r.out, /[0-9]{3}\s*$/, '')) || `HTTP ${code}` };
+}
+
+function forward(msg, test) {
+	let cfg = forward_cfg();
+	if (!test && !cfg.enabled)
+		return { ok: false, skipped: true, error: 'forward disabled' };
+	let vals = {
+		from: msg.number, text: msg.text, time: msg.time ?? '',
+		sim: sim_name(), device: trim(readfile('/proc/sys/kernel/hostname') ?? 'E5')
+	};
+	let r = null;
+	for (let i = 0; i < (test ? 1 : 3); i++) {
+		if (i > 0)
+			sleep(i == 1 ? 10000 : 30000);
+		r = forward_once(cfg, vals);
+		if (r.ok)
+			break;
+	}
+	let entry = { time: time(), id: msg.id, from: msg.number, test: !!test, ok: r.ok, code: r.code, error: r.error };
+	log_add(entry);
+	system(`logger -t e5-sms-forward ${q((r.ok ? 'forwarded' : 'forward failed: ' + r.error) + ' (from ' + msg.number + ')')}`);
+	return r;
+}
+
+// a new message's parts come one by one: forwarded once it is whole
+// ("received", not "receiving"), at most 2 minutes later
+function forward_new(p) {
+	let id = sms_id(p);
+	if (id == null)
+		return { ok: false, error: 'bad message' };
+	let m = null;
+	for (let i = 0; i < 60; i++) {
+		m = sms_get(id);
+		if (m && m.state != 'receiving')
+			break;
+		sleep(2000);
+	}
+	if (!m)
+		return { ok: false, error: 'no such message' };
+	if (m.direction != 'in')
+		return { ok: false, skipped: true, error: 'not a received message' };
+	return forward(m, false);
+}
+
+let cmd = ARGV[0];
+if (cmd == 'list')
+	out(sms_list());
+else if (cmd == 'sim')
+	out(sim_info());
+else if (cmd == 'send')
+	out(sms_send(ARGV[1], ARGV[2], ARGV[3]));
+else if (cmd == 'delete')
+	out(sms_delete(ARGV[1]));
+else if (cmd == 'forward')
+	out(forward_new(ARGV[1]));
+else if (cmd == 'forward-test')
+{
+	let lt = localtime();
+	out(forward({ id: 0, number: '10086', text: 'E5 短信转发测试 / forward test',
+		time: sprintf('%04d-%02d-%02d %02d:%02d:%02d', lt.year, lt.mon, lt.mday, lt.hour, lt.min, lt.sec) }, true));
+}
+else if (cmd == 'forward-log') {
+	let list = [];
+	for (let l in split(readfile(LOG) ?? '', '\n'))
+		if (l != '')
+			try { push(list, json(l)); } catch (e) {}
+	out({ log: reverse(list) });
+}
+else {
+	warn('usage: e5-sms list | sim | send NUMBER FILE [CARD] | delete ID | forward PATH | forward-test | forward-log\n');
+	exit(2);
+}

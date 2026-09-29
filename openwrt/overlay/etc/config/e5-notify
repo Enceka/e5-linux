@@ -6,3 +6,13 @@ config sms 'sms'
 	option sound '0'
 	# the info screen lights up and shows a new message
 	option screen '1'
+
+config forward 'forward'
+	# a new message to a webhook, by curl (服务 -> 短信 -> 转发; /usr/libexec/e5-sms)
+	option enabled '0'
+	option url ''
+	option method 'POST'
+	option content_type 'application/json'
+	# {from} {text} {time} {sim} {device}: escaped for where they stand
+	option body '{"from":"{from}","text":"{text}","time":"{time}","sim":"{sim}","device":"{device}"}'
+	option timeout '10'

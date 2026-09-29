@@ -14,6 +14,8 @@
 # (e5-notify.sms.screen) and marks it in its status bar:
 #   /tmp/run/e5-sms/unread   the paths of the unread messages, one per line
 # The E5 has no notification LED (the PMIC's LED outputs drive nothing).
+# A new message is forwarded as well when e5-notify.forward is enabled
+# (/usr/libexec/e5-sms forward, a webhook by curl).
 # Settings: /etc/config/e5-notify.
 STATE=/tmp/run/e5-sms
 UNREAD=$STATE/unread
@@ -65,6 +67,9 @@ while IFS= read -r line; do
 		grep -qx "$sms" "$UNREAD" || echo "$sms" >> "$UNREAD"
 		logger -t e5-sms-notify "new message $sms"
 		alert &
+		# the webhook (e5-notify.forward): e5-sms waits for all the parts
+		[ "$(uci -q get e5-notify.forward.enabled)" = 1 ] &&
+			/usr/libexec/e5-sms forward "$sms" >/dev/null 2>&1 &
 		sms= ;;
 	*"boolean false"*)
 		sms= ;;

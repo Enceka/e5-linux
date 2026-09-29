@@ -203,8 +203,9 @@ apk add --allow-untrusted /in/apk/modemmanager-1*.apk /in/apk/modemmanager-rpcd-
 apk add --allow-untrusted /in/apk/bluez-libs-*.apk /in/apk/bluez-daemon-*.apk /in/apk/bluez-utils-5*.apk >/dev/null
 # (dbus-utils: dbus-monitor, for e5-sms-notify)
 # (alsa-utils: aplay and amixer for the speaker, e5-audio-dsp and e5-volume)
+# (curl: the SMS forward's webhook, /usr/libexec/e5-sms)
 apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils luci-proto-modemmanager \
-    dbus-utils alsa-utils >/dev/null
+    dbus-utils alsa-utils curl >/dev/null
 # Bluetooth audio: PulseAudio built with BlueZ (the -avahi variant carries
 # the bluetooth modules), run by /etc/init.d/e5-pulseaudio, not by its own
 # init script (which forbids loading the modules a connecting device needs)

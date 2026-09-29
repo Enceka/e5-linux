@@ -1,0 +1,13 @@
+{
+	"admin/services/e5-sms": {
+		"title": "短信",
+		"order": 55,
+		"action": {
+			"type": "view",
+			"path": "e5-sms/sms"
+		},
+		"depends": {
+			"acl": [ "luci-app-e5-sms" ]
+		}
+	}
+}

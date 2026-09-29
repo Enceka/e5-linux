@@ -1,0 +1,17 @@
+{
+	"luci-app-e5-sms": {
+		"description": "Grant access to the E5's text messages (read, send, delete, the forward)",
+		"read": {
+			"ubus": {
+				"e5-sms": [ "list", "sim", "forward_log" ]
+			},
+			"uci": [ "e5-notify" ]
+		},
+		"write": {
+			"ubus": {
+				"e5-sms": [ "send", "delete", "switch_card", "forward_test" ]
+			},
+			"uci": [ "e5-notify" ]
+		}
+	}
+}

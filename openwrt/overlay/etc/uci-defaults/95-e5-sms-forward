@@ -1,0 +1,15 @@
+#!/bin/sh
+# The SMS forward's section in /etc/config/e5-notify, for a configuration kept
+# from an image before it (an update keeps /etc/config): off, a JSON webhook.
+uci -q get e5-notify.forward >/dev/null && exit 0
+uci -q batch <<'UCI'
+set e5-notify.forward=forward
+set e5-notify.forward.enabled='0'
+set e5-notify.forward.url=''
+set e5-notify.forward.method='POST'
+set e5-notify.forward.content_type='application/json'
+set e5-notify.forward.body='{"from":"{from}","text":"{text}","time":"{time}","sim":"{sim}","device":"{device}"}'
+set e5-notify.forward.timeout='10'
+commit e5-notify
+UCI
+exit 0

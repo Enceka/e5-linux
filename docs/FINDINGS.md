@@ -4169,3 +4169,85 @@ The default 256 KiB radio buffer loses the init sequence within a minute.  `pkil
 with a pattern that is on the running shell's own command line kills that shell (and
 the `resetprop` after it).  For AT on Android next to urild: `/dev/stty_nr6` is free
 (urild holds 0-5, 13 and 14; other daemons 21, 28, 31).
+
+## 48. Userdata's F2FS damaged under mainline, three times; the power off (2026-09-29)
+
+### 48.1 What was found
+
+Three times the userdata F2FS (`mmcblk0p70`, plain F2FS, Android 13's) came back from
+a reset or power cycle under the mainline kernel with metadata blocks that hold an
+**older version of some metadata** -- never under the vendor 5.15 kernel (Android).
+Evidence under `logs/noboot-20260929/` (`meta*.bin` are the first 154 MiB: SB, CP,
+SIT, NAT, SSA; `third/` the third one).
+
+1. **First** (found 2026-09-29 morning; Android stayed on its logo, Linux fell to the
+   rescue): NAT block 0's current copy (`0xa00`, the root inode nid 3 in it) held a
+   SIT block, NAT block 5 too.  The root inode unreachable: the whole `/data` gone.
+   Userdata was formatted in TWRP.
+2. **Second** (the same day; after an OpenWrt reboot that left userdata dirty, the
+   root being a loop image in it): NAT block 1's current copy (`0xa01`) held a
+   checkpoint block of an older checkpoint (version `...119`, elapsed 1972 s, about a
+   minute before the reset), NAT block 4's (`0xa04`) an older SIT block 1.
+   `/data/e5linux` (nid 476, NAT block 1) listed by its parent but not found.
+3. **Third** (the next boot after a *clean* power off -- remounted read-only, CP
+   `0x45` `CP_UMOUNT`, reliable writes already off, section 48.3): the mount failed,
+   `Current segment's next free block offset is inconsistent with bitmap, logtype:1,
+   segno:2521, type:0, next_blkoff:19, blkofs:19` (-EUCLEAN).  Android's fsck.f2fs
+   then found 4423 blocks in use that the SIT has free, all in segments 2510-2521 --
+   one SIT block (#45, segments 2475-2529) read back as a version from before those
+   segments were written, while the checkpoint written after it was the new one.
+   fsck fixed it; Android boots.
+
+What is common: the damaged blocks are F2FS metadata written by mainline in its last
+checkpoints before a power cycle, read back afterwards as an *older* content (of
+themselves, or of another metadata block); the checkpoint that followed them is
+there.  That is what a write cache that loses writes it had acknowledged looks like
+-- or an eMMC mapping that went back to stale pages.
+
+### 48.2 What was tested, and is not it
+
+* `blackbox` (`mmcblk0p48`, backed up to `logs/noboot-20260929/blackbox-mmcblk0p48.img.gz`)
+  as a raw target: self-tagged 4 KiB blocks, random writes of 1-16 blocks, a quarter
+  O_DSYNC (REQ_FUA), fdatasync now and then, reset in the middle -- 4 x `reboot -f`
+  and 3 x SysRq-B, 36 000-58 000 writes each: no block ever held another block's
+  data (`work/mmctest/tagwrite.c`).  **It could not see the failure of 48.1**: an
+  older generation of the same block counted as fine.  The test to do (STATUS):
+  everything written and flushed, then the power cycle, then every block must be the
+  last generation.
+* Earlier (sequential, parallel random, FUA checkpoint stress with verification) and
+  one Linux -> Android reboot: clean.
+* Reliable writes: the vendor kernel strips `REQ_FUA` from every mmc0 request
+  (`sdhci-sprd.c`, `mmc_hsq_status`), so Android never issues one; mainline did for
+  every checkpoint.  Off since linux-lts-e5 `155c85bc4` (`MMC_CAP2_NO_REL_WR`): the
+  third damage happened with them off -- not the (only) cause.
+
+### 48.3 What changed on the way
+
+* **The power off** (linux-lts-e5 `262b225ba`): mainline had no PMIC power-off; a
+  `poweroff` fell to PSCI SYSTEM_OFF, which this firmware takes as a reset ("Reboot
+  into normal"): the E5 came back.  `sc27xx-poweroff` now knows the UMP9620
+  (`sprd,ump9620-poweroff`, PWR_PD_HW `0x2020`, SLP_CTRL `0x2248` LDO_XTL_EN and
+  SLP_LDO_PD_EN cleared first, from the vendor driver).  LK logs it as
+  `pwroffcause="write pwroff"`.  With a charger connected the PMIC powers the E5
+  up again at once (`bootcause="in charging during shutdown the devices"`,
+  `sprdboot.mode=charger`) -- Android shows its charging screen there; boot/init
+  boots the system (configured behaviour), so a power off is a real one only without
+  the cable.
+* **Filesystems read-only before a reset** (linux-lts-e5 `1684c0ccb`,
+  `CONFIG_REBOOT_REMOUNT_RO`): OpenWrt cannot unmount its root (a loop image in
+  userdata), so userdata was left dirty under every reset.  A reboot notifier now
+  syncs and remounts every block filesystem read-only, the last mounted first.
+  boot/init logs userdata's last checkpoint before mounting it
+  (`stage=data-last-cp ... clean-unmount|dirty`): clean after every reboot and power
+  off since.
+* The early firmware pass mounts userdata `ro,norecovery` (it only reads
+  `device-files.tar`).
+
+### 48.4 Differences to the vendor kernel still in play
+
+The mainline eMMC path is not the vendor's in: HSQ (vendor: its own `swcq` for mmc0,
+`supports-swcq` in the DT), the cache (enabled by mainline's `mmc_init_card`; the
+vendor's handling unchecked), the shutdown sequence (flush, POWER_OFF_LONG, then the
+vmmc regulator and the PMIC), discard (the vendor sets mmc0's discard granularity to
+the preferred erase size), and the mount options (Android: `fsync_mode=nobarrier`,
+`checkpoint_merge`, `reserve_root`).  The eMMC: manfid `0x37`, 29.1 GiB, HS400ES.

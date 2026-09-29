@@ -99,6 +99,18 @@ binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by h
 
 ## Next (后续要做)
 
+- **Asked for, not started (2026-09-29):**
+  1. **USB: the real link state, and the replug that drops it.**  After a cable
+     replug the kernel's extcon resets the gadget with `soft_connect` 0: the host
+     enumerates nothing and nothing binds it again -- USB networking is gone until
+     a reboot.  Reconnect it on a plug (a kernel fix in musb-sprd, or a watcher
+     writing `connect` to `/sys/class/udc/*/soft_connect`); and the info screen
+     showing what is true: no cable, charging only (not enumerated), enumerated,
+     the host has a lease, the host goes online through the E5 (traffic).
+  2. **An app store for the info screen** over `Enceka/infoscreen-plugins`, with CI
+     that checks the plugins' style and safety.
+  3. **A version for the info screen and an online update**, so an update needs no
+     new image.
 - **Install on the SD card**, not in userdata (see Now): the root image and the
   device files on the card, userdata read-only or not mounted at all.
 - **An idle blank does not lock the session** (Debian/Phosh, FINDINGS 18).

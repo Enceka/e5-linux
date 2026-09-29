@@ -1,11 +1,11 @@
 #!/bin/bash
 # Build the flash package for other people's E5s:
-# out/openwrt/e5-openwrt-flash-<version>-<git>.tar.gz, unpacked and run as
+# out/openwrt/e5-openwrt-flash-<version>-<date>-<git>.tar.gz, unpacked and run as
 # ./flash.sh (openwrt/bundle/README.md is its manual).
 #
 #   openwrt/make-flash-bundle.sh
 #   E5_MAINLINE=1 openwrt/make-flash-bundle.sh    the mainline 6.18 kernel instead of 5.15:
-#       e5-openwrt-flash-<version>-mainline-<git>; the kernel of E5_RELEASE=1 upstream/build.sh
+#       e5-openwrt-flash-<version>-mainline-<date>-<git>; the kernel of E5_RELEASE=1 upstream/build.sh
 #       (upstream/out-release: no e5.openwrt=, so it is no trial), the boot modules of
 #       upstream/module-order.txt, and an image rebuilt with upstream/root-modules.txt in it
 #
@@ -38,11 +38,12 @@ WORK="$TOP/work/openwrt"
 IMG="$OUT/e5-openwrt-$VER-generic.ext4.gz"
 KERNEL=${E5_KERNEL:-$TOP/work/Image-bt2}
 GIT=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
-NAME=e5-openwrt-flash-$VER-$GIT
+DATE=$(date +%Y%m%d)
+NAME=e5-openwrt-flash-$VER-$DATE-$GIT
 MAINLINE=${E5_MAINLINE:-}
 KOUT=$TOP/upstream/out-release
 if [ -n "$MAINLINE" ]; then
-    NAME=e5-openwrt-flash-$VER-mainline-$GIT
+    NAME=e5-openwrt-flash-$VER-mainline-$DATE-$GIT
     KERNEL=$KOUT/Image.lk
     [ -f "$KERNEL" ] || { echo "no $KERNEL: E5_RELEASE=1 upstream/build.sh" >&2; exit 1; }
     # (grep -c, not grep -q: see the kernel check below)

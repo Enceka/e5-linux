@@ -145,7 +145,7 @@ device booting it.  Debian can go afterwards: remove
 ### A flash package for others
 
 ```sh
-openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<version>-<git>.tar.gz
+openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<version>-<date>-<git>.tar.gz
 ```
 
 One archive, unpacked and run as `./flash.sh` on macOS or Linux with adb:

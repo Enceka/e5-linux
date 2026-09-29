@@ -129,7 +129,7 @@ APN 和热点（`--ssid`，默认 `E5-Linux`）写到 userdata 上的
 ### 给别人用的一键刷入包
 
 ```sh
-openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<版本>-<git>.tar.gz
+openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<版本>-<日期>-<git>.tar.gz
 ```
 
 一个压缩包，解压后在装有 adb 的 macOS 或 Linux 上运行 `./flash.sh`：从 Android 给已解锁

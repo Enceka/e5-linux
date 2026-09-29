@@ -4229,6 +4229,22 @@ there.  That is what a write cache that loses writes it had acknowledged looks l
   anyway: the damaged blocks held *other* metadata blocks' contents (a NAT block
   holding a SIT or a checkpoint block), wrong data at the right place rather than a
   lost write.  Next: the F2FS side (STATUS).
+* **The F2FS test (2026-09-29, `upstream/init-f2fstest`; `logs/durability-20260929/
+  f2fs-run-log.txt`): no damage in 30 cycles.**  `blackbox` formatted as userdata is
+  (static f2fs-tools 1.16: `encrypt verity extra_attr project_quota quota_ino casefold`,
+  utf8 -- the same feature word, 0x1499), mounted with boot/init's options
+  (`noatime,nodiratime`, mainline's defaults otherwise, discard among them), a 200 MiB
+  ext4 image in it on a loop device with `noatime` as OpenWrt's root; each cycle 90 s
+  of load (small files with fsync, rename over and deletes in the ext4 image, larger
+  files with fsync and a growing log straight in F2FS, directories and `sync`), then a
+  `reboot -f` or (every fourth) `poweroff -f` with everything mounted; before each mount
+  a dry-run `fsck.f2fs -f`.  30 cycles: every fsck clean, every mount fine, from the
+  fourth on every checkpoint `CP_UMOUNT` as in 48.1's third and fourth damage; one
+  uncontrolled power loss (a hang of the test's own) came back clean as well.  What the
+  test did not have of the real userdata: 22 GiB used and aged rather than a fresh
+  500 MiB, Android's own writes in between (encrypted and casefolded directories, the
+  5.15 kernel's F2FS -- in all four cases Android had written the filesystem before
+  Linux did), runs of 20 minutes and more.
 * Earlier (sequential, parallel random, FUA checkpoint stress with verification) and
   one Linux -> Android reboot: clean.
 * Reliable writes: the vendor kernel strips `REQ_FUA` from every mmc0 request

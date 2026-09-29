@@ -28,16 +28,20 @@ FINDINGS.
      lost** (FINDINGS 48.2): 10 power cycles and resets of every kind over the whole
      `blackbox`, every block held the generation flushed last.  So step 2 (the
      vendor's eMMC path) is not indicated by it.
-  2. **The F2FS side**, on `blackbox` formatted as Android's userdata is (`make_f2fs`
-     with its features; backed up in `logs/durability-20260929/blackbox.img.gz`):
-     mainline mounts it with boot/init's options, a loop-mounted ext4 image in it as
-     OpenWrt's root is, a workload of writes, fsyncs and checkpoints, then the same
-     power cycles; after each, the next boot's mount must succeed, and at the end
-     Android's `fsck.f2fs -f` must find nothing.  Then vary: `discard` off, the loop
-     device's discard/direct-IO, Android's mount options (`checkpoint_merge`,
-     `fsync_mode=nobarrier`, `reserve_root`).
-  3. Only if that does not reproduce it: the eMMC path of 48.4 after all (the cache,
-     the shutdown sequence, HSQ vs swcq, discard granularity) under an F2FS load.
+  2. ~~The F2FS side on a fresh filesystem~~ -- **done 2026-09-29: no damage in 30
+     cycles** (FINDINGS 48.2, `upstream/init-f2fstest`): blackbox as userdata (its
+     features), boot/init's mount options, a loop ext4 image in it, 90 s of load, then
+     reboots and power offs with everything mounted; every fsck and mount clean.
+  3. What that test lacked, one at a time: **Android writing the same filesystem in
+     between** (a cycle that boots Android and lets it write before Linux mounts again
+     -- in all four cases Android had written it first), a filesystem that is **used and
+     aged** (fill blackbox to 80-90 % with churn first), **runs of 20+ minutes**.  Also
+     `discard` off, to see if the damage needs it at all.
+  4. Only if none of that reproduces it: the eMMC path of 48.4 (the cache, the shutdown
+     sequence, HSQ vs swcq, discard granularity) under an F2FS load.
+  Meanwhile `boot_b` holds the F2FS test image (the release image the E5 had is in
+  `work/durability/boot_b-before-durability.img`), and blackbox holds the test's
+  filesystem (the original: `logs/durability-20260929/blackbox.img.gz`).
 - **To test on the device (written 2026-09-29, not yet run):** see the section
   below.
 - **Two SIM cards of one operator: only one is recognised** (reported 2026-09-29,

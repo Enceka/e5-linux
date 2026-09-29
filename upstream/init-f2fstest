@@ -1,0 +1,136 @@
+#!/bin/sh
+# F2FS under mainline across reboots and power offs (docs/STATUS.md "Now", FINDINGS 48): the blackbox
+# partition formatted as Android's userdata is (its features), mounted with boot/init's options, an ext4
+# image in it on a loop device as OpenWrt's root is; each boot checks it (fsck.f2fs --dry-run, then the
+# mount), runs a load of writes, fsyncs, renames and deletes in both for 90 s, and ends the way the plan
+# says, with everything mounted (the kernel remounts it read-only, CONFIG_REBOOT_REMOUNT_RO).  At the
+# first fsck error or failed mount it stops with blackbox as it is, the evidence, and goes back to Android.
+# Userdata is never mounted.  The results: a text log at 61 MiB into boot_b (upstream/README.md).
+/bin/busybox mkdir -p /proc /sys /dev /tmp
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null
+/bin/busybox --install -s /bin
+CYCLES=30
+WORK=90
+O=/e5-overlay
+log() {
+    echo "E5-F2FSTEST: $*" > /dev/kmsg
+    [ -c /dev/pmsg0 ] && echo "E5-F2FSTEST: $*" > /dev/pmsg0
+}
+part() {
+    for u in /sys/class/block/mmcblk0p*/uevent; do
+        grep -qx "PARTNAME=$1" "$u" 2>/dev/null && { echo "/dev/$(basename "$(dirname "$u")")"; return; }
+    done
+}
+# the result log: 1 MiB at 61 MiB into boot_b, after boot/init's own log (56-60 MiB)
+rlog() {
+    dd if="$BOOTB" bs=1048576 skip=61 count=1 2>/dev/null | tr -d '\000' > /tmp/rlog
+    grep -q '^E5-F2FSTEST-LOG' /tmp/rlog || echo E5-F2FSTEST-LOG > /tmp/rlog
+    echo "$(date -u +%FT%TZ) $*" >> /tmp/rlog
+    { tail -c 1000000 /tmp/rlog; head -c 1048576 /dev/zero; } | head -c 1048576 |
+        dd of="$BOOTB" bs=1048576 seek=61 conv=notrunc 2>/dev/null
+    sync
+    log "$*"
+}
+write_bc() { dd if="$1" of="$MISC" bs=1 seek=2048 conv=notrunc 2>/dev/null && sync; }
+finish() {
+    umount /mnt/root 2>/dev/null; umount /mnt/data 2>/dev/null
+    write_bc /etc/misc-bc-slot-a.bin
+    rlog "cycle $cycle: $1; slot a restored, to Android"
+    sleep 2
+    reboot -f
+}
+
+for i in $(seq 1 50); do BB=$(part blackbox); [ -b "$BB" ] && break; sleep 0.2; done
+MISC=$(part misc) BOOTB=$(part boot_b)
+[ -b "$BB" ] && [ -b "$MISC" ] && [ -b "$BOOTB" ] && [ -x "$O/fsck.f2fs" ] ||
+    { log "missing a partition or a tool: back to Android"; write_bc /etc/misc-bc-slot-a.bin; sleep 5; reboot -f; }
+boot=$(grep -E 'mode' /proc/bootconfig 2>/dev/null | tr -d '" ' | tr '\n' ' ')
+dd if="$BOOTB" bs=1048576 skip=61 count=1 2>/dev/null | tr -d '\000' > /tmp/rlog
+cycle=$(grep -c ' run: ' /tmp/rlog)
+
+# the USB link, to watch and to stop it (`touch /tmp/stop` in the first 25 s of a boot)
+udc=$(ls /sys/class/udc 2>/dev/null | head -1)
+if [ -n "$udc" ]; then
+    mkdir -p /config && mount -t configfs configfs /config
+    g=/config/usb_gadget/linux
+    mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409" "$g/functions/ncm.usb0"
+    echo 0x0525 > "$g/idVendor"; echo 0xa4a1 > "$g/idProduct"; echo 0x0200 > "$g/bcdUSB"
+    echo E5LINUX > "$g/strings/0x409/serialnumber"; echo Unisoc > "$g/strings/0x409/manufacturer"
+    echo "E5 Linux USB Ethernet (F2FS test)" > "$g/strings/0x409/product"
+    echo 250 > "$g/configs/c.1/MaxPower"
+    echo 02:50:00:00:e5:01 > "$g/functions/ncm.usb0/dev_addr"
+    echo 02:50:00:00:e5:02 > "$g/functions/ncm.usb0/host_addr"
+    ln -s "$g/functions/ncm.usb0" "$g/configs/c.1/f1"
+    echo "$udc" > "$g/UDC"
+    ifconfig lo 127.0.0.1 up
+    ifconfig usb0 192.168.9.1 netmask 255.255.255.0 up
+    mkdir -p /var/lib/misc && touch /var/lib/misc/udhcpd.leases
+    printf 'start 192.168.9.2\nend 192.168.9.2\ninterface usb0\noption subnet 255.255.255.0\nopt lease 600\n' > /tmp/udhcpd.conf
+    udhcpd /tmp/udhcpd.conf
+    mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+    ( while :; do telnetd -F -b 192.168.9.1 -p 23 -l /bin/sh; sleep 1; done ) &
+fi
+
+mkdir -p /mnt/data /mnt/root
+if [ "$cycle" -eq 0 ]; then
+    # as Android's userdata: its features (dump.f2fs: 0x1499), casefolding utf8
+    "$O/mkfs.f2fs" -f -l e5test -O encrypt,verity,extra_attr,project_quota,quota,casefold -C utf8 "$BB" > /tmp/mkfs.txt 2>&1 ||
+        finish "mkfs.f2fs failed: $(tail -2 /tmp/mkfs.txt | tr '\n' ' ')"
+    mount -t f2fs -o noatime,nodiratime "$BB" /mnt/data || finish "the first mount failed"
+    mkdir -p /mnt/data/e5linux
+    gunzip -c "$O/root.ext4.gz" > /mnt/data/e5linux/openwrt.ext4 && sync
+    rlog "cycle 0 [$boot]: formatted ($(grep -i 'features' /tmp/mkfs.txt | tr -s ' ' | cut -c1-80))"
+else
+    "$O/fsck.f2fs" -f --dry-run "$BB" > /tmp/fsck.txt 2>&1; frc=$?
+    cp=$(grep -m1 -i 'checkpoint state' /tmp/fsck.txt | tr -s ' ' | cut -c1-90)
+    # (fsck's verdicts are [Ok..] or [Fail]; "Corrupted valid nat_bits" shows on a fresh image too)
+    fails=$(grep -c '\[Fail\]' /tmp/fsck.txt)
+    if mount -t f2fs -o noatime,nodiratime "$BB" /mnt/data 2>/tmp/mount.err; then mnt=ok; else mnt="FAIL $(dmesg | grep -i f2fs | tail -2 | tr '\n' ' ' | cut -c1-240)"; fi
+    rlog "cycle $cycle check [$boot]: fsck rc=$frc fails=$fails ($cp); mount $mnt"
+    if [ "$fails" -gt 0 ] || [ "$frc" -ne 0 ] || [ "$mnt" != ok ]; then
+        grep -iE 'fail|invalid|corrupt|inconsistent|error|mismatch' /tmp/fsck.txt | head -20 | while read -r l; do rlog "  fsck: $l"; done
+        finish "DAMAGE FOUND; blackbox left as it is"
+    fi
+fi
+for i in $(seq 1 25); do [ -e /tmp/stop ] && finish "stopped by hand"; sleep 1; done
+[ "$cycle" -ge "$CYCLES" ] && finish "the plan is done ($CYCLES cycles, no damage)"
+
+losetup /dev/loop0 /mnt/data/e5linux/openwrt.ext4 && mount -t ext4 -o noatime /dev/loop0 /mnt/root ||
+    finish "the ext4 image did not mount"
+mkdir -p /mnt/root/w /mnt/data/e5linux/f
+# LK took one of slot b's tries: two again for the next boot
+write_bc /etc/misc-bc-slot-b-trial.bin
+next=$((cycle + 1))
+# (a power off every fourth cycle: once the PMIC did not power the E5 up again after one, and the test stood)
+case $((next % 4)) in 0) end=poweroff ;; *) end=reboot ;; esac
+rlog "cycle $next run: $WORK s of load, then $end"
+stop=$(( $(cut -d. -f1 /proc/uptime) + WORK ))
+alive() { [ "$(cut -d. -f1 /proc/uptime)" -lt "$stop" ]; }
+# in the ext4 image (OpenWrt's root): small files, fsync, rename over, deletes
+( i=0; while alive; do i=$((i + 1)); n=$((i % 300))
+    dd if=/dev/urandom of=/mnt/root/w/f$n.tmp bs=4096 count=$((1 + i % 48)) conv=fsync 2>/dev/null
+    mv /mnt/root/w/f$n.tmp /mnt/root/w/f$n
+    [ $((i % 13)) -eq 0 ] && rm -f /mnt/root/w/f$(( (i * 7) % 300 ))
+  done ) & p1=$!
+# straight in F2FS: larger files overwritten with fsync, a growing log
+( i=0; while alive; do i=$((i + 1))
+    dd if=/dev/urandom of=/mnt/data/e5linux/f/big$((i % 6)) bs=65536 count=$((4 + i % 40)) conv=fsync 2>/dev/null
+    echo "$next $i $(cut -d' ' -f1 /proc/uptime)" >> /mnt/data/e5linux/f/log.txt
+  done ) & p2=$!
+# directories come and go, and sync (checkpoints)
+( i=0; while alive; do i=$((i + 1))
+    mkdir -p /mnt/data/e5linux/f/d$((i % 50))/x; echo $i > /mnt/data/e5linux/f/d$((i % 50))/x/v
+    [ $((i % 5)) -eq 0 ] && rm -rf /mnt/data/e5linux/f/d$(( (i * 3) % 50 ))
+    sync; sleep 3
+  done ) & p3=$!
+# (the load only: a bare wait would wait for the telnetd loop too, forever)
+wait $p1 $p2 $p3
+log "cycle $next: load done ($(df -h /mnt/data | tail -1 | tr -s ' '))"
+case "$end" in
+    reboot) reboot -f ;;
+    poweroff) poweroff -f ;;
+esac
+sleep 30
+finish "$end did not end the boot"

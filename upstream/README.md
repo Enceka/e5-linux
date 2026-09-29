@@ -233,6 +233,13 @@ boot/flash-trial.sh work/durability/boot-durability.img      # from Android; bac
 # the results, in Android: blkgen /dev/block/by-name/blackbox showlog (or its log area, the last MiB)
 ```
 
+`upstream/init-f2fstest` is the same on F2FS: blackbox formatted as userdata is (a static `mkfs.f2fs` and
+`fsck.f2fs` from f2fs-tools 1.16, built in the container with `-std=gnu17`), a gzipped 200 MiB ext4 image in it on
+a loop device, 90 s of load per boot, then a reboot or a power off with everything mounted; a dry-run fsck and
+the mount check the next boot, and it stops at the first damage.  Its log is 1 MiB at 61 MiB into `boot_b`, so
+the test is re-armed from Android without `flash-trial.sh` (which writes all of `boot_b`): the first 56 MiB of
+the image and the slot-b block into misc.
+
 ### What the vendor DT asks for
 
 `upstream/tools/compat-map.py <dts> linux-lts-e5 kernel_sprd_ums9158` lists every enabled node's compatible

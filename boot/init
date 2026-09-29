@@ -221,7 +221,9 @@ early_device_firmware() {
     [ -b "$dev" ] || mdev -s
     f2fs_last_cp "$dev"
     mkdir -p /data /tmp/devfiles
-    if mount -t f2fs -o noatime,nodiratime "$dev" /data 2>/run/early-data.err; then
+    # (read-only, no roll-forward: this pass only reads, and writes nothing to
+    # userdata -- in charger mode nothing else mounts it)
+    if mount -t f2fs -o ro,norecovery "$dev" /data 2>/run/early-data.err; then
         if [ -f /data/e5linux/device-files.tar ] &&
            tar -xf /data/e5linux/device-files.tar -C /tmp/devfiles 2>/dev/null; then
             mkdir -p /lib/firmware && cp -a /tmp/devfiles/lib/firmware/. /lib/firmware/
@@ -277,6 +279,17 @@ write_misc_bc() {  # write_misc_bc FILE STAGE
     if cmp -s /run/bc.bin "$1"; then log "stage=$2 dev=$misc"; else log "stage=$2-MISMATCH dev=$misc"; fi
 }
 restore_slot_a() { write_misc_bc /etc/misc-bc-slot-a.bin misc-restored-slot-a; }
+
+# Powered off with a charger connected (or a charger plugged into an E5 that is
+# off), the PMIC powers the E5 up and LK starts the kernel in charger mode
+# (sprdboot.mode=charger, bootcause "in charging during shutdown the devices").
+# Android shows its charging screen there; this boots the system, as when power
+# comes back -- a power off with the charger in is followed by a boot.  Only
+# logged.
+if tr '\0' ' ' < /proc/device-tree/chosen/bootargs 2>/dev/null |
+   grep -qE '(sprdboot|androidboot)\.mode=charger'; then
+    log "stage=charger-boot $(cat /sys/class/power_supply/battery/capacity 2>/dev/null)% (booting the system)"
+fi
 
 hostname e5-linux
 ifconfig lo 127.0.0.1 up

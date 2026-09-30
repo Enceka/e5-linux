@@ -1,0 +1,17 @@
+[Unit]
+# The USB gadget is the board's network and its serial console at once, and it
+# is also what a connected computer has to recognise.  A replug can leave it
+# disconnected, and an attached gadget the host never enumerated is lost the
+# same way.  gadgets-guard rebinds an empty UDC once at boot; this watches the
+# link for the whole uptime and drives soft_connect (docs/STATUS.md).
+Description=E5 USB gadget watch (connect it again after a replug, or when the host did not enumerate it)
+After=sysinit.target
+ConditionPathExists=/sys/kernel/config/usb_gadget/linux
+
+[Service]
+ExecStart=/opt/e5/usb-watch.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

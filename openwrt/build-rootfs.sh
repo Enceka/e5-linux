@@ -303,7 +303,7 @@ if [ -d /in/infoscreen/root ]; then
     find $R -name .DS_Store -exec rm -f {} +
     screen=e5-infoscreen
 fi
-for f in vendor-start.sh android-run node-perms.sh regdb-load.sh gadget-guard.sh e5-next-boot e5-os e5-at e5-audio-dsp; do
+for f in vendor-start.sh android-run node-perms.sh regdb-load.sh gadget-guard.sh usb-watch.sh e5-next-boot e5-os e5-at e5-audio-dsp; do
     cp /in/opt-e5/$f $R/opt/e5/$f; chmod 755 $R/opt/e5/$f
 done
 cp /in/logdw $R/opt/e5/bin/logdw && chmod 755 $R/opt/e5/bin/logdw

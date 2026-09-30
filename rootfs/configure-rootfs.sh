@@ -101,7 +101,7 @@ bash "$HERE/e5-chroot.sh" '
     # /usr/local/bin, which is what makes `sudo e5-next-boot android` work.
     for s in e5-vendor e5-cp_diskserver e5-refnotify \
              e5-net-bridge e5-sipc-wwan \
-             e5-regdb-load e5-telnetd e5-gadget-guard e5-fixups; do
+             e5-regdb-load e5-telnetd e5-gadget-guard e5-usb-watch e5-fixups; do
         systemctl --root=/ enable $s.service >/dev/null 2>&1 || echo "warn: $s enable failed"
     done
     # Wi-Fi: NetworkManager owns wlan0 only (etc/NetworkManager/conf.d/50-e5.conf)

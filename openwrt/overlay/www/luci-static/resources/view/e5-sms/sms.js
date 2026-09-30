@@ -309,8 +309,8 @@ return view.extend({
 			return E([], [
 				E('h2', {}, '短信'),
 				E('div', { 'class': 'cbi-section' }, [
-					E('h3', {}, '收件箱'),
-					E('div', { 'style': 'margin-bottom:.5em' }, [
+					E('div', { 'style': 'display:flex;align-items:center;justify-content:space-between;gap:.5em;margin-bottom:.5em' }, [
+						E('h3', { 'style': 'margin:0' }, '收件箱'),
 						E('button', { 'class': 'btn cbi-button', 'click': L.bind(this.reloadList, this) }, '刷新')
 					]),
 					E('div', { 'id': 'e5-sms-sim' }, this.renderSim(this.sim)),

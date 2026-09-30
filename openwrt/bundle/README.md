@@ -4,14 +4,17 @@
 
 Installs OpenWrt 25.12 (5G WAN, hotspot, LuCI and the info screen on the
 panel) on a Rongyue E5, next to its Android: Android stays as it is, OpenWrt
-lives in an image file on the phone's storage (userdata) and boots from
-`boot_b`.  Android is always one step away.
+goes onto the **SD card** (a partition of its own; the rest of the card is left
+free) and boots from `boot_b`.  Android is always one step away.  `--data`
+installs into the phone's storage instead -- the form before the card.
 
 ## You need
 
 * a Rongyue E5 with an **unlocked bootloader** and Android rooted with **Magisk**;
 * Android running from slot a (as it comes from the factory);
-* at least 2.5 GB free on the phone's storage;
+* an **SD card of 2 GB or more** in the slot: it is partitioned and erased, and
+  its free space stays free for more partitions later.  With `--data` instead,
+  no card is needed and 2.5 GB must be free on the phone's storage;
 * a Windows, macOS or Linux computer with:
   * **Python 3.8 or newer** (on Windows from https://www.python.org/downloads/, tick
     "Add python.exe to PATH");
@@ -43,6 +46,10 @@ lives in an image file on the phone's storage (userdata) and boots from
    ./flash.sh --ssid E5-OpenWrt --wifi-key 12345678 -y       (macOS / Linux)
    ```
 
+   It asks once more before it partitions and formats the **SD card** -- type
+   `yes`.  Anything else, or no answer, stops it with the card untouched.  (-y
+   skips the questions.)
+
 4. When it says done, the E5 reboots into OpenWrt; the first boot takes about
    two minutes.
 
@@ -55,10 +62,21 @@ What it does:
   The package carries no device's firmware: those files are the vendor's, and
   they carry each unit's identity (BT address, serial number), so every
   device uses its own;
-* writes the OpenWrt image to `/data/e5linux/openwrt.ext4` and the first
-  boot's settings to `/data/e5linux/openwrt-install.conf`;
+* partitions the **SD card** (GPT, one Linux partition) and writes the OpenWrt
+  image onto it: the partition *is* the root filesystem, which the initramfs
+  mounts straight (the card is marked `/etc/e5/sd-root`).  The partition is only
+  as large as the image, so the rest of the card stays free for more systems or
+  a store of its own;
+* unpacks this device's files into it and writes the first boot's settings to
+  its `/etc/e5/install.conf`;
 * writes the boot image to `boot_b`, verifies it, and points the next boot at
-  slot b.  **Slot a's Android is not touched.**
+  slot b.  **Slot a's Android is not touched.**  The only write outside the card
+  is `e5linux/boot-os` on userdata -- a few bytes recording that the card is the
+  system to boot (it is what makes a later `--data` install win over the card
+  again, and the card still boots when userdata cannot be written);
+* `--data` instead writes the image to `/data/e5linux/openwrt.ext4` and the
+  first boot's settings to `/data/e5linux/openwrt-install.conf`, and asks three
+  times before it writes anything.
 
 ## Using it
 
@@ -97,11 +115,19 @@ It updates the boot image and the OpenWrt image over the USB network and
 records); packages added with `apk` are not kept.  The new image takes over at
 the reboot; the old one stays as `/mnt/e5-data/e5linux/openwrt.ext4.old`.
 
+An SD-card install is not updated this way: its root filesystem is the card's
+partition, which the updater does not write.  Run the flasher from Android again
+with the card in (it keeps nothing on the card, so save what you changed there
+first); `--update` says so and writes nothing.
+
 ## Uninstall
 
-Back in Android, in a root shell, delete `/data/e5linux/openwrt.ext4`,
-`device-files.tar` and `openwrt-install.conf`.  The boot image in `boot_b`
-does not bother Android, which boots from slot a.
+Back in Android, in a root shell: `echo android > /data/e5linux/boot-os` (or
+delete that file) so the card is no longer the system to boot, then take the
+card out; its partition can be wiped with any partition tool.  A `--data`
+install leaves `/data/e5linux/openwrt.ext4`, `device-files.tar` and
+`openwrt-install.conf` to delete.  The boot image in `boot_b` does not bother
+Android, which boots from slot a.
 
 ## Disclaimer
 

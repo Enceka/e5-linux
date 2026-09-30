@@ -353,6 +353,34 @@ done
 log "stage=data-partition dev=${data:-none}"
 
 has_init() { [ -x "$1/lib/systemd/systemd" ] || [ -x "$1/sbin/init" ]; }
+
+# SD card root: openwrt/bundle/flash.py (its default install; `--data` is the
+# old one) writes the OpenWrt image to a partition of the removable card and
+# marks it /etc/e5/sd-root.  The card may move between units, so it is recognised
+# by its content, not by a label; the partition the marker sits on goes to
+# SDROOT.  "Removable" cannot be asked of this controller (both mmcblk devices
+# report removable=0), so it is the mmcblk device that is not the one carrying
+# Android's partitions -- the one misc lives on.
+sd_root() {
+    [ -n "$misc" ] || return 1
+    emmc=${misc#/dev/}; emmc=${emmc%%p*}
+    for d in /sys/class/block/mmcblk*; do
+        n=${d##*/}
+        case "$n" in *p[0-9]*|*boot*) continue ;; esac
+        [ "$n" = "$emmc" ] && continue
+        for part in /dev/$n /dev/${n}p*; do
+            [ -b "$part" ] || continue
+            mount -t ext4 -o ro,noatime "$part" /sdtry 2>/dev/null || continue
+            if [ -x /sdtry/sbin/init ] && [ -f /sdtry/etc/e5/sd-root ]; then
+                SDROOT=$part
+                umount /sdtry
+                return 0
+            fi
+            umount /sdtry
+        done
+    done
+    return 1
+}
 # e5linux/boot-os names the system to start: a directory of that name on the
 # image (/openwrt), or the Debian root at the top of it (anything else).
 # e5linux/boot-os-next does the same for one boot only, and is removed as it is
@@ -390,7 +418,7 @@ pick_root() {
     done
 }
 
-mkdir -p /newroot /data /disk
+mkdir -p /newroot /data /disk /sdtry
 rootdir= data_mounted=
 [ -n "$data" ] && f2fs_last_cp "$data"
 if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/datamount.err; then
@@ -432,6 +460,28 @@ if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/da
     fi
 else
     log "stage=data-mount-fail $(cat /run/datamount.err 2>/dev/null)"
+fi
+
+# The marked SD card: openwrt/bundle/flash.py's default install writes the
+# OpenWrt image to a partition of the removable card and marks it
+# /etc/e5/sd-root.  A trial (e5.openwrt=) never uses it.  It is preferred when
+# userdata names no system (e5linux/boot-os, which both installers write: `sd`
+# for the card, `openwrt` for the image in userdata -- so the last install wins)
+# and it is the fallback otherwise, so a card whose userdata cannot be mounted
+# still boots.
+if [ -z "$e5_trial" ] &&
+   { [ -z "$want" ] || [ "$want" = sd ] || [ -z "$rootdir" ]; } && sd_root; then
+    if [ -n "$rootdir" ]; then
+        umount /disk 2>/dev/null
+        [ -n "$rootloop" ] && losetup -d "$rootloop" 2>/dev/null
+        rootdir=
+    fi
+    if mount -t ext4 -o noatime "$SDROOT" /disk 2>>/run/rootmount.err; then
+        rootdir=/disk
+        log "stage=openwrt-sd $SDROOT"
+    else
+        log "stage=openwrt-sd-fail $(cat /run/rootmount.err 2>/dev/null)"
+    fi
 fi
 
 if [ -n "$rootdir" ]; then

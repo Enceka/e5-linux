@@ -3,14 +3,15 @@
 > English: [`README.md`](README.md)
 
 把 OpenWrt 25.12（带 5G 上网、热点、LuCI 和屏幕信息屏）装到荣悦 E5 上，与原来的 Android
-共存：Android 不动，OpenWrt 装在手机存储（userdata）里的一个镜像文件中，从 `boot_b` 启动。
-随时可以回到 Android。
+共存：Android 不动，OpenWrt 装到 **SD 卡**（独立分区，卡上其余空间保留）上，从 `boot_b` 启动。
+随时可以回到 Android。加 `--data` 则装到手机存储里——即改用 SD 卡之前的做法。
 
 ## 需要
 
 * 荣悦 E5，**bootloader 已解锁**，Android 已用 **Magisk** 获取 root；
 * Android 在 slot a 运行（出厂状态就是）；
-* 手机存储至少 2.5 GB 可用；
+* 卡槽里插一张 **2 GB 以上的 SD 卡**：它会被重新分区并清空，其余空间留给以后加分区。
+  用 `--data` 则不需要卡，但要手机存储至少 2.5 GB 可用；
 * 一台 Windows、macOS 或 Linux 电脑，装有：
   * **Python 3.8 或更新版本**（Windows 从 https://www.python.org/downloads/ 安装，勾选“Add python.exe to PATH”）；
   * **adb**（Android platform-tools：https://developer.android.com/tools/releases/platform-tools ，
@@ -38,6 +39,9 @@
    ./flash.sh --ssid E5-OpenWrt --wifi-key 12345678 -y       (macOS / Linux)
    ```
 
+   在分区、格式化 **SD 卡** 之前会再确认一次，需要输入 `yes`；输入别的或不回答都会中止，
+   卡不会被改动。（`-y` 跳过所有询问。）
+
 4. 等脚本显示“完成”，设备会自动重启进 OpenWrt，第一次启动约 2 分钟。
 
 脚本做的事情：
@@ -46,9 +50,15 @@
 * **从这台设备自己的 Android 里提取** Wi-Fi/蓝牙/音频固件和启动基带所需的 vendor 文件，打包成
   `/data/e5linux/device-files.tar`。刷机包里不带任何设备的固件：这些文件属于厂商，而且带有
   每台设备自己的信息（蓝牙地址、序列号），所以每台设备用自己的；
-* 把 OpenWrt 镜像写到 `/data/e5linux/openwrt.ext4`，首次启动的设置写到
-  `/data/e5linux/openwrt-install.conf`；
+* 给 **SD 卡** 分区（GPT，一个 Linux 分区）并把 OpenWrt 镜像写上去：这个分区**就是**根文件系统，
+  initramfs 直接挂载它（卡上写有 `/etc/e5/sd-root` 标记）。分区只做到镜像大小，卡上其余空间保留，
+  留给以后加更多系统或独立的存储分区；
+* 把这台设备自己的文件解包进去，首次启动的设置写到它的 `/etc/e5/install.conf`；
 * 把启动镜像写入 `boot_b` 并校验，然后让下次启动走 slot b。**slot a 的 Android 不会被改动。**
+  卡以外只写 userdata 上的 `e5linux/boot-os`（几个字节，记录要启动卡上的系统）——它也让后来
+  用 `--data` 装的系统重新成为启动目标；userdata 写不进去时，卡上的系统照样能启动；
+* 加 `--data` 则改为把镜像写到 `/data/e5linux/openwrt.ext4`、设置写到
+  `/data/e5linux/openwrt-install.conf`，并在写入前**确认三次**。
 
 ## 使用
 
@@ -83,10 +93,16 @@ flash.cmd --update                (Windows；macOS / Linux：./flash.sh --update
 SSH 密钥、流量记录）。用 `apk` 另装的软件包不会保留。新镜像在重启后生效，旧镜像保留为
 `/mnt/e5-data/e5linux/openwrt.ext4.old`。
 
+装在 SD 卡上的系统不能用这种方式更新：它的根文件系统就是卡上的分区，而更新器不写它。请回到
+Android、插着卡重新运行刷机脚本（卡上的改动不会被保留，先备份）；`--update` 会提示这一点，
+并且什么都不写。
+
 ## 卸载
 
-回到 Android 后，在 root shell 里删除 `/data/e5linux/openwrt.ext4`、`device-files.tar` 和
-`openwrt-install.conf`。`boot_b` 里的启动镜像留着也不影响 Android（Android 从 slot a 启动）。
+回到 Android 后，在 root shell 里执行 `echo android > /data/e5linux/boot-os`（或删掉该文件），
+这样卡不再是启动目标，然后把卡取出来，用任意分区工具清掉它的分区即可。用 `--data` 装的则要删
+`/data/e5linux/openwrt.ext4`、`device-files.tar` 和 `openwrt-install.conf`。`boot_b` 里的启动
+镜像留着也不影响 Android（Android 从 slot a 启动）。
 
 ## 免责声明
 

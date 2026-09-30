@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """荣悦 E5 OpenWrt 一键刷入 / one-click flash of OpenWrt on the Rongyue E5.
 
-  flash.py                  first install, from rooted Android over adb
+  flash.py                  first install onto the **SD card**, from rooted
+                            Android over adb: the card is partitioned and
+                            formatted, OpenWrt goes onto it
+  flash.py --data           the same onto the phone's storage (userdata), the
+                            form before the SD card; it asks three times
   flash.py --update         update, from the running e5-linux over the USB LAN
                             (OpenWrt's settings and installed apps kept)
   flash.py --boot-openwrt   from Android back to the installed OpenWrt (adb)
@@ -12,7 +16,7 @@ Options for the first install (asked for when not given):
   --apn APN            the carrier's APN (default: automatic, from the SIM)
   --ssid SSID          the hotspot's name (default E5-OpenWrt)
   --wifi-key KEY       the hotspot's WPA2 key, 8-63 characters (default: random)
-  -y                   no questions: the defaults for what is not given
+  -y                   no questions: the defaults, and yes to erasing the card
 
 Runs on Windows, macOS and Linux with Python 3.8+ and adb (Android
 platform-tools).  flash.cmd (Windows) and flash.sh start it.  See README.md.
@@ -111,6 +115,14 @@ def sha256(path):
         for chunk in iter(lambda: f.read(1 << 20), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+def gz_usize(path):
+    """The uncompressed size of a gzip file, from its last four bytes (ISIZE;
+    modulo 4 GiB, and these images are 1 GiB)."""
+    with open(path, 'rb') as f:
+        f.seek(-4, os.SEEK_END)
+        return int.from_bytes(f.read(4), 'little')
 
 
 def boot_json():
@@ -327,6 +339,171 @@ def ask(prompt, default=''):
     return v or default
 
 
+def confirm(prompt, word='yes'):
+    """A typed confirmation: anything but the word is a no."""
+    try:
+        v = input(prompt).strip()
+    except EOFError:
+        v = ''
+    return v.lower() == word
+
+
+def device_sd():
+    """The removable card's block device: the mmcblk device that is not the one
+    Android's partitions live on (userdata, misc).  "Removable" cannot be asked
+    of this controller -- both mmcblk devices report 0 -- so it is told apart by
+    what it carries."""
+    emmc = ''
+    for line in su('for u in /sys/class/block/mmcblk*p*/uevent; do '
+                   'grep -qx PARTNAME=userdata "$u" 2>/dev/null && '
+                   'n=${u%/*} && n=${n##*/} && echo ${n%%p*}; done').split():
+        emmc = line
+        break
+    if not emmc:
+        die('no userdata partition: not an E5?')
+    devs = [d for d in su('for d in /sys/class/block/mmcblk*; do n=${d##*/}; '
+                          'case $n in *p[0-9]*|*boot*) continue;; esac; '
+                          f'[ $n = {emmc} ] && continue; echo $n; done').split()
+            if d.startswith('mmcblk')]
+    if len(devs) != 1:
+        die('expected one SD card, found %d (%s): is a card in the slot?'
+            % (len(devs), ' '.join(devs) or 'none'))
+    return '/dev/block/' + devs[0]
+
+
+def device_size(dev):
+    out = su('blockdev --getsize64 %s' % dev).strip()
+    return int(out) if out.isdigit() else 0
+
+
+def install_sd(a):
+    """The default first install: OpenWrt onto the SD card.
+
+    The card is partitioned (GPT, one Linux partition) and the generic OpenWrt
+    image is written onto the partition -- the partition *is* the filesystem, so
+    boot/init mounts it directly (the marked card, /etc/e5/sd-root) instead of a
+    file on userdata.  The device's own firmware is unpacked into it, so the
+    card carries the whole system and userdata is not the root's home.  Only
+    boot_b and, to record the boot target, e5linux/boot-os on userdata are
+    written outside the card."""
+    steps(8)
+    find_adb()
+    android_checks()
+    bj = boot_json()
+    live = od_hex(None)
+    if live != bj['misc_slot_a_hex']:
+        die(f'the boot control block is not the one this package expects ({live}): '
+            'boot Android normally once, then try again')
+    sd = device_sd()
+    if device_size(sd) < 2 << 30:
+        die('the card in the slot is smaller than 2 GiB')
+
+    apn, ssid, key = a.apn, a.ssid, a.wifi_key
+    if not a.y:
+        if apn is None:
+            apn = ask('APN [自动识别 / automatic, from the SIM]: ')
+        ssid = ask(f'热点名称 / hotspot name [{ssid}]: ', ssid)
+        if not key:
+            key = ask('热点密码 / hotspot key, 8-63 characters [random]: ')
+    apn = apn or ''
+    if not key:
+        key = ''.join(random.SystemRandom().choice('abcdefghjkmnpqrstuvwxyz23456789') for _ in range(10))
+    if not 8 <= len(key) <= 63 or "'" in key or "'" in ssid or "'" in apn:
+        die("the hotspot key must have 8-63 characters, and no ' anywhere")
+
+    say(f'准备 SD 卡 / preparing the card ({sd})')
+    print(f'   {sd}  {device_size(sd) >> 30} GiB')
+    if not a.y:
+        print('   OpenWrt 会装到这张卡上，卡上现有的数据会全部丢失。')
+        print('   OpenWrt goes onto this card and everything on it is erased.')
+        if not confirm('   输入 yes 继续 / type yes to continue: '):
+            die('aborted: nothing was written, the card is untouched')
+
+    with tempfile.TemporaryDirectory() as work:
+        say(f'分区并格式化 / partitioning and formatting the card')
+        img = os.path.join(F, 'openwrt.ext4.gz')
+        # The root partition is only as large as the image: the rest of the card
+        # stays free, for more systems (another partition the initramfs can be
+        # pointed at) and a persistent store of its own.  So the filesystem is
+        # not grown to the card -- it fills the partition exactly as built.
+        sec = (gz_usize(img) + 511) // 512 + 2048       # a MiB of slack past it
+        su(f'sgdisk --zap-all {sd}')
+        su(f'sgdisk --new=1:0:+{sec} --typecode=1:8300 --change-name=1:e5root {sd}')
+        part = sd + 'p1'
+        for _ in range(20):
+            if 'ok' in su(f'[ -b {part} ] && echo ok'):
+                break
+            time.sleep(1)
+        else:
+            die('the card shows no first partition after partitioning')
+
+        say('写入 OpenWrt / OpenWrt -> the card')
+        push(img, f'{TMP}/openwrt.ext4.gz', 'openwrt.ext4.gz')
+        with busy('解压到 SD 卡 / unpacking onto the card'):
+            su(f'gzip -dc {TMP}/openwrt.ext4.gz > {part} && sync', timeout=1800)
+        su(f'rm -f {TMP}/openwrt.ext4.gz')
+        # (no e2fsck here: the image is built by a newer e2fsprogs than the
+        # device's, whose feature set -- metadata_csum_seed, orphan_file -- the
+        # device's e2fsck calls an error.  The mount below is the check.)
+
+        say('这台设备的文件和首次启动设置 / this device\'s files and the first boot\'s settings')
+        size = pull_device_files(work, f'{TMP}/e5-device-files.tar')
+        conf = os.path.join(work, 'install.conf')
+        with open(conf, 'w', newline='\n') as f:
+            f.write('# the flash package (flash.py), for OpenWrt\'s first boot\n'
+                    f"E5_APN='{apn}'\nE5_WIFI_SSID='{ssid}'\nE5_WIFI_KEY='{key}'\n"
+                    "E5_WIFI_CHANNEL='149'\nE5_DEFAULT_BOOT='linux'\n")
+        mark = os.path.join(work, 'sd-root')
+        with open(mark, 'w', newline='\n') as f:
+            f.write('e5-openwrt-sd %s %s\n' % (time.strftime('%Y-%m-%d'), bj['sha256'][:12]))
+        adb('push', conf, f'{TMP}/e5-install.conf', check=True)
+        adb('push', mark, f'{TMP}/e5-sd-root', check=True)
+        m = f'{TMP}/e5sd'
+        su(f'umount {m} 2>/dev/null; mkdir -p {m}; mount -t ext4 {part} {m}')
+        with busy('在卡上写设置和设备文件 / writing the settings and the device files'):
+            su(f'mkdir -p {m}/etc/e5; '
+               f'mv {TMP}/e5-install.conf {m}/etc/e5/install.conf; '
+               f'chmod 600 {m}/etc/e5/install.conf; '
+               f'mv {TMP}/e5-sd-root {m}/etc/e5/sd-root; '
+               f'tar -xf {TMP}/e5-device-files.tar -C {m}; '
+               f'sha256sum {TMP}/e5-device-files.tar | cut -c1-64 > {m}/etc/e5/device-files.stamp; '
+               'sync', timeout=900)
+        ok = 'ok' in su(f'[ -x {m}/sbin/init ] && [ -f {m}/lib/firmware/wcnmodem.bin ] && echo ok')
+        su(f'umount {m}; rm -f {TMP}/e5-device-files.tar')
+        if not ok:
+            die('the card does not hold the image and the device files it should')
+        print(f'   OpenWrt and {size} bytes of device files are on the card')
+        free = device_size(sd) - device_size(part)
+        print(f'   {free >> 30}.{(free % (1 << 30)) * 10 // (1 << 30)} GiB of the card '
+              'are left free, for more partitions (systems, a store)')
+
+        say('写入启动镜像 / boot image -> boot_b')
+        push(os.path.join(F, 'boot.img'), f'{TMP}/e5-boot.img', 'boot.img')
+        with busy('写入并校验 boot_b / writing and verifying boot_b'):
+            su(f'dd if={TMP}/e5-boot.img of=/dev/block/by-name/boot_b bs=4M 2>/dev/null; sync')
+            ok = su('sha256sum /dev/block/by-name/boot_b').split()[0:1] == [bj['sha256']]
+        if not ok:
+            die('boot_b did not verify; Android stays as it is')
+        su(f'rm -f {TMP}/e5-boot.img')
+        arm_slot_b()
+
+    # The boot target, explicit: e5linux/boot-os on userdata is a few bytes, and
+    # it is what makes a later `--data` install win over the card again.  The root
+    # filesystem itself is not on userdata; if userdata cannot be written, the
+    # marked card boots anyway (boot/init).
+    su(f'mkdir -p {D}; rm -f {D}/boot-os-next; echo sd > {D}/boot-os')
+
+    say('完成，正在重启进 OpenWrt / done, rebooting into OpenWrt')
+    adb('reboot')
+    print(f'''
+  第一次启动约 2 分钟 / the first boot takes about 2 minutes.
+  OpenWrt 在 SD 卡上 / OpenWrt is on the SD card ({sd}p1).
+  热点 / hotspot:  {ssid}   密码 / key:  {key}
+  管理 / admin:    http://192.168.9.1  (LuCI, root / root -- 请改密码 / change it)
+  回 Android:      屏幕 高级 -> 系统 -> 下次启动 Android, or: e5-next-boot android; reboot
+  若启动失败，设备会在两次尝试后自动回到 Android。
+  If the boot fails, the E5 falls back to Android after two tries.''')
+
 def install(a):
     # checks, device files, OpenWrt, settings, boot image, reboot
     steps(6)
@@ -340,6 +517,15 @@ def install(a):
     avail = su('df -k /data | tail -1').split()
     if len(avail) < 4 or int(avail[3]) < 2621440:
         die("less than 2.5 GiB free on the phone's storage")
+    if not a.y:
+        say("安装到 userdata（旧方式）/ installing to the phone's storage (userdata)")
+        print('   OpenWrt goes into a file on userdata (/data/e5linux), about 1.1 GiB of it,')
+        print('   the way it was before the SD card.  The SD card is the default install;')
+        print('   this form is the fallback, for a device whose slot is not usable.  It')
+        print("   writes to the phone's own storage, so it asks three times.")
+        for n in (1, 2, 3):
+            if not confirm(f'   确认 {n}/3 -- 输入 yes 继续 / type yes to continue: '):
+                die('aborted: nothing was written')
 
     apn, ssid, key = a.apn, a.ssid, a.wifi_key
     if not a.y:
@@ -479,10 +665,14 @@ def update(a):
         say(f'更新 / updating {host}')
         env = dict(os.environ, E5_TELNET_HOST=host, E5_TELNET_PASS=pw, E5_TELNET_WAIT='1800')
         telnet = [sys.executable, os.path.join(SCRIPTS, 'tools', 'e5-telnet.py')]
-        cmd = (f'cd /tmp && wget -q -O dfb.sh {u}/dfb.sh && wget -q -O dii.sh {u}/dii.sh && '
-               f'sh dfb.sh {u}/boot-head.img {bj["sha256_head56m"]} {mb} && sh dii.sh {u}/openwrt.ext4.gz && '
-               'd=/mnt/e5-data/e5linux && rm -f $d/boot-os-next && echo openwrt > $d/boot-os && sync && '
-               'echo E5-UPDATE-$((1+1))')
+        inner = (f'cd /tmp && wget -q -O dfb.sh {u}/dfb.sh && wget -q -O dii.sh {u}/dii.sh && '
+                 f'sh dfb.sh {u}/boot-head.img {bj["sha256_head56m"]} {mb} && sh dii.sh {u}/openwrt.ext4.gz && '
+                 'd=/mnt/e5-data/e5linux && rm -f $d/boot-os-next && echo openwrt > $d/boot-os && sync && '
+                 'echo E5-UPDATE-$((1+1))')
+        # a card-installed system is not updated in place: its image is the card's
+        # partition, which device-install-image.sh does not write (it writes
+        # userdata), so say so instead of updating the wrong system
+        cmd = ('if [ -f /etc/e5/sd-root ]; then echo E5-SD-ROOT; else ' + inner + '; fi')
         # the device's own steps as they happen: the boot image, the unpacking,
         # the settings kept, the device's files
         lines = []
@@ -496,6 +686,9 @@ def update(a):
                         sys.stdout.flush()
         out = '\n'.join(lines)
         srv.shutdown()
+        if 'E5-SD-ROOT' in out:
+            die('this E5 boots OpenWrt from an SD card: its update is the SD install, '
+                'run ./flash.sh with the card in the slot (nothing was written)')
         if 'E5-UPDATE-2' not in out:
             print('\n'.join(out.splitlines()[-20:]))
             die('the update did not finish (the log is above)')
@@ -512,6 +705,8 @@ def main():
     g.add_argument('--update', action='store_true')
     g.add_argument('--boot-openwrt', action='store_true')
     g.add_argument('--check', action='store_true')
+    g.add_argument('--data', action='store_true',
+                   help="install to the phone's storage (userdata) as before; the SD card is the default")
     ap.add_argument('--apn')
     ap.add_argument('--ssid', default='E5-OpenWrt')
     ap.add_argument('--wifi-key')
@@ -526,8 +721,10 @@ def main():
         boot_openwrt(a)
     elif a.check:
         check(a)
+    elif a.data:
+        install(a)          # the form before the SD card; three confirmations
     else:
-        install(a)
+        install_sd(a)
 
 
 if __name__ == '__main__':

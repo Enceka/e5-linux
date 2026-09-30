@@ -4282,3 +4282,49 @@ vendor's handling unchecked), the shutdown sequence (flush, POWER_OFF_LONG, then
 vmmc regulator and the PMIC), discard (the vendor sets mmc0's discard granularity to
 the preferred erase size), and the mount options (Android: `fsync_mode=nobarrier`,
 `checkpoint_merge`, `reserve_root`).  The eMMC: manfid `0x37`, 29.1 GiB, HS400ES.
+
+## 49. The SD card install, and why `--update` cannot update it (2026-09-30)
+
+`flash.py`'s first install -- its default since 2026-09-30 -- puts the root on
+an SD card: GPT, one Linux partition only as large as the image, the image
+written onto the partition, so the partition *is* the root filesystem and
+boot/init mounts it straight.  The marker `/etc/e5/sd-root` is what tells the
+card from the eMMC ("removable" cannot be asked of this controller: both mmcblk
+devices report 0), so the card may move between units.  The only write outside
+the card is `e5linux/boot-os` on userdata, a few bytes naming the boot target
+(`sd` for the card, `openwrt` for the image on userdata; the last install wins,
+and the card is the fallback when userdata names nothing, so a card whose
+userdata cannot be mounted still boots).  `--data` is the form before the card
+(the image in `/data/e5linux`).  Measured on the E5: the card installs and
+boots -- `findmnt /` = /dev/mmcblk1p1 ext4, mc1 at 208 MHz UHS SDR104, 13.4 GiB
+of the card left free.
+
+`--update` was written for the userdata form and cannot update a card install;
+it refuses with a message rather than update the wrong system.  The mechanism,
+step by step:
+
+* `openwrt/device-install-image.sh` hardcodes its target -- `D=/mnt/e5-data`,
+  `IMG=$D/e5linux/openwrt.ext4`.  A card system has no such file: what it has
+  is the card's partition, mounted as `/`.
+* Called on a card system it sees `/etc/openwrt_release` with
+  `image-form=standalone`, takes the `running_image` path, and writes the new
+  image as `openwrt.ext4.new` on userdata; `flash.py`'s update then writes
+  `boot-os = openwrt`.
+* boot/init's `.new` swap exists only for that userdata file, and with
+  `boot-os=openwrt` and the image mounted it takes the userdata branch -- the
+  card branch wants `boot-os` empty or `sd`, or no other system found.
+* So the update would land a *second* system on userdata, leave the card (the
+  currently running one) at its old version, and move the boot there.  Settings are
+  kept (the installer copies the running configuration into the new image), but
+  the target is wrong -- which is why the refusal is in place instead.
+
+Two ways to make an SD install updatable:
+
+* **A.** Stage the new image on userdata (`openwrt.ext4.new` as now, settings
+  kept by the installer as now), and let boot/init write it onto the card's
+  partition before it mounts anything, then remove the staging file.  Wants
+  ~1 GiB free on userdata while it runs, freed after the swap.
+* **B.** Write the new rootfs in place over the mounted card root, at file
+  level: fewer parts, but it rewrites the filesystem it is running from.
+
+Either needs a `boot.img` and a package built and one device test.

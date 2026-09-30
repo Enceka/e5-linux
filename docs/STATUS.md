@@ -1,6 +1,6 @@
 # Status
 
-_Last updated 2026-09-29._
+_Last updated 2026-09-30._
 
 Reasoning, evidence and dead ends live in `docs/FINDINGS.md`; traps found the hard
 way are collected in its sections 24.8 and 28.  This file is only the work list.
@@ -17,7 +17,9 @@ FINDINGS.
   remount, `CP_UMOUNT`) with reliable writes already off.  Android's fsck repaired
   it; the vendor kernel never showed it.  Until it is understood, every Linux boot
   that mounts userdata read-write risks Android's data -- the plan is to install on
-  the SD card and leave userdata alone (read-only at most).
+  the SD card and leave userdata alone (read-only at most).  **That install is in
+  since 2026-09-30** (`flash.py`'s default, measured; FINDINGS 49): the root is the
+  card's partition, and userdata takes only the few bytes of `e5linux/boot-os`.
   **A fourth time on 2026-09-29, 00:29** (`logs/linux-fail-20260929/`): after a clean
   unmount (`data-last-cp flags=0x45 clean-unmount`) the next Linux boot's mount failed
   with -EUCLEAN, boot/init fell to the rescue and then to Android, whose fsck repaired it
@@ -126,8 +128,18 @@ binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by h
   4. **Bluetooth "no adapter"** (`/usr/libexec/e5-bt-check`, from `e5-bt`): hci0 was
      there but DOWN and never reported to bluetoothd -- the attach's failed setup of
      the leftovers below; the check brings it up or attaches again.
-- **Install on the SD card**, not in userdata (see Now): the root image and the
-  device files on the card, userdata read-only or not mounted at all.
+- **待确认 (to confirm): what an SD-card install's update is.**  The card install
+  itself is in and measured (2026-09-30, `flash.py`'s default, `--data` keeps the
+  old form; FINDINGS 49): the root is the card's partition and userdata keeps only
+  `e5linux/boot-os`.  But `--update` cannot update it -- it refuses and says so
+  instead of updating the wrong system, because the device-side installer writes
+  the *userdata* image file: on a card system it would unpack a second system onto
+  userdata and set `boot-os=openwrt`, which moves the next boot off the card and
+  leaves the card stale (the three steps are in FINDINGS 49).  Two ways to make it
+  work: (A) stage the new image on userdata and let boot/init write it onto the
+  card's partition before it mounts anything, or (B) rewrite the mounted card root
+  at file level.  A is the one to take; either needs a `boot.img` and a package
+  built and a device test.  Implementation approach remains to be selected.
 - **An idle blank does not lock the session** (Debian/Phosh, FINDINGS 18).
 - **Call audio.**  Calls work in both directions under ModemManager (FINDINGS
   37.4), but nothing routes the codec into the CP's VoLTE voice path.
@@ -154,13 +166,13 @@ binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by h
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 13 on slot a |
 | mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`), the installed system under OpenWrt (`E5_MAINLINE=1 openwrt/make-flash-bundle.sh`, `flash.py`): display, touch, keys, USB gadget, Wi-Fi, BT, both SIM cards (FINDINGS 47), charging and fuel gauge, thermal as on 5.15, speaker and mic; the PMIC power off; filesystems read-only before a reset (FINDINGS 48.3); no eMMC reliable writes |
 | power | `poweroff` is a real one without the cable; with a charger in, the PMIC powers the E5 up again and it boots (charger mode is logged, not a charging screen) |
-| openwrt | OpenWrt 25.12.5 standalone as `/data/e5linux/openwrt.ext4` with its own firmware, vendor subset, modem modules and fonts (FINDINGS 39, 43); WAN by ModemManager, LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; the info screen (e5-infoscreen) on the panel |
+| openwrt | OpenWrt 25.12.5 standalone, on the SD card's partition (the install's default since 2026-09-30; `--data` keeps the image in `/data/e5linux/openwrt.ext4` -- FINDINGS 49) with its own firmware, vendor subset, modem modules and fonts (FINDINGS 39, 43); WAN by ModemManager, LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; the info screen (e5-infoscreen) on the panel |
 | kernel 5.15 | rebuilt `Image` (`kernel/patches/0001-0028`), the Debian root's; still the fallback flash package |
 | rootfs (Debian) | Debian 13 (trixie) arm64 with Phosh 0.46, a loop file inside `/data/e5linux/` |
 | baseband | ModemManager 1.24.0+e5 (`unisoc` plugin) on `wwan0at0` (`sipc_wwan`), data on `sipa_eth0`/`sipa_eth8` by card; CP booted by `modem_control` in the vendor chroot; every card needs its band lock (FINDINGS 47) |
 | wifi | `sprd_wlan_combo` on the WCN chip: AP for the hotspot, station mode on Debian |
 | bluetooth | configured by the kernel like the vendor HAL (factory address, pskey/RF); headphones play under OpenWrt (FINDINGS 45) |
-| disk | the eMMC's userdata (F2FS) holds the images -- see Now |
+| disk | the SD card can hold the system (FINDINGS 49); the eMMC's userdata (F2FS) holds the images of the `--data` form -- see Now |
 
 ## Open questions
 

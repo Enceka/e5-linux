@@ -1,0 +1,75 @@
+#!/bin/sh
+# SD-slot verification for the E5 (mainline): mount the card's ext4 partition, write
+# and read a file back a few times, and leave the result in pmsg and in the 4 MiB
+# persistent block inside boot_b -- then warm-reboot back to Android.
+#
+# The card is expected to have been prepared beforehand (GPT + one ext4 partition,
+# "e5sd"): Android's sgdisk/mkfs.ext4, as `upstream/init-sdtest` has no mkfs.
+/bin/busybox mkdir -p /proc /sys /dev /tmp /mnt
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null
+/bin/busybox --install -s /bin
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+log() {
+    echo "E5-SD: $*" > /dev/kmsg
+    [ -c /dev/pmsg0 ] && echo "E5-SD: $*" > /dev/pmsg0
+}
+persist() {
+    b=
+    for u in /sys/class/block/mmcblk0p*/uevent; do
+        grep -qx PARTNAME=boot_b "$u" 2>/dev/null && b=/dev/$(basename "$(dirname "$u")")
+    done
+    [ -b "$b" ] || return
+    { echo "E5-PERSIST-BEGIN uptime=$(cut -d' ' -f1 /proc/uptime) release=$(uname -r) init=sdtest"
+      echo "--- sdtest"
+      cat /tmp/sdtest.txt 2>&1
+      echo "--- dmesg"
+      dmesg | tail -c 3000000
+      echo "E5-PERSIST-END"; } > /tmp/persist.txt 2>&1
+    head -c 65536 /dev/zero >> /tmp/persist.txt
+    dd if=/tmp/persist.txt of="$b" bs=4096 seek=14336 conv=notrunc 2>/dev/null
+    sync
+}
+
+exec > /tmp/sdtest.txt 2>&1
+echo "release=$(uname -r) uptime=$(cut -d' ' -f1 /proc/uptime)"
+
+dev=/dev/mmcblk1p1
+i=0
+while [ ! -b "$dev" ] && [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1)); done
+
+log "wait $i s: $dev present=$([ -b "$dev" ] && echo yes || echo no)"
+log "block: $(grep -c mmcblk /proc/partitions) entries; $(ls /sys/block | tr '\n' ' ')"
+log "mmc1 ios: $(tr -s ' \n' ' ' < /sys/kernel/debug/mmc1/ios 2>&1)"
+log "partitions: $(for p in /sys/block/mmcblk1/mmcblk1p*; do echo -n "${p##*/}=$(cat $p/size 2>/dev/null) "; done)"
+log "blkid: $(blkid $dev 2>&1 | tr '\n' ' ')"
+
+if [ -b "$dev" ]; then
+    if mount -t ext4 -o rw "$dev" /mnt; then
+        log "mount OK on /mnt"
+        ok=1
+        n=0
+        while [ "$n" -lt 3 ]; do
+            data="E5SD-$RANDOM-$(cut -d' ' -f1 /proc/uptime)-$n"
+            echo "$data" > /mnt/e5sd-test.txt
+            sync
+            got=$(cat /mnt/e5sd-test.txt 2>/dev/null)
+            [ "$got" = "$data" ] || ok=0
+            log "rw[$n]: wrote='$data' read='$got'"
+            n=$((n + 1))
+        done
+        log "readback_all_ok=$ok"
+        log "df: $(df -h /mnt 2>&1 | tr -s ' \n' ' ')"
+        log "ls: $(ls -la /mnt 2>&1 | tr -s ' \n' ' ' | cut -c1-300)"
+        if umount /mnt; then log "umount OK"; else log "umount rc=$?"; fi
+    else
+        log "mount FAILED rc=$?"
+    fi
+else
+    log "no $dev"
+fi
+
+persist
+log "rebooting (warm)"
+echo b > /proc/sysrq-trigger

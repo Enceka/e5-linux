@@ -4795,6 +4795,42 @@ snapshot monitor only inspected ObjectManager entries, which did not include
 standalone Call objects; it now follows Modem.Voice.Calls and reads each Call's
 properties directly. No call is initiated by that monitor.
 
+### 55.2 Stock Android audible reference and explicit DSP unmute (2026-10-02)
+
+The user manually called 10099 in stock Android and confirmed audible downlink.
+Root adb captured mixer state, DAPM, kernel and audio HAL logcat with
+`tools/android-call-reference.sh`; it never places, answers or ends calls and
+does not consume the HAL's voice notification pipe. Debugfs was mounted for
+reading. Evidence is private under `work/voice-20261001/android/`.
+
+Stock uses FE_ST_VOICE 5 in both directions, mono S16/8000 Hz and DSP scene 5.
+It applies Handsfree/NB1 with the same mode/offset 7, VBC_VOLUME=7 and codec
+speaker dacs=0/ao=3. The HAL switched from speaker back to receiver, so the late mixer snapshot
+shows Handset/NB1; the intermediate HAL log records the Handsfree parameters
+explicitly. Android omits the PCM status/hw_params proc
+entries; its kernel trigger log supplies the stream evidence instead.
+
+Command 0x35 is logged by the actual stock HAL as "cp voice enable" (16 at
+start, 0 at end); it is not the network-bandwidth command. Stock also receives
+command 0 with network information. Commands 0x34 in the comparison are
+`agdsp_log_point`/`add_audiodsplog` diagnostics, not a missing voice-enable
+protocol; their implementations were checked in the unit's own whale HAL.
+
+Android explicitly forces VBC_DL_MUTE during route changes, restores it after
+the DSP parameters, and releases DAC1 DSP MDG after the PCMs start. The Debian
+adapter now prepares both streams before either start, forces downlink mute,
+applies the measured speaker gains/volume, then explicitly sets DAC1 MDG to
+0,1024 and VBC_DL_MUTE to disable after startup/parameters. It still restores
+the complete prior state on stop or failure and never controls the modem.
+Tests cover preparation/start/unmute ordering and restoration on second-stream
+prepare/start failure. On-device local startup showed both PCMs RUNNING,
+correct unmute readback and exact mixer restoration, without any real call.
+
+The device returned to Debian A with Linux as the next/default boot. The trial
+boot-control block was verified by full 32-byte readback SHA-256 before reboot;
+no boot image or existing SD root was replaced. User-controlled Debian downlink
+verification is pending at this checkpoint; uplink remains deferred.
+
 ## 56. Installer diagnostics, SD capacity preflight and USB IPv4 (2026-10-02)
 
 The generic "the card does not hold the image..." error hid failures earlier
@@ -4835,39 +4871,3 @@ were removed; the Mac's own route/service order was not changed. Existing
 computer leases need renewal/reconnection to receive the new gateway.
 After the Android comparison reboot, the Mac's real USB DHCP ACK also contained
 `router={192.168.9.1}`, confirming the fix for the actual gadget host MAC.
-
-### 55.2 Stock Android audible reference and explicit DSP unmute (2026-10-02)
-
-The user manually called 10099 in stock Android and confirmed audible downlink.
-Root adb captured mixer state, DAPM, kernel and audio HAL logcat with
-`tools/android-call-reference.sh`; it never places, answers or ends calls and
-does not consume the HAL's voice notification pipe. Debugfs was mounted for
-reading. Evidence is private under `work/voice-20261001/android/`.
-
-Stock uses FE_ST_VOICE 5 in both directions, mono S16/8000 Hz and DSP scene 5.
-It applies Handsfree/NB1 with the same mode/offset 7, VBC_VOLUME=7 and codec
-speaker dacs=0/ao=3. The user switched between speaker and receiver, so the
-late mixer snapshot shows Handset/NB1; the intermediate HAL log records the
-Handsfree parameters explicitly. Android omits the PCM status/hw_params proc
-entries; its kernel trigger log supplies the stream evidence instead.
-
-Command 0x35 is logged by the actual stock HAL as "cp voice enable" (16 at
-start, 0 at end); it is not the network-bandwidth command. Stock also receives
-command 0 with network information. Commands 0x34 in the comparison are
-`agdsp_log_point`/`add_audiodsplog` diagnostics, not a missing voice-enable
-protocol; their implementations were checked in the unit's own whale HAL.
-
-Android explicitly forces VBC_DL_MUTE during route changes, restores it after
-the DSP parameters, and releases DAC1 DSP MDG after the PCMs start. The Debian
-adapter now prepares both streams before either start, forces downlink mute,
-applies the measured speaker gains/volume, then explicitly sets DAC1 MDG to
-0,1024 and VBC_DL_MUTE to disable after startup/parameters. It still restores
-the complete prior state on stop or failure and never controls the modem.
-Tests cover preparation/start/unmute ordering and restoration on second-stream
-prepare/start failure. On-device local startup showed both PCMs RUNNING,
-correct unmute readback and exact mixer restoration, without any real call.
-
-The device returned to Debian A with Linux as the next/default boot. The trial
-boot-control block was verified by full 32-byte readback SHA-256 before reboot;
-no boot image or existing SD root was replaced. User-controlled Debian downlink
-verification is pending at this checkpoint; uplink remains deferred.

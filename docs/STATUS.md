@@ -46,6 +46,9 @@ FINDINGS.
 - The hotspot: a phone reaching an IPv6-only site, and the management ports closed
   from its side, are unchecked; the beacon's bogus Extended Supported Rates; a
   `cancel_work_sync` WARNING in `sprd_dpu_stop` when the panel blanks.
+- **The battery temperature dipped to -8 C for 40 s** once, 130-173 s after a boot
+  (FINDINGS 41.1), 30 C before and after; not seen on the next boot.  A sampler at
+  boot for a few boots, and the fuel gauge's NTC channel against the ADC's lock.
 - GPU: scanout buffers are still the vendor KMS driver's dumb buffers, and the
   frequency is pinned at DVFS index 3 (384 MHz): watch thermals under real load.
 - `unisoc-cpd` (the fallback baseband owner on Debian): the 72 h soak is open.

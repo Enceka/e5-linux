@@ -3815,6 +3815,29 @@ when it starts and stops -- HiZ left on would run the battery flat.  Verified:
 limit 80 %, at 100 %: -121 mA, the battery discharging towards the resume level.
 A kernel fix for the two flags would make `stop_charge` enough on its own.
 
+### 41.1 "Not charging" while charging: the JEITA start (2026-10-01)
+
+The info screen showed 已充满 below 100 % with the current going in and no
+limit set.  The status was `Not charging` for whole boots: charger-manager's
+`charging_status` held `CM_CHARGE_TEMP_OVERHEAT` ("battery overheat or cold is
+still abnormal" every poll) at 31-33 C.  The vendor's JEITA code starts from
+status 4 -- the top zone, stop as overheat -- with a reference of 25.0 C
+(`jeita_info_init`), and `cm_jeita_temp_goes_up` never lowers the status while
+the temperature is above the reference: a battery warmer than 25 C at probe or
+plug-in stayed "overheat" until it cooled below the temperature of that start.
+charger-manager then disabled the charger in its bookkeeping only (the AW322xx
+went on charging, its CE bit following its own flag, above) -- hence the
+current in with the status `Not charging`.  Fixed in linux-lts-e5 `c1bb703f0`
+(a fresh start takes the zone the temperature is in): `Charging`,
+`charging_status 0` at 33 C from the boot on.  The info screen no longer reads
+`Not charging` as full either (e5-infoscreen `9b015d5`: full at 100 %, charging
+with current in, 未充电 otherwise).
+
+Still open: one boot read the battery temperature at 17.9, 5.2, -7.3, -8.0,
+4.2, 16.6 C between 130 and 173 s, 30 C before and after (the fuel gauge's
+`temp` and charger-manager alike); the next boot with a sampler from 113 s had
+no such dip.
+
 ## 42. Touch under OpenWrt: libudev-zero wants ABS_X/ABS_Y (2026-09-27)
 
 On OpenWrt the panel took no touch: the info screen's cage never saw the

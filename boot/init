@@ -452,9 +452,9 @@ if [ -n "$data" ] && { mount -t f2fs -o ro,noatime,nodiratime "$data" /data 2>/r
     umount /data
 fi
 # The card comes up after userdata: about a second later at 208 MHz, which is
-# when this runs.  Waited for -- up to 10 s when userdata names it, 3 s when it
-# names nothing (a card is the likely system then, but an E5 without one must
-# not wait long).
+# when this runs.  Waited for, up to 10 s, when userdata names it or names
+# nothing -- a damaged userdata names nothing, and that is when the card must
+# be found (a system on userdata names itself, and does not wait).
 sd_wait() {
     local i=0
     while [ "$i" -lt "$1" ]; do
@@ -466,7 +466,7 @@ sd_wait() {
     return 1
 }
 if [ -z "$e5_trial" ] && { [ -z "$want" ] || [ "$want" = sd ]; } &&
-   sd_wait $([ "$want" = sd ] && echo 20 || echo 6); then
+   sd_wait 20; then
     card=1
     log "stage=card-system userdata read-only"
     if [ -n "$once" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>>/run/datamount.err; then

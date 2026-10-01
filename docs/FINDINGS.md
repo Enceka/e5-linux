@@ -4283,6 +4283,32 @@ vmmc regulator and the PMIC), discard (the vendor sets mmc0's discard granularit
 the preferred erase size), and the mount options (Android: `fsync_mode=nobarrier`,
 `checkpoint_merge`, `reserve_root`).  The eMMC: manfid `0x37`, 29.1 GiB, HS400ES.
 
+### 48.5 The fifth time (2026-10-01), with no Android in between
+
+Evidence: `logs/linux-fail-20261001/` (`userdata-meta-39424blk.img.gz`, the
+first 39424 blocks -- SB, CP, SIT, NAT, SSA -- read in the rescue before Android's
+fsck ran; the rescue's dmesg; boot_b's persistent log).
+
+* The boots before it were Linux only.  The E5 ran the SD card system (userdata
+  mounted read-write at `/mnt/e5-data` the whole session, as boot/init did then).
+  A test boot image had a kernel without the SD slot (`upstream/out-release` was
+  still `1684c0ccb`, the card support is `2019815f2`/`af5e09329`): no card, so boot/init
+  took the OpenWrt image on userdata -- a loop root in the F2FS, read-write, about
+  30 minutes of use.  Before it `stage=data-last-cp ver=24dbb8b flags=0x45
+  clean-unmount`; it ended with a `reboot` (the read-only remount of 48.3).
+* The next boot: `data-last-cp ver=24dbb98 flags=0x45 clean-unmount`, and every
+  mount -- the early `ro,norecovery` one included -- failed with
+  `SIT is corrupted node# 8264 vs 4132` / `Failed to initialize F2FS segment
+  manager (-117)`: the SIT's valid node blocks summed to exactly **twice** the
+  checkpoint's valid node count.
+* So Android writing the filesystem in between (48.2's open point) is not needed:
+  two Linux sessions in a row, the last one a loop root under load, then a clean
+  checkpoint, then a damaged SIT.  The doubled count is a lead for the dump: node
+  segments counted twice -- a SIT block holding the entries of another (as 48.1's
+  NAT blocks held other metadata), or the SIT journal and a SIT block both carrying
+  them.
+* Android's fsck repaired it at the next boot (2026-10-01).
+
 ## 49. The SD card install, and why `--update` cannot update it (2026-09-30)
 
 `flash.py`'s first install -- its default since 2026-09-30 -- puts the root on
@@ -4328,3 +4354,29 @@ Two ways to make an SD install updatable:
   level: fewer parts, but it rewrites the filesystem it is running from.
 
 Either needs a `boot.img` and a package built and one device test.
+
+### 49.1 The update as built (2026-10-01): the card's second root partition
+
+Neither A nor B: A puts a gigabyte of writes back on userdata, which is what the
+card install is there to avoid (48), and B rewrites the running root.  Instead the
+card holds more than one root:
+
+* `device-install-image.sh` on a card system writes the new image into another
+  root partition of the card (`e5root*`; the oldest generation, a failed trial or an
+  unmarked one first, never the running one), created in the card's free space when
+  there is none that fits -- by `/usr/libexec/e5-gpt`, a GPT editor in ucode (OpenWrt
+  has no sgdisk; the backup table first, then the primary; checked with `sgdisk -v`).
+  The kernel cannot re-read the table of a card whose partition is mounted, so the
+  image goes through the whole disk at the partition's offset and is mounted through
+  a loop device at that offset; the new partition gets its node at the next boot.
+  The superblock is zeroed first, the configuration and the device's files copied in
+  as on userdata, and the marker (`/etc/e5/sd-root`) is written last, with
+  `/etc/e5/sd-gen` (the running one's + 1) and `/etc/e5/sd-trial`.  70 s for 1 GiB.
+* boot/init boots the highest generation among the marked card roots.  A trial is
+  set to 0 as it boots and `e5-boot-ok` removes it once the system is up; one found
+  still at 0 is passed over, so the previous root boots again with its settings.
+* boot/init waits for the card, up to 10 s, when `boot-os` says `sd` or userdata
+  names nothing (a damaged userdata names nothing): looking before the userdata
+  image instead of after it, it ran before `mmcblk1` appeared.
+* A card system mounts userdata read-only (48): read-write only for a system that
+  lives there (kept for tests) or to take a one-boot choice off it.

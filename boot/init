@@ -354,6 +354,35 @@ log "stage=data-partition dev=${data:-none}"
 
 has_init() { [ -x "$1/lib/systemd/systemd" ] || [ -x "$1/sbin/init" ]; }
 
+. /etc/sd-registry.sh
+SDMETA= SDOS= SDMETA_INVALID=
+sd_metadata() {
+    [ -z "$SDMETA" ] || return 0
+    for u in /sys/class/block/mmcblk*p*/uevent; do
+        grep -qx PARTNAME=e5boot "$u" 2>/dev/null || continue
+        dev=/dev/$(basename "$(dirname "$u")")
+        mkdir -p /sdboot
+        mount -t ext4 -o noatime "$dev" /sdboot 2>/dev/null || continue
+        if ! sd_registry_valid /sdboot ||
+           [ "$(cat /sdboot/kernel-release 2>/dev/null)" != "$(uname -r)" ]; then
+            log "stage=sd-registry-invalid $dev"
+            SDMETA_INVALID=1
+            umount /sdboot
+            return 1
+        fi
+        SDMETA=$dev SDOS=$(cat /sdboot/default)
+        next=$(cat /sdboot/next 2>/dev/null)
+        if sd_id_valid "$next" && [ -d "/sdboot/systems/$next" ]; then
+            SDOS=$next
+            rm -f /sdboot/next && sync
+            log "stage=sd-system-once $SDOS"
+        fi
+        log "stage=sd-registry $dev system=$SDOS"
+        return 0
+    done
+    return 1
+}
+
 # SD card root: openwrt/bundle/flash.py (its default install; `--data` is the
 # old one) writes the OpenWrt image to a partition of the removable card and
 # marks it /etc/e5/sd-root.  The card may move between units, so it is recognised
@@ -369,6 +398,8 @@ has_init() { [ -x "$1/lib/systemd/systemd" ] || [ -x "$1/sbin/init" ]; }
 # come up and is passed over, so the one before it boots again.
 sd_root() {
     [ -n "$misc" ] || return 1
+    sd_metadata || true
+    [ -z "$SDMETA_INVALID" ] || return 1
     emmc=${misc#/dev/}; emmc=${emmc%%p*}
     SDROOT= SDTRIAL= best=-1
     for d in /sys/class/block/mmcblk*; do
@@ -377,8 +408,21 @@ sd_root() {
         [ "$n" = "$emmc" ] && continue
         for part in /dev/$n /dev/${n}p*; do
             [ -b "$part" ] || continue
+            if [ -n "$SDMETA" ]; then
+                uuid=$(sed -n 's/^PARTUUID=//p' "/sys/class/block/${part##*/}/uevent")
+                sd_registered /sdboot "$SDOS" "$uuid" || continue
+            fi
             mount -t ext4 -o ro,noatime "$part" /sdtry 2>/dev/null || continue
             if [ -x /sdtry/sbin/init ] && [ -f /sdtry/etc/e5/sd-root ]; then
+                if [ -n "$SDMETA" ]; then
+                    id=$(cat /sdtry/etc/e5/sd-system 2>/dev/null)
+                    # Existing OpenWrt roots predate the explicit identity.
+                    [ -n "$id" ] || { [ -f /sdtry/etc/openwrt_release ] && id=openwrt; }
+                    if [ "$id" != "$SDOS" ]; then
+                        log "stage=sd-identity-mismatch $part registered=$SDOS root=$id"
+                        umount /sdtry; continue
+                    fi
+                fi
                 gen=$(cat /sdtry/etc/e5/sd-gen 2>/dev/null)
                 case "$gen" in ''|*[!0-9]*) gen=0 ;; esac
                 trial=
@@ -451,10 +495,9 @@ if [ -n "$data" ] && { mount -t f2fs -o ro,noatime,nodiratime "$data" /data 2>/r
     once=$([ -f /data/e5linux/boot-os-next ] && echo 1)
     umount /data
 fi
-# The card comes up after userdata: about a second later at 208 MHz, which is
-# when this runs.  Waited for, up to 10 s, when userdata names it or names
-# nothing -- a damaged userdata names nothing, and that is when the card must
-# be found (a system on userdata names itself, and does not wait).
+# The card comes up after userdata: wait up to 10 s for it. A registered card
+# owns its selection even if userdata has an old boot-os choice. An unregistered
+# card retains the legacy userdata choice, including explicit image trials.
 sd_wait() {
     local i=0
     while [ "$i" -lt "$1" ]; do
@@ -465,11 +508,11 @@ sd_wait() {
     log "stage=sd-none (waited $(($1 / 2)) s)"
     return 1
 }
-if [ -z "$e5_trial" ] && { [ -z "$want" ] || [ "$want" = sd ]; } &&
-   sd_wait 20; then
+if [ -z "$e5_trial" ] && sd_wait 20 &&
+   { [ -n "$SDMETA" ] || [ -z "$want" ] || [ "$want" = sd ]; }; then
     card=1
     log "stage=card-system userdata read-only"
-    if [ -n "$once" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>>/run/datamount.err; then
+    if [ -z "$SDMETA" ] && [ -n "$once" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>>/run/datamount.err; then
         read_boot_os /data >/dev/null
         umount /data
     fi
@@ -477,7 +520,7 @@ if [ -z "$e5_trial" ] && { [ -z "$want" ] || [ "$want" = sd ]; } &&
                            mount -t f2fs -o ro,norecovery,noatime,nodiratime "$data" /data 2>>/run/datamount.err; }; then
         data_mounted=1
     fi
-elif [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>>/run/datamount.err; then
+elif [ -z "$SDMETA" ] && [ -z "$SDMETA_INVALID" ] && [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>>/run/datamount.err; then
     log "stage=data-mounted"
     data_mounted=1
     want=$(read_boot_os /data)
@@ -593,6 +636,12 @@ if [ -n "$rootdir" ]; then
     # what this initramfs can do, for the installers of the running system
     echo "openwrt-image userdata-boot-os sd-gen" > /run/e5linux/init-features
     [ -n "$on_card" ] && echo "$SDROOT" > /run/e5linux/sd-root-dev
+    if [ -n "$SDMETA" ]; then
+        mkdir -p /newroot/mnt/e5-boot
+        mount --move /sdboot /newroot/mnt/e5-boot
+        echo "$SDMETA" > /run/e5linux/sd-boot-dev
+        echo "$SDOS" > /run/e5linux/sd-system
+    fi
     [ -n "$misc" ] && echo "$misc" > /run/e5linux/misc-dev
     [ -n "$data" ] && echo "$data" > /run/e5linux/data-dev
     init=/sbin/init

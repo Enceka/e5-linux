@@ -91,6 +91,23 @@ card_update() {
     [ -f "$gpt" ] || gpt=/usr/libexec/e5-gpt
     [ -f "$gpt" ] || { echo "no e5-gpt (the card's partition table)" >&2; exit 1; }
     cur=$(cat /etc/e5/sd-gen 2>/dev/null || :); case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+    # On a registered card this updater owns OpenWrt's slots only. Verify the
+    # running partition's registration before changing any table or root.
+    local meta=/mnt/e5-boot current_uuid registry_slot= registry_target=
+    if [ -f "$meta/format" ]; then
+        . /opt/e5/e5-sd-registry
+        sd_registry_valid "$meta" || { echo "invalid SD system registry" >&2; exit 1; }
+        [ "$(cat /etc/e5/sd-system 2>/dev/null || echo openwrt)" = openwrt ] || {
+            echo "the OpenWrt updater cannot update a foreign system" >&2; exit 1;
+        }
+        current_uuid=$(ucode "$gpt" uuid "$disk" "$curn") || exit 1
+        for registry_slot in a b; do
+            [ "$(cat "$meta/systems/openwrt/$registry_slot" 2>/dev/null)" = "$current_uuid" ] || continue
+            [ "$registry_slot" = a ] && registry_target=b || registry_target=a
+            break
+        done
+        [ -n "$registry_target" ] || { echo "the current OpenWrt root is not registered" >&2; exit 1; }
+    fi
     size=${E5_IMAGE_SIZE:-}
     if [ -z "$size" ]; then
         case "$SRC" in
@@ -111,7 +128,12 @@ card_update() {
         losetup -r -o $(($1 * 512)) "$lo" "$disk" 2>/dev/null || { echo -1; return; }
         mkdir -p "$OLD_ROOT"
         if mount -t ext4 -o ro,noload "$lo" "$OLD_ROOT" 2>/dev/null; then
-            if [ ! -f "$OLD_ROOT/etc/e5/sd-root" ] || [ "$(cat "$OLD_ROOT/etc/e5/sd-trial" 2>/dev/null)" = 0 ]; then
+            if [ -f "$OLD_ROOT/etc/e5/sd-system" ] &&
+               [ "$(cat "$OLD_ROOT/etc/e5/sd-system")" != openwrt ]; then
+                echo foreign
+            elif [ ! -f "$OLD_ROOT/etc/openwrt_release" ]; then
+                echo foreign
+            elif [ ! -f "$OLD_ROOT/etc/e5/sd-root" ] || [ "$(cat "$OLD_ROOT/etc/e5/sd-trial" 2>/dev/null)" = 0 ]; then
                 echo -1
             else
                 g=$(cat "$OLD_ROOT/etc/e5/sd-gen" 2>/dev/null || :); case "$g" in ''|*[!0-9]*) g=0 ;; esac
@@ -129,6 +151,7 @@ card_update() {
         case "$name" in e5root*) ;; *) continue ;; esac
         [ $((end - start + 1)) -ge "$need" ] || continue
         g=$(gen_at "$start")
+        [ "$g" != foreign ] || { echo "   partition $n ($name): foreign system, skipped"; continue; }
         echo "   partition $n ($name, $(( (end - start + 1) >> 11 )) MiB): generation $g"
         if [ -z "$best" ] || [ "$g" -lt "$bestgen" ]; then best="$n $start $end" bestgen=$g; fi
     done <<EOT
@@ -163,6 +186,12 @@ EOT
     trap 'umount "$NEW_ROOT" 2>/dev/null; losetup -d "$lo" 2>/dev/null' EXIT
     [ -x "$N/sbin/init" ] && [ -f "$N/etc/openwrt_release" ] || { echo "not an OpenWrt image" >&2; exit 1; }
     keep_config / "$N"
+    if [ -n "$registry_target" ]; then
+        # The new image may predate SD selection; keep the shared selector
+        # until all released images carry registry format 1 support.
+        cp /opt/e5/e5-os /opt/e5/e5-sd-registry "$N/opt/e5/"
+        cp "$gpt" "$N/usr/libexec/e5-gpt"
+    fi
     # (marked last, below: until then the partition is no candidate)
     rm -f "$N/etc/e5/sd-root" "$N/etc/e5/sd-trial"
     if [ ! -f "$N/lib/firmware/wcnmodem.bin" ]; then
@@ -183,10 +212,17 @@ EOT
     echo "$next" > "$N/etc/e5/sd-gen"
     echo 1 > "$N/etc/e5/sd-trial"
     cp /etc/e5/sd-root "$N/etc/e5/sd-root"
+    echo openwrt > "$N/etc/e5/sd-system"
     ver=$(cat "$N/etc/e5/image-version" 2>/dev/null || echo "?")
     sync
     umount "$NEW_ROOT" && losetup -d "$lo"
     trap - EXIT
+    if [ -n "$registry_target" ]; then
+        uuid=$(ucode "$gpt" uuid "$disk" "$n") || exit 1
+        printf '%s\n' "$uuid" > "$meta/systems/openwrt/.$registry_target.tmp"
+        sync
+        mv "$meta/systems/openwrt/.$registry_target.tmp" "$meta/systems/openwrt/$registry_target"
+    fi
     sync
     echo "installed: card partition $n ($ver, generation $next), started at the next boot"
     echo "   (its first boot is a trial: one that does not come up returns to partition $curn)"

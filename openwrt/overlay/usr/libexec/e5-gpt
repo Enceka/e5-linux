@@ -46,8 +46,8 @@ function put(s, off, bytes) {
 }
 
 let cmd = ARGV[0], disk = ARGV[1];
-if (!(cmd in ['list', 'add']) || !disk)
-	die('usage: e5-gpt list DISK | e5-gpt add DISK NAME SECTORS');
+if (!(cmd in ['list', 'add', 'uuid']) || !disk)
+	die('usage: e5-gpt list DISK | e5-gpt uuid DISK N | e5-gpt add DISK NAME SECTORS');
 let h = fs.open(disk, cmd == 'add' ? 'r+' : 'r') || die(`${disk}: ${fs.error()}`);
 function rd(lba, count) {
 	h.seek(lba * 512, 0);
@@ -107,11 +107,28 @@ if (cmd == 'list') {
 	exit(0);
 }
 
+if (cmd == 'uuid') {
+	let n = +ARGV[2];
+	if (type(n) != 'int' || n < 1 || n > p.num)
+		die('uuid: invalid partition number');
+	let e = substr(p.tab, (n - 1) * 128, 128);
+	if (substr(e, 0, 16) == ZERO16)
+		die('uuid: unused partition');
+	let g = substr(e, 16, 16), out = '';
+	for (let i in [3, 2, 1, 0, -1, 5, 4, -1, 7, 6, -1, 8, 9, -1, 10, 11, 12, 13, 14, 15])
+		out += (i < 0) ? '-' : sprintf('%02x', ord(g, i));
+	print(`${out}\n`);
+	exit(0);
+}
+
 let name = ARGV[2], want = +ARGV[3];
 if (!match(name ?? '', /^[A-Za-z0-9_-]{1,36}$/) || type(want) != 'int' || want < 2048)
 	die('add: a name (letters, digits, - and _, 36 at most) and a size in sectors');
 if (empty < 0)
 	die('the table has no free entry');
+for (let x in parts)
+	if (x.name == name)
+		die(`partition ${name} already exists`);
 let b = load(p.alt);
 
 // the largest free gap between the usable sectors, the partitions sorted

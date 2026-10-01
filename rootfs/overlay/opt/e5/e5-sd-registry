@@ -1,0 +1,47 @@
+#!/bin/sh
+# Shared by initramfs and e5-os. Registry format 1 on the e5boot partition:
+# format, kernel-release, default, optional next; systems/<id>/<slot> = PARTUUID.
+# All values are data, never shell code. A slot also carries etc/e5/sd-system.
+sd_id_valid() {
+    case "$1" in ''|*[!a-z0-9_-]*) return 1 ;; esac
+    [ "${#1}" -le 36 ]
+}
+
+sd_uuid_device() {
+    case "$1" in ''|*[!a-f0-9-]*) return 1 ;; esac
+    for u in "${E5_SYS_BLOCK:-/sys/class/block}"/mmcblk*p*/uevent; do
+        grep -qx "PARTUUID=$1" "$u" 2>/dev/null && {
+            printf '/dev/%s\n' "$(basename "$(dirname "$u")")"; return 0;
+        }
+    done
+    return 1
+}
+
+sd_registered() {
+    sd_id_valid "$2" || return 1
+    for slot in "$1/systems/$2"/*; do
+        [ -f "$slot" ] && [ "$(cat "$slot")" = "$3" ] && return 0
+    done
+    return 1
+}
+
+sd_registry_valid() {
+    [ "$(cat "$1/format" 2>/dev/null)" = 1 ] || return 1
+    sd_id_valid "$(cat "$1/default" 2>/dev/null)" || return 1
+    [ -d "$1/systems/$(cat "$1/default")" ]
+}
+
+sd_registry_put() (
+    # A lock prevents competing choices. Rename commits each small file;
+    # sync completes the request before a caller reboots.
+    meta=$1 key=$2 value=$3
+    case "$key" in default|next) ;; *) exit 2 ;; esac
+    sd_id_valid "$value" && [ -d "$meta/systems/$value" ] || exit 1
+    mkdir "$meta/.choice-lock" 2>/dev/null || { echo "system selection is busy" >&2; exit 1; }
+    trap 'rm -f "$meta/.$key.tmp"; rmdir "$meta/.choice-lock"' EXIT
+    printf '%s\n' "$value" > "$meta/.$key.tmp" || exit 1
+    sync
+    mv "$meta/.$key.tmp" "$meta/$key" || exit 1
+    [ "$key" != default ] || rm -f "$meta/next"
+    sync
+)

@@ -4603,3 +4603,107 @@ DSP registered, current-card SMS listing readable, Argon login served and the
 app-store index fetched. No kernel panic/oops was found. A subsequent ordinary
 reboot returned to the same SD root and Linux default. This does not replace
 the remaining physical client, Bluetooth-cycle or thermal checks in STATUS.
+
+## 54. Fresh mainline Debian and SD OpenWrt/Debian pairs (2026-10-01)
+
+The user resumed Debian/Phosh for call-audio research and requested SD
+multi-system verification, with Debian **4 GiB x 2**. The kernel repository's
+remote `e5-6.18` head matched local `c1bb703f034c`; the E5 port is on v6.18.54.
+A new kernel build volume (`e5-debian-kernel-20261001`) and a new Debian tree
+volume (`e5-debian-rootfs-20261001`) were used, not incremental object/root
+outputs. Kernel release: `6.18.54-e5-00064-gc1bb703f034c`, 78 modules total,
+45 in the shared initramfs and 24 audio modules in each Debian root.
+
+### Build corrections
+
+The Debian builder had only staged `out_linux`'s vendor-5.15 audio/modem
+modules. It now accepts `E5_MAINLINE=1` and indexes the selected mainline
+build's full module archive. The patched-package installer now requires its
+binary package set, includes `all` packages (phosh-common and Control Center
+data) and the matching libphosh shared library, and fails on installation
+errors. An apostrophe inside the single-quoted services chroot command had
+broken the configure stage; that quoting was corrected. Standalone home/NM
+permissions are applied at build time rather than relying on a Debian overlay
+in the boot image. `callaudiod` and `grim` are explicit packages. Packing uses
+a clean read-only e2fsck pass after repairs instead of hiding fsck failures.
+
+Fresh Debian 13.7/trixie arm64: 952 installed packages, including Calls,
+Chatty, Phosh, patched ModemManager/NetworkManager, PipeWire/WirePlumber and
+callaudiod. Image size 4294967296 bytes; roughly 2.6 GiB used and 1.3 GiB
+available on-device. The initial 950-package raw image was verified after
+writing into both slots, then the two small added packages installed into
+each; the final host image includes all 952. Initial raw SHA-256:
+`16f0e67d66234e1e4bd80dac6aab37d409ac855ea27f5f70761ca8144da5e55b`.
+Final raw SHA-256:
+`417a3e926451491a4b1d07461ee2118e52c5dd0589419e84ff310ba93fb52584`.
+Artifacts and checksums are in `out/debian-mainline-20261001-c1bb703f/`.
+They contain this device's firmware/vendor subset and are private outputs.
+
+### Card identity and shared boot
+
+Backups of boot_b, misc, both GPT copies and the OpenWrt configuration were
+saved in `work/debian-mainline-20261001/backups/` and their hashes checked.
+The original OpenWrt partition entry was unchanged byte-for-byte when the
+new layout was added; GPT header/table CRCs passed. Layout after the test:
+
+| partition | name | size / system |
+|---|---|---|
+| mmcblk1p1 | e5root | 1025 MiB partition, original OpenWrt A |
+| mmcblk1p2 | e5boot | 32 MiB registry |
+| mmcblk1p3 | debian-a | 4096 MiB Debian A |
+| mmcblk1p4 | debian-b | 4096 MiB Debian B |
+| mmcblk1p5 | e5root2 | 1280 MiB OpenWrt B, made by the updater |
+
+Format 1 has the kernel release, default and one-shot selection, and
+`systems/<id>/<slot>` PARTUUIDs. A root also identifies itself in
+`/etc/e5/sd-system`. Selection chooses the system before comparing its roots'
+generations. Registered cards own their choice even when userdata contains
+an older boot-os value; userdata is read-only throughout these card boots.
+A failed registered selection does not use a writable userdata fallback.
+The boot image includes only the firmware/factory-data early overlay, not
+the Debian systemd/NM configuration. Its first 56 MiB were flashed and
+verified by readback; the boot log area stays outside the write.
+
+### Device verification
+
+* Original OpenWrt booted with the registry and both systems listed.
+* `e5-os debian --once` booted Debian A; the following ordinary reboot
+  returned to OpenWrt and kept the default unchanged.
+* OpenWrt update created partition 5 and registered its B slot. Full hashes
+  of Debian's two 4 GiB partitions were identical before/after:
+  A `6e71aefdbf6bba6e086dddafefe4e5dd251c1aa779bc2f7675563df3d368df54`,
+  B `1f90b2929751ac2bbf0a285337895d7bbbcc843e433d26b241e2bf0cb6d1f3b5`.
+  The new OpenWrt booted and removed its trial marker.
+* OpenWrt B was then marked as an unsuccessful trial (generation 2,
+  sd-trial=0). Debian B had generation 10. The next boot selected OpenWrt A,
+  not Debian, establishing that rollback stays in the selected system.
+* Persistent `e5-os debian` selected Debian B (generation 10, trial=1).
+  It booted its own Phosh session, cleared its trial flag and retained its
+  own test state. Marking B as a failed trial (generation 11, trial=0)
+  returned to Debian A and A's distinct state. These are marker simulations,
+  not deliberately crashed or power-cut boots.
+* Test flags/generations were restored: both Debian slots are generation 0,
+  no failed-trial flags; OpenWrt B is generation 1 and confirmed. A subsequent
+  ordinary reboot again selected Debian A, with a different boot_id.
+* Final root `/dev/mmcblk1p3`, persistent SD default Debian, next LK boot
+  Linux; userdata read-only. Phosh screenshots from A and B were inspected;
+  A displayed the application grid and B the lock screen. SDDM, DSP, vendor CP, WWAN,
+  ModemManager and NetworkManager were active, with no failed systemd units.
+  ModemManager reported connected 5G NR; Mobile/Hotspot connections were up.
+  The sound card registered and DSP replied on the first command; PipeWire
+  exposed Speaker and Internal Microphone, with CallAudio present. Battery
+  reported Charging. No kernel panic/oops/BUG was found in the checked boots.
+
+Evidence logs and PNGs: `work/debian-mainline-20261001/`, including
+`update-isolation.log`, the rollback health/selection logs and final-health.
+`rootfs/tests/sd-registry.py` passes for persistent/one-shot selection,
+invalid IDs, absent PARTUUIDs, foreign registration, locking and unsupported
+registry format. Shell syntax and git whitespace checks pass.
+
+Call audio is still a research task: no real call was placed or answered,
+and this run did not perform an acoustic speaker/microphone/earpiece test.
+Real call testing requires asking the user for assistance before dialing.
+An automated Debian updater, registered-card installer migration, interrupted
+registry/GPT recovery and real failed-startup/power-cut tests remain open
+(`openwrt/MULTIBOOT.md`). Existing charger/regulator/portal warnings were not
+reclassified as fixed just because the desktop booted.

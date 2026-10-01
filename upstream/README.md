@@ -39,6 +39,47 @@ A trial boot is safe by construction: slot b is armed with tries=2 and never mar
 boot after it is Android's; a boot that hangs is reset by the PMIC watchdog LK arms (~295 s, FINDINGS 9).
 The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_b-openwrt.img` on the phone.
 
+## Debian / Phosh on the shared mainline kernel (2026-10-01)
+
+Use a new Docker volume for a fresh Debian arm64 tree, and the release kernel
+without `e5.openwrt=`. `E5_MAINLINE=1` stages that build's full module set,
+including the 24 audio modules and WWAN port, instead of `out_linux`'s 5.15
+modules. The patched ModemManager, NetworkManager, Phosh (including its shared
+library) and Control Center packages must be present in `out/debs-patched/`.
+The default image size is now 4 GiB, for a Debian A/B pair of 4 GiB each.
+
+```sh
+E5_RELEASE=1 upstream/build.sh
+E5_MAINLINE=1 E5_IMG_MIB=4096 \
+  E5_ROOTFS_VOLUME=e5-debian-fresh-<date> \
+  E5_ROOTFS_OUT=out/debian-mainline/rootfs.ext4 \
+  E5_UPSTREAM_OUT=upstream/out-release \
+  E5_ANDROID_SUBSET=work/android-subset \
+  rootfs/build-rootfs-container.sh
+```
+
+The three path variables are relative to the repository. The Android subset
+and firmware come from this device; images including them are private build
+outputs. `callaudiod` is explicitly installed for Calls, and `grim` for desktop
+checks. This prepares the userspace for voice research; it does not implement
+the Unisoc CP voice route.
+
+`rootfs/device-install-sd.sh URL RAW_SHA256 KERNEL_RELEASE` runs from an
+existing SD OpenWrt installation. It adds `e5boot` (32 MiB) and `debian-a` /
+`debian-b` (4 GiB each) in free space and verifies each raw image before
+registering its PARTUUID. Serve `rootfs.ext4.gz`, `e5-gpt`, `e5-os` and
+`e5-sd-registry` at that URL. The shared boot image must also be rebuilt from
+`boot/init`, the same kernel/modules and `upstream/module-order.txt`; include
+only device firmware/factory data as its early overlay. The complete Debian
+configuration is already in the root image. Keep the existing boot image,
+GPT and configuration backups before deploying it.
+
+The SD registry owns the default and one-shot choices, with userdata remaining
+read-only. `e5-os debian` / `e5-os openwrt` selects the persistent system;
+`e5-os SYSTEM --once` selects one boot. Run `reboot` after selecting. Generation
+and trial comparisons stay within the selected system's registered roots.
+See `openwrt/MULTIBOOT.md` for implementation scope and remaining work.
+
 ## How it boots
 
 * **Device tree:** the one LK builds (`ums9621-base` + the `ums9158_1h10` overlay from `dtbo`), unchanged;
@@ -55,7 +96,7 @@ The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_
 | milestone | state |
 |---|---|
 | M1: the kernel boots on the vendor DTB, reaches /init, resets through the PMIC, leaves its log | **done 2026-09-27** (first try: userspace at 1.58 s, 8 CPUs, 1.5 GB, back in Android) |
-| M2: clocks, PMIC + regulators, PMIC watchdog, eMMC, USB gadget (musb): `boot/init` starts OpenWrt | **done 2026-09-27** (pinctrl and the SD card slot are still to come) |
+| M2: clocks, PMIC + regulators, PMIC watchdog, eMMC, USB gadget (musb): `boot/init` starts OpenWrt | **done 2026-09-27** (pinctrl remains; the SD card slot was implemented on 2026-09-30) |
 | M3: Wi-Fi and Bluetooth (marlin3lite over SDIO: wcn_bsp, sprd_wlan_combo, sprdbt_tty) | **done 2026-09-27** (hotspot on 5745 MHz beaconing, hci0 up with the factory address at boot) |
 | M4: the modem (SIPC, SIPA, modem loader, Trusty) with ModemManager as on 5.15 | **done 2026-09-28** (5G NR, connected, data on sipa_eth0) |
 | M5: display (sprd DRM, DSI panel), touch, keypad, vibrator | **mostly done 2026-09-28** (panel, fbcon, backlight, touch, keypad, gpio-keys, vibrator, RGB LED; not yet: DPU DVFS, GSP) |
@@ -64,8 +105,7 @@ The OpenWrt boot image that `boot_b` held before is kept as `/data/e5linux/boot_
 | M8: GPU (Mali G57) | **done 2026-09-28**, brought forward (panfrost, as on 5.15; the info screen's cog renders through it) |
 
 The target is what works on 5.15 today (`docs/STATUS.md`, `boot/module-order.txt`). Of that, not on 6.18 yet:
-pinctrl (the DT's pin states are left as LK set them), the SD card slot (its controller waits for a cd-gpio), the
-DPU's DVFS and the GSP 2D engine, and the USB/UART/JTAG pin mux (left out: the one trial with it built in lost
+pinctrl (the DT's pin states are left as LK set them), the DPU's DVFS and the GSP 2D engine, and the USB/UART/JTAG pin mux (left out: the one trial with it built in lost
 USB). Not on either kernel: call audio, cpufreq (5.15 Linux does not load it), the earpiece.
 
 ## Release (2026-09-28)

@@ -14,4 +14,8 @@
 # behaviour as before -- a system that was only asked for a trial boot does not
 # re-arm itself, and `e5-next-boot android` is what sends it back to stock.
 set -e
+if [ -f /etc/e5/sd-trial ]; then
+    rm -f /etc/e5/sd-trial
+    sync
+fi
 exec /opt/e5/e5-next-boot --rearm

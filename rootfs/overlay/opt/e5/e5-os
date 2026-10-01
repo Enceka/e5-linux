@@ -14,6 +14,44 @@
 # image too, where a boot image older than that reads it.  Reboot afterwards.
 # Which of Android and Linux starts is e5-next-boot's business.
 set -eu
+# A registered SD installation keeps all selections on the card. Userdata
+# remains read-only, and generation comparison stays within one system.
+META=${E5_SD_BOOT:-/mnt/e5-boot}
+if [ -f "$META/format" ]; then
+    SHARED=/opt/e5/e5-sd-registry
+    [ -f "$SHARED" ] || SHARED="$(dirname "$0")/e5-sd-registry"
+    . "$SHARED"
+    sd_registry_valid "$META" || { echo "invalid SD system registry" >&2; exit 1; }
+    case "${1:-status}" in
+        status)
+            echo "boot-os: $(cat "$META/default") (SD)"
+            [ ! -f "$META/next" ] || echo "boot-os-next: $(cat "$META/next") (one boot)"
+            echo "running: $(cat /run/e5linux/sd-system 2>/dev/null || cat /etc/e5/sd-system 2>/dev/null || echo unknown)"
+            printf 'installed:'
+            for system in "$META"/systems/*; do
+                [ -d "$system" ] && printf ' %s' "${system##*/}"
+            done
+            printf '\n'
+            ;;
+        *)
+            os=$1; [ "$os" != ubuntu ] || os=debian
+            sd_id_valid "$os" && [ -d "$META/systems/$os" ] || { echo "$os is not installed on SD" >&2; exit 1; }
+            case "${2:-}" in
+                '') key=default ;;
+                --once) key=next ;;
+                *) echo "usage: e5-os SYSTEM [--once]|status" >&2; exit 2 ;;
+            esac
+            found=
+            for slot in "$META/systems/$os"/*; do
+                [ -f "$slot" ] && sd_uuid_device "$(cat "$slot")" >/dev/null && found=1
+            done
+            [ -n "$found" ] || { echo "$os has no registered partition on this card" >&2; exit 1; }
+            sd_registry_put "$META" "$key" "$os"
+            echo "next boot: $os$([ "$key" = next ] && echo ', once') (SD)"
+            ;;
+    esac
+    exit 0
+fi
 DATA=/mnt/e5-data/e5linux
 # the Debian image: this system's / when it is Debian, /mnt/e5-disk for a
 # system in a directory of it; none for OpenWrt in its own image

@@ -4,11 +4,13 @@
 已完成工作及历史证据见 `docs/FINDINGS.md`，本次核对见 §51。
 
 当前维护范围：OpenWrt + 主线 6.18 + SD 卡安装。userdata 安装只用于测试；
-Debian/Phosh、听筒和通话音频按此前决定延期。e5-modemd 保留为可选辅助，当前未启用。
+Debian/Phosh 已恢复为通话音频研究环境，使用同一个主线内核和独立 SD A/B 根。
+真实通话测试须先请用户协助，不自行拨号。e5-modemd 保留为可选辅助，当前未启用。
 
-设备基线：内核 `6.18.54-e5-00064-gc1bb703f034c`，SD 镜像 `3dc73ff`，
-`/dev/mmcblk1p1`、generation 0；userdata 当前只读。2026-10-01 从 Android 通过新包
-完成 SD 卡全新安装，信息屏 1.3.0 和当日修复已包含在镜像中。
+设备基线：共用内核 `6.18.54-e5-00064-gc1bb703f034c`，SD 上 OpenWrt A/B
+（镜像 `3dc73ff`，信息屏 1.3.0）及全新 Debian 13.7/Phosh A/B（每槽 4 GiB）。
+当前默认 Debian，运行 `/dev/mmcblk1p3`；OpenWrt 新槽为 `/dev/mmcblk1p5`、generation 1。
+userdata 保持只读。构建和多系统验证见 FINDINGS §54。
 
 ## 待修 / 正在处理
 
@@ -32,7 +34,8 @@ Debian/Phosh、听筒和通话音频按此前决定延期。e5-modemd 保留为�
 
 | 编号 | 项目 | 当前状态 |
 |---|---|---|
-| D1 | SD 卡多系统 | 已写设计，尚未实现；共用一个内核，每系统独立 A/B、配置、更新和回退。`openwrt/MULTIBOOT.md` |
+| D1 | SD 多系统后续 | OpenWrt + Debian 双 A/B、选择和回退已验证；Debian 自动更新、已注册卡迁移、注册表/GPT 中断恢复及真实失败启动/断电验证待做。`openwrt/MULTIBOOT.md`，FINDINGS 54 |
 | D2 | userdata F2FS 根因 | 五次损坏的根因未定位；SD 只读规避已完成，耐久性及新建 F2FS 测试已结束。后续根因研究延期。FINDINGS 48 |
 | D3 | 历史驱动异常 | AGCP 访问丢失、非主用 AP capture 停滞、音频路由/稳压器警告、DPU blank 警告、热点速率声明；触发条件或根因尚未确认。FINDINGS 24/32/34/38、51 |
 | D4 | 主线增强项 | pinctrl、DPU/GPU 调频、GSP、USB/UART/JTAG pin mux、cpufreq 与系统挂起，尚未完成 |
+| D5 | 电话语音链路 | Debian/Phosh、Calls、callaudiod、ModemManager 和 DSP 已就绪；通话音频路由与听筒仍未验证。本次没有拨号，实际通话测试先请用户协助。FINDINGS 54 |

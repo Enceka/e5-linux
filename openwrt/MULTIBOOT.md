@@ -1,10 +1,54 @@
 # SD card updates and multiple systems
 
-Current behaviour was checked on 2026-10-01 against `boot/init`,
-`device-install-image.sh`, `e5-boot-ok` and the running E5. The multi-system
-design below is a proposal; it is not implemented.
+A first OpenWrt + Debian implementation was tested on the E5 on 2026-10-01.
+The format-1 registry below is implemented; the full update/installation design
+later in this document still has outstanding work.
 
-## The current update
+## Tested format-1 registry
+
+One kernel/initramfs in `boot_b` is shared by both systems. The card now has:
+
+| Partition | Contents |
+|---|---|
+| `e5root` | Existing OpenWrt A (1025 MiB partition, 1 GiB image) |
+| `e5boot` | 32 MiB ext4: registry and boot choices |
+| `debian-a` | 4 GiB Debian A |
+| `debian-b` | 4 GiB Debian B |
+| `e5root2` | 1280 MiB OpenWrt B, allocated by the updater |
+
+`e5boot` contains `format=1`, `kernel-release`, `default`, optional `next`,
+and `systems/<system>/<slot>` files holding PARTUUIDs. `boot/init` checks the
+kernel release, selects the system, then considers only that system's registered
+partitions and matching `/etc/e5/sd-system`. Generation/trial selection is
+unchanged within that group. A failed registered card selection does not fall
+through into a writable userdata root. Metadata is mounted as `/mnt/e5-boot`.
+
+`e5-os SYSTEM` persists the default on the card; `e5-os SYSTEM --once` writes
+`next`, consumed by the initramfs without changing the default. Userdata stays
+read-only for registered card systems. Unregistered cards retain the legacy
+selection. The selector refuses an invalid ID, unknown system, missing
+PARTUUID or competing selection request.
+
+`rootfs/device-install-sd.sh` adds both 4 GiB Debian slots and the registry to
+unallocated space of an existing SD OpenWrt installation, verifying each raw
+image before registration. The original OpenWrt partition entry was byte-for-byte
+unchanged. The OpenWrt updater validates the current slot's registration,
+rejects foreign root identities and registers its own new slot after writing.
+
+Device tests passed: both Debian desktops booted, persistent/one-shot choices,
+one-shot Debian followed by ordinary reboot back to OpenWrt, OpenWrt update
+into its B slot, full SHA-256 equality of both 4 GiB Debian partitions before
+and after that update, and failed-trial-marker rollback within each system.
+OpenWrt rollback ignored Debian's higher generation. The marker tests simulate
+an unsuccessful trial; they do not inject a crash or power loss.
+
+Remaining: an automated Debian updater, installer/flash-bundle migration for
+already registered cards, recovery from interrupted registry/GPT writes and
+actual failed-startup/power-cut tests. The installer currently refuses an
+already registered card rather than migrating it. Kernel compatibility is an
+exact release check, not a negotiated update across installed systems.
+
+## Legacy unregistered-card updates
 
 The card holds two OpenWrt roots, not two different operating systems:
 

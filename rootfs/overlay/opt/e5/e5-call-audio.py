@@ -79,7 +79,6 @@ class VoicePcm:
                 self.check(moved, 'hostless forward')
                 if not moved:
                     raise RuntimeError('hostless playback pointer did not advance')
-            self.check(self.lib.snd_pcm_start(self.handle), 'start')
         except Exception:
             self.close()
             raise
@@ -90,6 +89,9 @@ class VoicePcm:
     def check(self, result, operation):
         if result < 0:
             raise RuntimeError(f'{operation}: {self.lib.snd_strerror(result).decode()}')
+
+    def start(self):
+        self.check(self.lib.snd_pcm_start(self.handle), 'start')
 
     def close(self):
         if self.handle:
@@ -106,10 +108,15 @@ class VoiceHardware:
         'VBC_MUX_IIS0_PORT_DO_SEL': 'IIS_DO_VAL_DAC0',
         'VBC_MUX_ADC2': 'ADC_IN_IIS1_ADC',
         'VBC_MUX_ADC2_IIS_PORT_SEL': 'VBC_IIS_PORT_IIS1',
-        'VBC DAC1 DG Set': '24,24', 'VBC DAC1 DSP MDG Set': '0,1024',
+        'VBC DAC1 DG Set': '24,24', 'VBC DAC1 DSP MDG Set': '1,1024',
+        # Android forces DL mute during route changes and explicitly releases
+        # it after startup. A cached "disable" does not prove DSP is unmuted.
+        'VBC_DL_MUTE': 'enable',
         'VBC ADC2 DG Set': '24,24',
         # The HAL sets this to voice_volume + 1, after applying AS/CVS.
-        'VBC_VOLUME': '9',
+        'VBC_VOLUME': '7',
+        # Own Android Handsfree/NB1, volume 7: dacs=0, ao=3.
+        'DAC Gain DAC Playback Volume': '0', 'AO Gain AO Playback Volume': '3',
         'Speaker Function': 'on', 'Speaker Mute': 'off',
         'Earpiece Function': 'off', 'Mic Function': 'on',
         'AOL EAR Sel': 'AOL', 'AO Mixer AOL Switch': 'on',
@@ -140,8 +147,13 @@ class VoiceHardware:
         word = self.profile_word(getattr(self, 'band', 0))
         for name in self.PROFILES:
             self.put(name, word)
-        self.put('VBC_VOLUME', 9)
-        logging.info('voice profiles=%#x, bandwidth=%d, VBC_VOLUME=9', word, getattr(self, 'band', 0))
+        self.put('VBC_VOLUME', 7)
+        logging.info('voice profiles=%#x, bandwidth=%d, VBC_VOLUME=7', word, getattr(self, 'band', 0))
+
+    def unmute_downlink(self):
+        self.put('VBC DAC1 DSP MDG Set', '0,1024')
+        self.put('VBC_DL_MUTE', 'disable')
+        logging.info('voice downlink unmuted after PCM startup/parameters')
 
     def network(self, net, band):
         if band not in (0, 1, 2, 3):
@@ -151,6 +163,7 @@ class VoiceHardware:
         logging.info('DSP network message net=%#x, bandwidth=%d', net, band)
         if self.handles:
             self.profiles()
+            self.unmute_downlink()
 
     def get(self, name):
         text = subprocess.check_output(['amixer', '-c', str(self.card), 'cget', 'name=' + name], text=True)
@@ -179,8 +192,12 @@ class VoiceHardware:
                 self.put(name, value)
             for direction in (0, 1):
                 self.handles.append(VoicePcm(self.card, self.device, direction))
+            # Android prepares both directions before starting either one.
+            for pcm in self.handles:
+                pcm.start()
             # The vendor applies the parameters again after starting both PCMs.
             self.profiles()
+            self.unmute_downlink()
             logging.info('VOICE-RUNNING hw:%s,%s playback/capture, speaker, 8000 Hz', self.card, self.device)
         except Exception:
             self.stop()
@@ -239,6 +256,9 @@ def main():
                 logging.info('DSP notification cmd=%#x channel=%d params=%#x,%#x,%#x,%#x', command, channel, p0, p1, p2, p3)
                 if command == 0 and channel == 2:
                     executor.submit(hardware.network, p0, p1)
+                elif command == 0x35 and channel == 2:
+                    # Stock HAL logs this as "cp voice enable", not bandwidth.
+                    logging.info('CP voice enabled=%s (mask=%#x)', bool(p0), p0)
         except Exception:
             if not pipe_stop.is_set():
                 logging.exception('DSP voice notification listener failed')

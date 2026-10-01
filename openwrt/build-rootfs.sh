@@ -271,8 +271,12 @@ if [ -f /in/infoscreen/packages.txt ]; then
     if [ -f /in/transplant/names ]; then
         for p in $(cat /in/transplant/names); do apk search -e "$p" 2>/dev/null | grep -q . || echo "$p" >> /tmp/tp; done
     fi
-    grep -v "^#" /in/infoscreen/packages.txt | grep -vxF -f /tmp/tp > /tmp/pk || true
+    # (busybox grep: an empty -f list matches every line, so it filters only when there is one)
+    grep -v "^#" /in/infoscreen/packages.txt > /tmp/pk
+    if [ -s /tmp/tp ]; then grep -vxF -f /tmp/tp /tmp/pk > /tmp/pk2 || true; mv /tmp/pk2 /tmp/pk; fi
+    [ -s /tmp/pk ] || { echo "no info screen packages to install" >&2; exit 1; }
     apk add $(cat /tmp/pk) >/dev/null
+    echo "info screen packages: $(wc -l < /tmp/pk)"
     if [ -s /tmp/tp ]; then
         apk add $(cat /in/transplant/deps) >/dev/null
         cp -a /in/transplant/root/. /
@@ -280,6 +284,10 @@ if [ -f /in/infoscreen/packages.txt ]; then
         cat /in/transplant/names >> /etc/apk/world
         echo "transplanted from an earlier image: $(tr "\n" " " < /in/transplant/names)"
     fi
+    # (the screen stands on these: an image without them is not one to ship)
+    for p in cage cog libwpewebkit; do
+        grep -qx "P:$p" /lib/apk/db/installed || { echo "the image has no $p: the info screen would not start" >&2; exit 1; }
+    done
 fi
 # (apk info <name> describes the repository'"'"'s package; the installed one is here)
 echo "modemmanager $(sed -n "/^P:modemmanager$/{n;s/^V://p}" /lib/apk/db/installed) installed"

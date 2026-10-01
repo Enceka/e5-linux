@@ -1,0 +1,110 @@
+Description: E5: green key submits explicit dialpad numbers and answers calls
+Author: e5-linux
+Forwarded: not-needed
+
+--- a/src/calls-new-call-box.c
++++ b/src/calls-new-call-box.c
+@@ -213,6 +213,16 @@
+     calls_main_window_dial (CALLS_MAIN_WINDOW (root), number);
+   else
+     calls_new_call_box_dial (self, number);
++}
++
++
++void
++calls_new_call_box_dial_current (CallsNewCallBox *self)
++{
++  const char *number = cui_dialpad_get_number (self->dialpad);
++  g_return_if_fail (CALLS_IS_NEW_CALL_BOX (self));
++  if (!STR_IS_NULL_OR_EMPTY (number))
++    dialpad_dialed_cb (self->dialpad, number, self);
+ }
+ 
+ 
+--- a/src/calls-new-call-box.h
++++ b/src/calls-new-call-box.h
+@@ -34,6 +34,7 @@
+ G_DECLARE_FINAL_TYPE (CallsNewCallBox, calls_new_call_box, CALLS, NEW_CALL_BOX, AdwBin)
+ 
+ CallsNewCallBox *calls_new_call_box_new  (void);
++void             calls_new_call_box_dial_current (CallsNewCallBox *self);
+ void             calls_new_call_box_dial (CallsNewCallBox *self,
+                                           const gchar     *target);
+ void             calls_new_call_box_send_ussd_async  (CallsNewCallBox    *self,
+--- a/src/calls-main-window.c
++++ b/src/calls-main-window.c
+@@ -462,10 +462,31 @@
+ }
+ 
+ 
++static gboolean
++on_phone_key (GtkEventControllerKey *controller, guint keyval, guint keycode,
++              GdkModifierType state, CallsMainWindow *self)
++{
++  if (keyval != GDK_KEY_Phone && keyval != GDK_KEY_PickupPhone)
++    return GDK_EVENT_PROPAGATE;
++  if (g_strcmp0 (adw_view_stack_get_visible_child_name (self->main_stack), "dial-pad") != 0)
++    adw_view_stack_set_visible_child_name (self->main_stack, "dial-pad");
++  else
++    calls_new_call_box_dial_current (self->new_call);
++  return GDK_EVENT_STOP;
++}
++
++
+ static void
+ calls_main_window_init (CallsMainWindow *self)
+ {
+   gtk_widget_init_template (GTK_WIDGET (self));
++
++  if (g_file_test ("/etc/e5/keypad-call-keys", G_FILE_TEST_EXISTS)) {
++    GtkEventController *keys = gtk_event_controller_key_new ();
++    gtk_event_controller_set_propagation_phase (keys, GTK_PHASE_CAPTURE);
++    g_signal_connect (keys, "key-pressed", G_CALLBACK (on_phone_key), self);
++    gtk_widget_add_controller (GTK_WIDGET (self), keys);
++  }
+ 
+   g_signal_connect_object (self->ussd_dialog,
+                            "closed",
+--- a/src/calls-call-window.c
++++ b/src/calls-call-window.c
+@@ -258,6 +258,26 @@
+ }
+ 
+ 
++static gboolean
++on_phone_key (GtkEventControllerKey *controller, guint keyval, guint keycode,
++              GdkModifierType state, CallsCallWindow *self)
++{
++  GtkWidget *widget = gtk_stack_get_visible_child (self->call_stack);
++  CuiCall *call;
++  if (keyval != GDK_KEY_Phone && keyval != GDK_KEY_PickupPhone &&
++      keyval != GDK_KEY_HangupPhone)
++    return GDK_EVENT_PROPAGATE;
++  if (!CUI_IS_CALL_DISPLAY (widget))
++    return GDK_EVENT_STOP;
++  call = cui_call_display_get_call (CUI_CALL_DISPLAY (widget));
++  if (keyval == GDK_KEY_HangupPhone)
++    cui_call_hang_up (call);
++  else if (cui_call_get_state (call) == CUI_CALL_STATE_INCOMING)
++    cui_call_accept (call);
++  return GDK_EVENT_STOP;
++}
++
++
+ static void
+ calls_call_window_init (CallsCallWindow *self)
+ {
+@@ -267,6 +287,13 @@
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
+   self->calls = g_list_store_new (CALLS_TYPE_CALL_SELECTOR_ITEM);
++
++  if (g_file_test ("/etc/e5/keypad-call-keys", G_FILE_TEST_EXISTS)) {
++    GtkEventController *keys = gtk_event_controller_key_new ();
++    gtk_event_controller_set_propagation_phase (keys, GTK_PHASE_CAPTURE);
++    g_signal_connect (keys, "key-pressed", G_CALLBACK (on_phone_key), self);
++    gtk_widget_add_controller (GTK_WIDGET (self), keys);
++  }
+ 
+   // Show errors in in-app-notification
+   g_signal_connect_object (calls_manager_get_default (),

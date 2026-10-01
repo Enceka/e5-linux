@@ -43,6 +43,7 @@ install_patched network-manager network-manager libnm0 gir1.2-nm-1.0
 install_patched modemmanager modemmanager libmm-glib0 gir1.2-modemmanager-1.0
 install_patched phosh phosh phosh-common libphosh-0.45-0
 install_patched gnome-control-center gnome-control-center gnome-control-center-data
+install_patched gnome-calls gnome-calls
 
 # The build tree is kept between builds and apt never removes a package that
 # stopped being asked for, so anything dropped from packages.list stays in the

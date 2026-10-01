@@ -1,0 +1,35 @@
+Description: E5: red power key hangs up a call on short release
+Author: e5-linux
+Forwarded: not-needed
+
+--- a/src/screen-saver-manager.c
++++ b/src/screen-saver-manager.c
+@@ -9,6 +9,8 @@
+ #define G_LOG_DOMAIN "phosh-screen-saver-manager"
+ 
+ #include "screen-saver-manager.h"
++#include "calls-manager.h"
++#include <call-ui.h>
+ #include "session-presence.h"
+ #include "shell-priv.h"
+ #include "idle-manager.h"
+@@ -227,6 +229,19 @@
+   if (self->long_press_id == 0)
+     return;
+ 
++  /* E5: the red power/lock key ends the current call on short release.
++   * Preserve blank/wake and long-press behaviour when no call is active. */
++  if (g_file_test ("/etc/e5/keypad-call-keys", G_FILE_TEST_EXISTS)) {
++    PhoshCallsManager *calls = phosh_shell_get_calls_manager (phosh_shell_get_default ());
++    const char *handle = phosh_calls_manager_get_active_call_handle (calls);
++    PhoshCall *call = handle ? phosh_calls_manager_get_call (calls, handle) : NULL;
++    if (call) {
++      g_clear_handle_id (&self->long_press_id, g_source_remove);
++      cui_call_hang_up (CUI_CALL (call));
++      return;
++    }
++  }
++
+   g_debug ("Power button released, activating screensaver");
+   screen_saver_set_active (self, TRUE, self->lock_enabled);
+ 

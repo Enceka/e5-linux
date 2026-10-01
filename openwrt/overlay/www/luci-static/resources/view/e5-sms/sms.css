@@ -1,0 +1,47 @@
+/* Keep these rules local to the SMS view, including under the Argon theme. */
+.e5-sms-page .e5-sms-panel {
+	padding: 20px !important;
+	margin-bottom: 16px;
+}
+.e5-sms-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin-bottom: 16px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid rgba(128, 128, 128, .15);
+}
+.e5-sms-page .e5-sms-toolbar h3 { margin: 0 !important; padding: 0; width: auto !important; min-width: 0; flex: 1 1 0; }
+.e5-sms-page .e5-sms-toolbar .btn { margin: 0; flex: 0 0 auto; }
+.e5-sms-sim { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.e5-sms-sim-name { line-height: 1.5; }
+.e5-sms-page .e5-sms-hint { display: block; font-size: .85rem; opacity: .7; line-height: 1.6; margin: 5px 0 0; padding: 0; }
+.e5-sms-list { overflow-x: auto; }
+.e5-sms-page .e5-sms-list > p { padding: 12px 0; margin: 0; }
+.e5-sms-field { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 14px; max-width: 780px; margin: 0 0 16px; }
+.e5-sms-field > label { padding-top: 10px; line-height: 1.5; }
+.e5-sms-field > div { min-width: 0; }
+.e5-sms-compose .cbi-input-select,
+.e5-sms-compose .cbi-input-text,
+.e5-sms-compose .cbi-input-textarea { width: 100% !important; max-width: 100%; min-width: 0 !important; box-sizing: border-box; }
+.e5-sms-compose textarea { min-height: 145px; height: 145px; resize: vertical; }
+.e5-sms-send-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.e5-sms-description { line-height: 1.7; margin: 0 0 12px; }
+.e5-sms-template-help { font-size: .85rem; line-height: 1.7; margin-bottom: 18px; }
+.e5-sms-template-help summary { cursor: pointer; }
+.e5-sms-forward-map .cbi-section { background: transparent; box-shadow: none; }
+.e5-sms-forward-map .cbi-value-title { width: 145px; }
+.e5-sms-forward-map .cbi-value { padding-left: 0; padding-right: 0; }
+@media (max-width: 600px) {
+	.e5-sms-page .e5-sms-panel { padding: 14px !important; }
+	.e5-sms-field { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+	.e5-sms-field > label { padding-top: 0; }
+	.e5-sms-forward-map .cbi-value-title { width: auto; float: none; text-align: left; }
+	.e5-sms-forward-map .cbi-value-title,
+	.e5-sms-forward-map .cbi-value-field { display: block; width: 100%; }
+	.e5-sms-forward-map .cbi-value-field input,
+	.e5-sms-forward-map .cbi-value-field textarea,
+	.e5-sms-forward-map .cbi-dropdown { min-width: 0; max-width: 100%; }
+}

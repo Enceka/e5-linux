@@ -78,6 +78,18 @@ return view.extend({
 		}, this));
 	},
 
+	handleRefresh: function(ev) {
+		var btn = ev.currentTarget;
+		btn.disabled = true;
+		btn.textContent = '刷新中…';
+		return this.reloadList().catch(function() {
+			notify(false, '刷新失败，请稍后重试');
+		}).finally(function() {
+			btn.disabled = false;
+			btn.textContent = '刷新';
+		});
+	},
+
 	handleDelete: function(msg) {
 		if (!confirm('删除这条短信？\n\n' + (msg.number || '') + '：' + (msg.text || '').slice(0, 60)))
 			return;
@@ -175,10 +187,12 @@ return view.extend({
 	renderSim: function(sim) {
 		if (!sim) return '';
 		var other = sim.card ? 0 : 1;
-		return E('p', {}, [
-			'当前是 ', E('strong', {}, sim.name + (sim.operator ? '（' + sim.operator + '）' : '')), ' 的短信。',
-			'另一张卡的短信要切换到那张卡才能看到（它收到的新短信这边收不到通知，存在卡里）。 ',
-			E('button', { 'class': 'btn cbi-button', 'click': L.bind(this.handleSwitch, this, other) }, '切换到 SIM' + (other + 1))
+		return E('div', { 'class': 'e5-sms-sim' }, [
+			E('div', {}, [
+				E('div', { 'class': 'e5-sms-sim-name' }, [ '当前收件卡：', E('strong', {}, sim.name), sim.operator ? ' · ' + sim.operator : '' ]),
+				E('p', { 'class': 'e5-sms-hint' }, '切卡后可查看另一张卡的短信；当前仅提醒正在使用的卡。')
+			]),
+			E('button', { 'class': 'btn cbi-button', 'type': 'button', 'click': L.bind(this.handleSwitch, this, other) }, '切换到 SIM' + (other + 1))
 		]);
 	},
 
@@ -230,11 +244,7 @@ return view.extend({
 		var list = data[0], log = data[1];
 		this.sim = (list && list.sim) || null;
 
-		var m = new form.Map('e5-notify', '短信转发',
-			'收到新短信时，用 curl 把它发到一个 webhook（HTTP 请求）。网址和正文里可以写 ' +
-			'{from}（发件号码）、{text}（内容）、{time}（时间）、{sim}（SIM1/SIM2）、{device}（设备名），' +
-			'会按所在位置自动转义：网址和表单里做 URL 编码，JSON 里做 JSON 转义（引号自己写在模板里）。' +
-			'2xx 算成功，失败会在 10 秒和 30 秒后各重试一次。');
+		var m = new form.Map('e5-notify');
 		var s = m.section(form.NamedSection, 'forward', 'forward');
 		s.addremove = false;
 		var o;
@@ -295,9 +305,9 @@ return view.extend({
 		o.inputstyle = 'apply';
 		o.onclick = L.bind(this.handleTest, this);
 
-		var counter = E('span', { 'class': 'cbi-value-description' }, '0 字');
+		var counter = E('span', { 'class': 'e5-sms-hint' }, '0 字');
 		var textarea = E('textarea', {
-			'id': 'e5-sms-text', 'class': 'cbi-input-textarea', 'rows': 4, 'style': 'width:100%',
+			'id': 'e5-sms-text', 'class': 'cbi-input-textarea', 'rows': 5,
 			'maxlength': 700, 'placeholder': '内容',
 			'input': function(ev) {
 				var t = ev.target.value, n = Array.from(t).length, k = segments(t);
@@ -306,48 +316,57 @@ return view.extend({
 		});
 
 		return m.render().then(L.bind(function(mapEl) {
-			return E([], [
+			mapEl.classList.add('e5-sms-forward-map');
+			return E('div', { 'class': 'e5-sms-page' }, [
+				E('link', { 'rel': 'stylesheet', 'href': L.resource('view/e5-sms/sms.css') }),
 				E('h2', {}, '短信'),
-				E('div', { 'class': 'cbi-section' }, [
-					E('div', { 'style': 'display:flex;align-items:center;justify-content:space-between;gap:.5em;margin-bottom:.5em' }, [
-						E('h3', { 'style': 'margin:0' }, '收件箱'),
-						E('button', { 'class': 'btn cbi-button', 'click': L.bind(this.reloadList, this) }, '刷新')
+				E('div', { 'class': 'cbi-section e5-sms-panel' }, [
+					E('div', { 'class': 'e5-sms-toolbar' }, [
+						E('h3', {}, '收件箱'),
+						E('button', { 'class': 'btn cbi-button', 'type': 'button', 'click': L.bind(this.handleRefresh, this) }, '刷新')
 					]),
 					E('div', { 'id': 'e5-sms-sim' }, this.renderSim(this.sim)),
-					E('div', { 'id': 'e5-sms-list' }, this.renderList(list))
+					E('div', { 'id': 'e5-sms-list', 'class': 'e5-sms-list' }, this.renderList(list))
 				]),
-				E('div', { 'class': 'cbi-section' }, [
-					E('h3', {}, '发短信'),
-					E('div', { 'class': 'cbi-value' }, [
-						E('label', { 'class': 'cbi-value-title', 'for': 'e5-sms-card' }, '用哪张卡发'),
-						E('div', { 'class': 'cbi-value-field' }, [
+				E('div', { 'class': 'cbi-section e5-sms-panel e5-sms-compose' }, [
+					E('div', { 'class': 'e5-sms-toolbar' }, [ E('h3', {}, '发送短信') ]),
+					E('div', { 'class': 'e5-sms-field' }, [
+						E('label', { 'for': 'e5-sms-card' }, '发送 SIM'),
+						E('div', {}, [
 							E('select', { 'id': 'e5-sms-card', 'class': 'cbi-input-select' }, [0, 1].map(L.bind(function(c) {
 								var cur = this.sim && this.sim.card == c;
 								return E('option', { 'value': c, 'selected': (this.sim ? cur : c == 0) ? '' : null },
 									'SIM' + (c + 1) + (cur ? '（当前' + (this.sim.operator ? '，' + this.sim.operator : '') + '）' : '（需要切换）'));
 							}, this))),
-							E('div', { 'class': 'cbi-value-description' }, '不是当前的卡时，会先切换过去（数据连接也跟着切），注册上网络后再发')
+							E('p', { 'class': 'e5-sms-hint' }, '选择另一张卡会切换移动数据，注册完成后发送。')
 						])
 					]),
-					E('div', { 'class': 'cbi-value' }, [
-						E('label', { 'class': 'cbi-value-title', 'for': 'e5-sms-number' }, '号码'),
-						E('div', { 'class': 'cbi-value-field' },
+					E('div', { 'class': 'e5-sms-field' }, [
+						E('label', { 'for': 'e5-sms-number' }, '收件号码'),
+						E('div', {},
 							E('input', { 'id': 'e5-sms-number', 'type': 'tel', 'class': 'cbi-input-text', 'placeholder': '例如 10086' }))
 					]),
-					E('div', { 'class': 'cbi-value' }, [
-						E('label', { 'class': 'cbi-value-title', 'for': 'e5-sms-text' }, '内容'),
-						E('div', { 'class': 'cbi-value-field' }, [ textarea, counter ])
+					E('div', { 'class': 'e5-sms-field' }, [
+						E('label', { 'for': 'e5-sms-text' }, '短信内容'),
+						E('div', {}, [ textarea, E('div', { 'class': 'e5-sms-send-actions' }, [
+							counter,
+							E('button', { 'class': 'btn cbi-button cbi-button-apply', 'type': 'button', 'click': L.bind(this.handleSend, this) }, '发送')
+						]) ])
 					]),
-					E('div', { 'class': 'cbi-value' }, [
-						E('label', { 'class': 'cbi-value-title' }, ''),
-						E('div', { 'class': 'cbi-value-field' },
-							E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': L.bind(this.handleSend, this) }, '发送'))
-					])
 				]),
-				mapEl,
-				E('div', { 'class': 'cbi-section' }, [
-					E('h3', {}, '最近的转发'),
-					E('div', { 'id': 'e5-sms-log' }, this.renderLog(log))
+				E('div', { 'class': 'cbi-section e5-sms-panel' }, [
+					E('div', { 'class': 'e5-sms-toolbar' }, [ E('h3', {}, '短信转发') ]),
+					E('p', { 'class': 'e5-sms-description' }, '启用后，将新短信转发到指定的通知服务或 webhook。选择预设，填写自己的 Key / Token，保存后可发送测试消息。'),
+					E('details', { 'class': 'e5-sms-template-help' }, [
+						E('summary', {}, '模板变量与重试说明'),
+						E('p', {}, '支持 {from}（发件号码）、{text}（内容）、{time}（时间）、{sim}（SIM1/SIM2）和 {device}（设备名）。网址、表单和 JSON 中的变量会自动转义；JSON 模板中的引号需要保留。'),
+						E('p', {}, 'HTTP 2xx 表示成功；失败后分别等待 10 秒和 30 秒重试。')
+					]),
+					mapEl
+				]),
+				E('div', { 'class': 'cbi-section e5-sms-panel' }, [
+					E('div', { 'class': 'e5-sms-toolbar' }, [ E('h3', {}, '最近的转发') ]),
+					E('div', { 'id': 'e5-sms-log', 'class': 'e5-sms-list' }, this.renderLog(log))
 				])
 			]);
 		}, this));

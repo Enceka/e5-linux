@@ -5,4 +5,5 @@ START=98
 
 start() {
 	/usr/libexec/e5-luci-revision 2>&1 | logger -t e5-luci
+	/usr/libexec/e5-ttyd-bind 2>&1 | logger -t e5-luci
 }

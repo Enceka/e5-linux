@@ -1,0 +1,28 @@
+#!/bin/sh
+# ttyd resolves @lan to the device name. libwebsockets then chooses the first
+# address added to that device, which may be the initramfs rescue address.
+# Resolve a logical network to netifd's primary address instead. Applied at
+# build/boot and on interface events so package upgrades get the fix again.
+set -eu
+F=${1:-}/etc/init.d/ttyd
+[ -f "$F" ] || exit 0
+ucode - "$F" <<'UC'
+let fs = require('fs');
+let path = ARGV[0], src = fs.readfile(path);
+if (index(src, 'e5-ttyd-network-address') >= 0)
+	exit(0);
+let old = 'network_get_device device "${interface:1}"';
+if (index(src, old) < 0 || !match(src, /echo -n "\$device"\s*\)/)) {
+	warn('e5-ttyd-bind: unrecognised ttyd service; not changed\n');
+	exit(1);
+}
+src = replace(src, old, 'network_get_ipaddr device "${interface:1}" || exit 1 # e5-ttyd-network-address');
+// No LAN address yet: skip this instance, never fall back to a wildcard bind.
+src = replace(src, /echo -n "\$device"\s*\)/, s => s + ' || return 0');
+fs.writefile(path + '.e5-new', src) != null || die('cannot write ttyd service');
+UC
+if [ -f "$F.e5-new" ]; then
+	sh -n "$F.e5-new"
+	chmod 755 "$F.e5-new"
+	mv -f "$F.e5-new" "$F"
+fi

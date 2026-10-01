@@ -1,0 +1,17 @@
+#!/bin/sh
+# A logical ttyd bind (@lan, or another network) follows address changes.
+case "$ACTION" in ifup|ifupdate|ifdown) ;; *) exit 0 ;; esac
+[ -x /usr/bin/ttyd ] && [ -f /etc/config/ttyd ] || exit 0
+/usr/libexec/e5-ttyd-bind || exit 1
+. /lib/functions.sh
+changed=
+check_bind() {
+	local iface enabled
+	config_get iface "$1" interface
+	config_get_bool enabled "$1" enable 1
+	[ "$enabled" = 1 ] && [ "$iface" = "@$INTERFACE" ] && changed=1
+}
+config_load ttyd
+config_foreach check_bind ttyd
+[ -n "$changed" ] && /etc/init.d/ttyd restart
+exit 0

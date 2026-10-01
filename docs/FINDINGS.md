@@ -4776,3 +4776,20 @@ Evidence and source/build logs are in work/voice-20261001/. The HAL-aligned
 revision awaits a further user-controlled downlink test at this checkpoint;
 no claim of audible call audio is made yet. The changes are committed in
 separate build, SD, scale, phone-key and audio commits as requested.
+
+### 55.1 HAL-aligned trial still silent; ordinary speaker verified
+
+The user manually called 10099 with scene-5 DSP/AS/CVS profiles and VBC_VOLUME=9
+on 2026-10-02 00:12. Both streams started and the user hung up with the working
+red key, but the user still heard no call audio. The DSP voice pipe reported
+command 0x35/channel 2 with parameters 0x10,0,0,0 at call start and 0,0,0,0 at
+end. This firmware opcode differs from the older HAL reference's network
+message command 0; its semantics remain to be verified.
+
+The later one-second 880 Hz pw-play test completed, aw87xxx powered its Music
+profile, and the user confirmed audible output. Thus ordinary media playback
+through the speaker is verified on this Debian installation; cellular downlink
+is not. A further active-call DSP/DAPM snapshot is being collected. The old
+snapshot monitor only inspected ObjectManager entries, which did not include
+standalone Call objects; it now follows Modem.Voice.Calls and reads each Call's
+properties directly. No call is initiated by that monitor.

@@ -4307,7 +4307,12 @@ fsck ran; the rescue's dmesg; boot_b's persistent log).
   segments counted twice -- a SIT block holding the entries of another (as 48.1's
   NAT blocks held other metadata), or the SIT journal and a SIT block both carrying
   them.
-* Android's fsck repaired it at the next boot (2026-10-01).
+* Android's fsck repaired it at the next boot (2026-10-01;
+  `android-fsck-dmesg.txt`, cut by the kernel's log buffer): at least 3047 blocks
+  in use whose SIT bitmap said free, all in segments 993-1034 -- **all inside one
+  SIT block** (#18, segments 990-1044, 55 entries a block), and their summaries
+  rewritten.  The third time's were in one SIT block as well (#45).  So both times
+  one SIT block read back older than the checkpoint written after it.
 
 ## 49. The SD card install, and why `--update` cannot update it (2026-09-30)
 

@@ -4831,6 +4831,19 @@ boot-control block was verified by full 32-byte readback SHA-256 before reboot;
 no boot image or existing SD root was replaced. User-controlled Debian downlink
 verification is pending at this checkpoint; uplink remains deferred.
 
+### 55.3 Debian downlink heard; default speaker remains (2026-10-02)
+
+After revision 8e9b8a4, the user manually called 10099 on Debian and confirmed
+"有声音了，但默认开了扬声器". This is the first acoustically verified cellular
+downlink on this Debian build. The active-call snapshot and backend journal
+are saved under `work/voice-20261001/unmuted/`. The log records the explicit
+post-start unmute, both streams running and later network mask 0x10/band 0.
+
+The speaker-only restriction was intentional during fault isolation; it is
+now the remaining UI/routing issue. Calls issued EnableSpeaker(False), which
+the adapter rejected and left the speaker active. Receiver default and real
+speaker/receiver switching are the next change. Uplink remains deferred.
+
 ## 56. Installer diagnostics, SD capacity preflight and USB IPv4 (2026-10-02)
 
 The generic "the card does not hold the image..." error hid failures earlier

@@ -1,6 +1,6 @@
 # Status
 
-_Last updated 2026-09-30._
+_Last updated 2026-10-01._
 
 Reasoning, evidence and dead ends live in `docs/FINDINGS.md`; traps found the hard
 way are collected in its sections 24.8 and 28.  This file is only the work list.
@@ -9,50 +9,40 @@ FINDINGS.
 
 ## Now (目前要做)
 
-- **Userdata's F2FS is damaged across power cycles under mainline (three times,
-  2026-09-29; FINDINGS 48).**  Each time metadata blocks mainline wrote in its last
-  checkpoints came back from a reset or power cycle as an *older* content (NAT blocks
-  holding old CP/SIT blocks; a SIT block from before its segments were written), the
-  checkpoint after them intact.  The third one followed a clean power off (read-only
-  remount, `CP_UMOUNT`) with reliable writes already off.  Android's fsck repaired
-  it; the vendor kernel never showed it.  Until it is understood, every Linux boot
-  that mounts userdata read-write risks Android's data -- the plan is to install on
-  the SD card and leave userdata alone (read-only at most).  **That install is in
-  since 2026-09-30** (`flash.py`'s default, measured; FINDINGS 49): the root is the
-  card's partition, and userdata takes only the few bytes of `e5linux/boot-os`.
-  **A fourth time on 2026-09-29, 00:29** (`logs/linux-fail-20260929/`): after a clean
-  unmount (`data-last-cp flags=0x45 clean-unmount`) the next Linux boot's mount failed
-  with -EUCLEAN, boot/init fell to the rescue and then to Android, whose fsck repaired it
-  (no fsck log kept).  **Until this is solved, the E5 stays in Android: no Linux boot
-  that mounts userdata.**
-  Next steps, in order:
-  1. ~~A durability test that can see it~~ -- **done 2026-09-29: flushed data is not
-     lost** (FINDINGS 48.2): 10 power cycles and resets of every kind over the whole
-     `blackbox`, every block held the generation flushed last.  So step 2 (the
-     vendor's eMMC path) is not indicated by it.
-  2. ~~The F2FS side on a fresh filesystem~~ -- **done 2026-09-29: no damage in 30
-     cycles** (FINDINGS 48.2, `upstream/init-f2fstest`): blackbox as userdata (its
-     features), boot/init's mount options, a loop ext4 image in it, 90 s of load, then
-     reboots and power offs with everything mounted; every fsck and mount clean.
-  3. What that test lacked, one at a time: **Android writing the same filesystem in
-     between** (a cycle that boots Android and lets it write before Linux mounts again
-     -- in all four cases Android had written it first), a filesystem that is **used and
-     aged** (fill blackbox to 80-90 % with churn first), **runs of 20+ minutes**.  Also
-     `discard` off, to see if the damage needs it at all.
-  4. Only if none of that reproduces it: the eMMC path of 48.4 (the cache, the shutdown
-     sequence, HSQ vs swcq, discard granularity) under an F2FS load.
-  Meanwhile `boot_b` holds the F2FS test image (the release image the E5 had is in
-  `work/durability/boot_b-before-durability.img`), and blackbox holds the test's
-  filesystem (the original: `logs/durability-20260929/blackbox.img.gz`).
-- **To test on the device (written 2026-09-29, not yet run):** see the section
-  below.
+- **The SD card install's update** (FINDINGS 49): `flash.py --update` refuses a card
+  system.  The proposed way (2026-10-01), all of it on the card, nothing on userdata:
+  1. **A second root partition on the card**, written while the first one runs:
+     `device-install-image.sh` on a card system writes the new image into the card's
+     other root partition (created in the free space the first time --
+     `/usr/libexec/e5-gpt`, a GPT editor in ucode, since OpenWrt has no sgdisk; tested
+     on a copy of the card's table, `sgdisk -v` clean), through the whole disk at its
+     offset (the kernel cannot re-read a table whose partition is mounted), then the
+     settings and the device's files as now, then the marker last.
+  2. **boot/init picks the newest**: every marked partition carries a generation
+     (`/etc/e5/sd-gen`); the highest wins.  A new one comes with `/etc/e5/sd-trial`:
+     boot/init sets it to 0 as it boots it, `e5-boot-ok` removes it once the system is
+     up, and a partition still at 0 is skipped -- the previous one boots again, with
+     its settings as they were.
+  3. `flash.py --update`: the card path instead of the refusal, no `boot-os` write.
+  Needs: the image rebuilt (e5-boot-ok, e5-gpt), a boot image (boot/init), a device
+  test (update, trial confirmed; a broken trial falls back).
+- **Userdata's F2FS is damaged across power cycles under mainline (four times,
+  2026-09-29; FINDINGS 48)** -- metadata blocks of the last checkpoints came back
+  older after a reset or power off, the fourth time after a clean unmount.  The SD
+  card install moves the root off userdata, **but boot/init still mounts userdata
+  read-write for the whole session** (to read `e5linux/boot-os`, then moved to
+  `/mnt/e5-data` with `discard`), so the risk is smaller, not gone.  For a card
+  system: mount it read-only, or only for the moment of reading and writing
+  `boot-os`.  The cause itself: not lost flushes (48.2: 10 power cycles, every block
+  intact) and not a fresh F2FS under load (30 cycles clean).  Still to try, one at a
+  time: Android writing the filesystem in between Linux boots (it had in all four
+  cases), an aged filesystem filled to 80-90 %, runs of 20+ minutes, `discard` off;
+  only then the eMMC path of 48.4 (cache, shutdown, HSQ vs swcq, discard
+  granularity).
 - **Two SIM cards of one operator: only one is recognised** (reported 2026-09-29,
   no test setup yet).  To look into in the unisoc plugin's two-card bring-up and
   `e5-sim` (FINDINGS 47): whether both are brought up when their IMSI prefix is the
   same, and what the CP reports for the second.
-- **One trial boot showed no USB gadget on the host at all** (2026-09-28); the next
-  two did, and the silent one's initramfs log had the gadget bound and `usb0` with
-  carrier.  Not reproduced -- maybe the replug fault below.
 - **One `boot/flash-from-linux.sh` run rebooted straight into Android (2026-09-25).**
   The image verified on `boot_b` and slot b was armed, yet after the reboot `misc`
   held the slot-a block again.  Unexplained.  Recovery that works: from Android,
@@ -64,11 +54,11 @@ FINDINGS.
   fails at boot (Android plays with both at `TYPE_INIT`).  The card's rebind in
   `e5-audio-dsp` logs two `WARNING`s at `drivers/regulator/core.c:2478` (headset
   regulators put while enabled; harmless).
-- Bluetooth leftovers (FINDINGS 8.7, 38): an attach can fail and never recover (the
-  first HCI Reset before the chip's BT channel is up); after repeated BT power cycles
-  the chip stopped answering new HCI commands; a BT power cycle brings hci0 back
-  without its vendor configuration (`HCI_QUIRK_NON_PERSISTENT_SETUP` the candidate).
-  All measured before the kernel sent the vendor configuration: re-test first.
+- Bluetooth leftovers (FINDINGS 8.7, 38): an attach can fail (the first HCI Reset
+  before the chip's BT channel is up) -- since 2026-09-30 `e5-bt-check` brings hci0 up
+  or attaches again; after repeated BT power cycles the chip stopped answering new
+  HCI commands; a BT power cycle brings hci0 back without its vendor configuration
+  (`HCI_QUIRK_NON_PERSISTENT_SETUP` the candidate).
 - **`/dev/null` and friends come up 0660 on some boots** (Debian, FINDINGS 37.3):
   `rootfs-fixups` restores 0666 and logs it; the culprit is not found.
 - The hotspot: a phone reaching an IPv6-only site, and the management ports closed
@@ -80,9 +70,8 @@ FINDINGS.
 
 ## To test (待测试)
 
-Written and committed, not yet run on the device.  None of it is in a flash
-package: the OpenWrt overlay goes into the image (a host with docker or an arm64
-binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by hand).
+In the installed image (`218d47e`, flashed 2026-09-30), not yet checked -- most of
+it needs a SIM card.
 
 - **Text messages** (e5-linux `b90eead`, e5-infoscreen `7834ba8`):
   `/usr/libexec/e5-sms` (list, send, delete, forward), LuCI 服务 -> 短信, the info
@@ -92,8 +81,7 @@ binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by h
   2. Sending from the card in use, then from the other card: LuCI switches first
      (`e5-sim`), waits for the registration (up to 2 min), then sends; the message
      arrives, long ones in parts.
-  3. The forward: a preset, the test button (needs curl -- in the image from now
-     on; `apk add curl` on an older one), then a real message: forwarded once all
+  3. The forward: a preset, the test button, then a real message: forwarded once all
      its parts are in, `{text}` with quotes, newlines and Chinese intact in JSON
      and in a form body; a failing URL is tried three times and logged.
   4. `e5-sms-notify` still vibrates, and forwards only with the forward on.
@@ -102,44 +90,27 @@ binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by h
   messages are not seen (its URC ring is drained, FINDINGS 47.1) until it is
   switched to.  Real dual-card messaging needs the other card's ring as a second
   AT port (sipc_wwan) and a reader of its own.
-- **Bluetooth 开机启动** (e5-linux, e5-infoscreen `Bluetooth: 开机启动`):
-  `e5-bluetooth.main.autostart` -> bluetoothd's AutoEnable
-  (`/usr/libexec/e5-bt-autostart`, run by `e5-bt` at start and on a config
-  change).  To check: off in 高级 -> 蓝牙 (or LuCI 服务 -> 蓝牙), reboot: the adapter
-  is off, `bluetoothctl show` says `Powered: no`; turning it on in 高级 -> 蓝牙
-  works and a headset connects; on again, reboot: powered at boot as before.
+- **Bluetooth 开机启动** (`e5-bluetooth.main.autostart` -> bluetoothd's AutoEnable):
+  off in 高级 -> 蓝牙 (or LuCI 服务 -> 蓝牙), reboot: `bluetoothctl show` says
+  `Powered: no`; on in 高级 -> 蓝牙 works and a headset connects; on again, reboot:
+  powered at boot.
+- **USB replug** (`e5-usb-watch`): a real unplug and replug from a computer's port
+  (SDP/CDP) -- the gadget enumerates again.  Tested only by disconnecting it by hand
+  (connected again after 2 s).  It may also be the 2026-09-28 trial boot that showed
+  no gadget on the host at all.
+
+## Deployment validation (发布验证)
+
+- Push the repositories (nothing is pushed: e5-linux, e5-infoscreen,
+  infoscreen-plugins).
+- **App store**: create `Enceka/infoscreen-plugins` on GitHub from
+  `../infoscreen-plugins`, push, Pages from Actions.  The screen's 应用商店 reads
+  `https://enceka.github.io/infoscreen-plugins/index.json`.
+- **The screen's online update**: upload the release in e5-infoscreen's `dist/`
+  (v1.1.0, `latest.json` and the tarball) to `Enceka/e5-infoscreen`.
 
 ## Next (后续要做)
 
-- **Done 2026-09-30, to check on the device after a replug and with a SIM / online:**
-  1. **USB replug** (`/usr/libexec/e5-usb-watch`, procd `e5-usb-watch`): with a
-     cable in from a computer's port (SDP/CDP) and the UDC `not attached` for 4 s, the
-     gadget is connected again (`soft_connect`).  Tested by disconnecting it by hand:
-     connected again after 2 s, enumerated a second later.  Not yet with a real replug.
-     The info screen's 设备 page shows the link as it is (`/api/status` `.usb.link`:
-     none, charger, host, enumerated, lease, online).
-  2. **The app store**: `Enceka/infoscreen-plugins` (local in `../infoscreen-plugins`,
-     **to create on GitHub and push, with Pages from Actions**): `tools/check.py`,
-     `tools/build.py`, CI, `bigclock`; on the screen 高级 -> 应用管理 -> 应用商店.
-     Tested against a local copy of the store: install, SHA-256 mismatch refused.
-  3. **The screen's online update** (e5-infoscreen `3df5807`, VERSION 1.1.0):
-     `update fetch | apply | rollback`, 高级 -> 系统; tested against a local release.
-     The first real release (v1.1.0 on `Enceka/e5-infoscreen`) is to be uploaded.
-  4. **Bluetooth "no adapter"** (`/usr/libexec/e5-bt-check`, from `e5-bt`): hci0 was
-     there but DOWN and never reported to bluetoothd -- the attach's failed setup of
-     the leftovers below; the check brings it up or attaches again.
-- **待确认 (to confirm): what an SD-card install's update is.**  The card install
-  itself is in and measured (2026-09-30, `flash.py`'s default, `--data` keeps the
-  old form; FINDINGS 49): the root is the card's partition and userdata keeps only
-  `e5linux/boot-os`.  But `--update` cannot update it -- it refuses and says so
-  instead of updating the wrong system, because the device-side installer writes
-  the *userdata* image file: on a card system it would unpack a second system onto
-  userdata and set `boot-os=openwrt`, which moves the next boot off the card and
-  leaves the card stale (the three steps are in FINDINGS 49).  Two ways to make it
-  work: (A) stage the new image on userdata and let boot/init write it onto the
-  card's partition before it mounts anything, or (B) rewrite the mounted card root
-  at file level.  A is the one to take; either needs a `boot.img` and a package
-  built and a device test.  Implementation approach remains to be selected.
 - **An idle blank does not lock the session** (Debian/Phosh, FINDINGS 18).
 - **Call audio.**  Calls work in both directions under ModemManager (FINDINGS
   37.4), but nothing routes the codec into the CP's VoLTE voice path.
@@ -154,10 +125,8 @@ binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by h
   share is the modem.
 - **Battery, charging and thermals** under the 5G link have only been observed in
   passing.
-- This host has no docker and no arm64 binfmt: `openwrt/build-rootfs.sh` cannot
-  run here, so a flash package reuses an image built before
-  (`E5_IMAGE_FROM=`, root modules written in with debugfs).  Changes to the OpenWrt
-  overlay or packages need a host that can build the image.
+- Builds: `openwrt/build-rootfs.sh` and `upstream/build.sh` run in arm64 containers
+  (OrbStack on this host, native -- `orbctl start` first if `docker` cannot connect).
 
 ## Where things stand (短状态)
 
@@ -171,7 +140,7 @@ binfmt, `openwrt/build-rootfs.sh`), the info screen with it (or copied over by h
 | rootfs (Debian) | Debian 13 (trixie) arm64 with Phosh 0.46, a loop file inside `/data/e5linux/` |
 | baseband | ModemManager 1.24.0+e5 (`unisoc` plugin) on `wwan0at0` (`sipc_wwan`), data on `sipa_eth0`/`sipa_eth8` by card; CP booted by `modem_control` in the vendor chroot; every card needs its band lock (FINDINGS 47) |
 | wifi | `sprd_wlan_combo` on the WCN chip: AP for the hotspot, station mode on Debian |
-| bluetooth | configured by the kernel like the vendor HAL (factory address, pskey/RF); headphones play under OpenWrt (FINDINGS 45) |
+| bluetooth | configured by the kernel like the vendor HAL (factory address, pskey/RF); headphones play under OpenWrt (FINDINGS 45); a failed attach retried (`e5-bt-check`) |
 | disk | the SD card can hold the system (FINDINGS 49); the eMMC's userdata (F2FS) holds the images of the `--data` form -- see Now |
 
 ## Open questions

@@ -100,7 +100,7 @@ class VoicePcm:
 
 
 class VoiceHardware:
-    # Handsfree gains and codec routes from this device's Android parameters.
+    # Shared voice routes from this device's Android parameters.
     ROUTES = {
         'S_VOICE_P_CODEC SWITCH': 'on', 'S_VOICE_C_CODEC SWITCH': 'on',
         'VBC_MUX_DAC1_IIS_PORT_SEL': 'VBC_IIS_PORT_IIS0',
@@ -115,13 +115,28 @@ class VoiceHardware:
         'VBC ADC2 DG Set': '24,24',
         # The HAL sets this to voice_volume + 1, after applying AS/CVS.
         'VBC_VOLUME': '7',
-        # Own Android Handsfree/NB1, volume 7: dacs=0, ao=3.
-        'DAC Gain DAC Playback Volume': '0', 'AO Gain AO Playback Volume': '3',
-        'Speaker Function': 'on', 'Speaker Mute': 'off',
-        'Earpiece Function': 'off', 'Mic Function': 'on',
+        'Speaker Mute': 'off', 'Earpiece Mute': 'off', 'Mic Function': 'on',
+    }
+    # Stock handset uses EAR_HPL, not the commented-out EAR_AOL alternative.
+    RECEIVER = {
+        'Speaker Function': 'off',
+        'AO Mixer AOL Switch': 'off', 'AO Mixer AOR Switch': 'off',
+        'DA AOR Switch': 'off', 'AOL EAR Sel': 'EAR',
+        'EAR_AOL Mixer DACAOL Switch': 'off',
+        'DAHP OS D': '5', 'EAR_HPL Mixer DACHPL Switch': 'on',
+        'HPL EAR Sel': 'EAR', 'VBC_MIXER1_DAC0': 'HALF_ADD',
+        'Earpiece Function': 'on',
+    }
+    SPEAKER = {
+        'Earpiece Function': 'off',
+        'EAR_HPL Mixer DACHPL Switch': 'off', 'HPL EAR Sel': 'HPL',
+        'EAR_AOL Mixer DACAOL Switch': 'off', 'VBC_MIXER1_DAC0': 'NOT_MIX',
         'AOL EAR Sel': 'AOL', 'AO Mixer AOL Switch': 'on',
         'AO Mixer AOR Switch': 'on', 'DA AOR Switch': 'on',
+        'Speaker Function': 'on',
     }
+    GAINS = ('DAC Gain DAC Playback Volume', 'AO Gain AO Playback Volume',
+             'EAR Gain EAR Playback Volume')
     # The E5 driver's CVS selector retains the old NXP label (same profile 2).
     PROFILES = ('DSP VBC Profile Select', 'Audio Structure Profile Select', 'NXP Profile Select')
 
@@ -135,20 +150,63 @@ class VoiceHardware:
             raise RuntimeError('not an E5 sound card')
         self.saved, self.handles = {}, []
         self.band = 0
+        self.speaker = False
+
+    def controls(self):
+        return tuple(dict.fromkeys((*self.ROUTES, *self.RECEIVER, *self.SPEAKER,
+                                    *self.GAINS, *self.PROFILES)))
 
     @staticmethod
-    def profile_word(band):
-        # Handsfree NB1/WB1/SWB1/FB1. Param ID equals the mode's logical ID;
+    def profile_word(band, speaker=False):
+        # Own Handset NB1/WB1/SWB1/FB1: 0/2/4/5; Handsfree: 7/9/11/12.
+        # Param ID equals the mode's logical ID;
         # the low byte is DAI_ID_VOICE=5, as in the Unisoc HAL.
-        mode = (7, 9, 11, 12)[band]
+        mode = ((7, 9, 11, 12) if speaker else (0, 2, 4, 5))[band]
         return (mode << 24) | (mode << 16) | 5
 
     def profiles(self):
-        word = self.profile_word(getattr(self, 'band', 0))
+        word = self.profile_word(self.band, self.speaker)
         for name in self.PROFILES:
             self.put(name, word)
         self.put('VBC_VOLUME', 7)
-        logging.info('voice profiles=%#x, bandwidth=%d, VBC_VOLUME=7', word, getattr(self, 'band', 0))
+        # Own codec XML at voice volume 7, matching stock's recorded values.
+        self.put('DAC Gain DAC Playback Volume', '0' if self.speaker else '3')
+        self.put('AO Gain AO Playback Volume', (3, 3, 3, 4)[self.band] if self.speaker else 6)
+        if not self.speaker:
+            self.put('EAR Gain EAR Playback Volume', (2, 2, 2, 4)[self.band])
+        logging.info('voice profiles=%#x, bandwidth=%d, output=%s, VBC_VOLUME=7',
+                     word, self.band, 'speaker' if self.speaker else 'receiver')
+
+    def output(self):
+        # Disable the old endpoint before rewiring; never feed both outputs.
+        self.put('Speaker Function', 'off')
+        self.put('Earpiece Function', 'off')
+        for name, value in (self.SPEAKER if self.speaker else self.RECEIVER).items():
+            self.put(name, value)
+
+    def set_speaker(self, enabled):
+        enabled = bool(enabled)
+        if enabled == self.speaker:
+            return
+        if not self.handles:
+            self.speaker = enabled
+            return
+        names = tuple(dict.fromkeys((*self.RECEIVER, *self.SPEAKER, *self.GAINS,
+                                    *self.PROFILES, 'VBC_VOLUME', 'VBC_DL_MUTE',
+                                    'VBC DAC1 DSP MDG Set')))
+        before = {name: self.get(name) for name in names}
+        previous = self.speaker
+        try:
+            self.put('VBC_DL_MUTE', 'enable')
+            self.put('VBC DAC1 DSP MDG Set', '1,1024')
+            self.speaker = enabled
+            self.output()
+            self.profiles()
+            self.unmute_downlink()
+        except Exception:
+            self.speaker = previous
+            self.restore(before)
+            raise
 
     def unmute_downlink(self):
         self.put('VBC DAC1 DSP MDG Set', '0,1024')
@@ -175,7 +233,9 @@ class VoiceHardware:
     def put(self, name, value):
         # VBC_VOLUME declares UINT_MAX as a signed max (-1); amixer clamps any
         # positive value to -1. Profile selects also have understated maxima.
-        if name in self.PROFILES or name == 'VBC_VOLUME':
+        # The codec advertises DAC gain max=2 but its two-bit setter accepts the
+        # stock handset value 3; tinyalsa writes it directly, as this helper does.
+        if name in self.PROFILES or name in ('VBC_VOLUME', 'DAC Gain DAC Playback Volume'):
             command = ['/opt/e5/e5-ctl-raw', name, str(value), str(self.card)]
         else:
             command = ['amixer', '-q', '-c', str(self.card), 'cset', 'name=' + name, str(value)]
@@ -185,11 +245,12 @@ class VoiceHardware:
         if self.handles:
             return
         # Read the full snapshot before changing even the first route.
-        self.saved = {name: self.get(name) for name in (*self.ROUTES, *self.PROFILES)}
+        self.saved = {name: self.get(name) for name in self.controls()}
         try:
             self.profiles()
             for name, value in self.ROUTES.items():
                 self.put(name, value)
+            self.output()
             for direction in (0, 1):
                 self.handles.append(VoicePcm(self.card, self.device, direction))
             # Android prepares both directions before starting either one.
@@ -198,7 +259,8 @@ class VoiceHardware:
             # The vendor applies the parameters again after starting both PCMs.
             self.profiles()
             self.unmute_downlink()
-            logging.info('VOICE-RUNNING hw:%s,%s playback/capture, speaker, 8000 Hz', self.card, self.device)
+            logging.info('VOICE-RUNNING hw:%s,%s playback/capture, %s, 8000 Hz',
+                         self.card, self.device, 'speaker' if self.speaker else 'receiver')
         except Exception:
             self.stop()
             raise
@@ -207,16 +269,20 @@ class VoiceHardware:
         for pcm in reversed(self.handles):
             pcm.close()
         self.handles.clear()
+        saved, self.saved = self.saved, {}
+        self.speaker = False
+        self.restore(saved)
+        logging.info('VOICE-STOPPED; prior mixer/profile state restored')
+
+    def restore(self, values):
         errors = []
-        for name, value in reversed(tuple(self.saved.items())):
+        for name, value in reversed(tuple(values.items())):
             try:
                 self.put(name, value)
             except Exception as error:
                 errors.append(str(error))
-        self.saved.clear()
         if errors:
             raise RuntimeError('; '.join(errors))
-        logging.info('VOICE-STOPPED; prior mixer/profile state restored')
 
     def mute(self, mute):
         if self.handles:
@@ -231,7 +297,7 @@ def main():
     hardware = VoiceHardware()
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     loop = GLib.MainLoop()
-    states = {'AudioMode': 0, 'SpeakerState': 1, 'MicState': 1}
+    states = {'AudioMode': 0, 'SpeakerState': 0, 'MicState': 1}
     connection = None
     pipe_fd = None
     pipe_stop = threading.Event()
@@ -293,13 +359,11 @@ def main():
             else:
                 hardware.stop()
             states['AudioMode'] = int(value)
+            states['SpeakerState'] = int(hardware.speaker)
             states['MicState'] = 1
         elif method == 'EnableSpeaker':
-            # The receiver was silent in prior tests. Keep the validated speaker
-            # as the call output until an earpiece route is separately verified.
-            if not value:
-                raise RuntimeError('E5 call output currently supports speaker only')
-            states['SpeakerState'] = 1
+            hardware.set_speaker(value)
+            states['SpeakerState'] = int(hardware.speaker)
         else:
             hardware.mute(value)
             states['MicState'] = 0 if value else 1

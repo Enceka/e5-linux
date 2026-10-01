@@ -4844,6 +4844,38 @@ now the remaining UI/routing issue. Calls issued EnableSpeaker(False), which
 the adapter rejected and left the speaker active. Receiver default and real
 speaker/receiver switching are the next change. Uplink remains deferred.
 
+### 55.4 Default receiver and real speaker switching (2026-10-02)
+
+The adapter now starts with SpeakerState=0, uses the stock handset EAR_HPL
+route (DAHP OS D=5, EAR_HPL mixer on, HPL EAR Sel=EAR, DAC0 mixer HALF_ADD),
+and keeps the speaker/AO path off. Speaker mode disables that receiver path
+and enables the previously audible speaker/AO route. Handset NB/WB/SWB/FB
+mode IDs are 0/2/4/5; Handsfree IDs are 7/9/11/12. Codec gains follow this
+device's volume-7 XML, including the band-specific receiver/AO gains.
+
+The DAC gain control advertises max=2, but its actual two-bit setter accepts
+the stock handset gain 3. amixer clamped it to 2. The raw control helper now
+writes this value as Android tinyalsa does; readback is 3. No kernel or DSP
+firmware was replaced for this change.
+
+EnableSpeaker(False) now succeeds. A live switch mutes the DSP, disables the
+old output, changes routes/profiles/gains and explicitly unmutes, retaining
+both PCM handles. A failed route write restores the previous live state.
+Stopping a call restores every saved control and clears the speaker choice,
+so the following call defaults to receiver. An explicit pre-call choice is
+recorded without changing idle media routes. SpeakerState follows the chosen
+route with the standard libcallaudio values (0 off, 1 on).
+
+Software tests cover default routing, speaker/receiver switching, preserving
+mic mute and PCM handles, failed-switch rollback and next-call defaults.
+On-device local tests verified both PCMs RUNNING through receiver -> speaker
+-> receiver, correct profile/gain/mute readbacks and exact restoration. DAPM
+showed EAR_HPL/EAR/RCV powered in receiver mode, Ext Spk in speaker mode.
+A separate test through the real session D-Bus API under user e5 verified
+properties 0 -> 1 -> 0 and exact mixer restoration after SelectMode(0).
+These tests make no modem/call request. Receiver acoustic verification during
+a user-controlled call remains pending; the speaker downlink is already heard.
+
 ## 56. Installer diagnostics, SD capacity preflight and USB IPv4 (2026-10-02)
 
 The generic "the card does not hold the image..." error hid failures earlier

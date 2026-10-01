@@ -1,142 +1,38 @@
 # Status
 
-_Last updated 2026-10-01._
+更新：2026-10-01。这里只记录未完成、未验证和待取舍的项目。
+已完成工作及历史证据见 `docs/FINDINGS.md`，本次核对见 §51。
 
-Reasoning, evidence and dead ends live in `docs/FINDINGS.md`; traps found the hard
-way are collected in its sections 24.8 and 28.  This file is only the work list.
-Done work is removed from it once its result is in the table at the bottom or in
-FINDINGS.
+当前维护范围：OpenWrt + 主线 6.18 + SD 卡安装。userdata 安装只用于测试；
+Debian/Phosh、听筒和通话音频按此前决定延期。e5-modemd 保留为可选辅助，当前未启用。
 
-## Now (目前要做)
+设备基线：内核 `6.18.54-e5-00064-gc1bb703f034c`，SD 镜像 `bc9cdb6`，
+`/dev/mmcblk1p1`、generation 2；userdata 当前只读。10 月 1 日的界面和短信修复已直接部署，
+尚未合入新的整机刷入包。
 
-- **Userdata's F2FS is damaged across power cycles under mainline (five times,
-  2026-09-29 and 2026-10-01; FINDINGS 48)** -- metadata of the last checkpoints came
-  back older after a reset or power off, three times after a clean unmount; the
-  third and the fifth were each one SIT block read back older than the checkpoint
-  after it.  The fifth had no Android in between (48.5).  **A card system now
-  leaves userdata read-only** (since 2026-10-01), so the maintained form no longer
-  writes it; the systems on userdata are for tests only and risk it.  The cause:
-  not lost flushes (48.2: 10 power cycles, every block intact), not a fresh F2FS
-  under load (30 cycles clean).  Still to try: an aged filesystem filled to 80-90 %,
-  runs of 20+ minutes with a loop root, `discard` off; the SIT block of the dump
-  (`logs/linux-fail-20261001/`) against the checkpoint; then the eMMC path of 48.4
-  (cache, shutdown, HSQ vs swcq, discard granularity).
-- **Two SIM cards of one operator: only one is recognised** (reported 2026-09-29,
-  no test setup yet).  To look into in the unisoc plugin's two-card bring-up and
-  `e5-sim` (FINDINGS 47): whether both are brought up when their IMSI prefix is the
-  same, and what the CP reports for the second.
-- **One `boot/flash-from-linux.sh` run rebooted straight into Android (2026-09-25).**
-  The image verified on `boot_b` and slot b was armed, yet after the reboot `misc`
-  held the slot-a block again.  Unexplained.  Recovery that works: from Android,
-  write `*.misc-slot-b-trial.bin` into `misc` and reset with sysrq (FINDINGS 24.5).
-- **Find out what takes AGCP access away under an open stream** (FINDINGS 32):
-  since `0016` it no longer crashes the device, but the position then freezes.
-- Audio leftovers: the earpiece routed as on 5.15 was silent (the E5 may have none);
-  the AP capture FE (hw:N,0) stalls after one period; `VBC_*_DEV_CHANGE=TYPE_SPK`
-  fails at boot (Android plays with both at `TYPE_INIT`).  The card's rebind in
-  `e5-audio-dsp` logs two `WARNING`s at `drivers/regulator/core.c:2478` (headset
-  regulators put while enabled; harmless).
-- Bluetooth leftovers (FINDINGS 8.7, 38): an attach can fail (the first HCI Reset
-  before the chip's BT channel is up) -- since 2026-09-30 `e5-bt-check` brings hci0 up
-  or attaches again; after repeated BT power cycles the chip stopped answering new
-  HCI commands; a BT power cycle brings hci0 back without its vendor configuration
-  (`HCI_QUIRK_NON_PERSISTENT_SETUP` the candidate).
-- **`/dev/null` and friends come up 0660 on some boots** (Debian, FINDINGS 37.3):
-  `rootfs-fixups` restores 0666 and logs it; the culprit is not found.
-- The hotspot: a phone reaching an IPv6-only site, and the management ports closed
-  from its side, are unchecked; the beacon's bogus Extended Supported Rates; a
-  `cancel_work_sync` WARNING in `sprd_dpu_stop` when the panel blanks.
-- **The battery temperature dipped to -8 C for 40 s** once, 130-173 s after a boot
-  (FINDINGS 41.1), 30 C before and after; not seen on the next boot.  A sampler at
-  boot for a few boots, and the fuel gauge's NTC channel against the ADC's lock.
-- GPU: scanout buffers are still the vendor KMS driver's dumb buffers, and the
-  frequency is pinned at DVFS index 3 (384 MHz): watch thermals under real load.
-- `unisoc-cpd` (the fallback baseband owner on Debian): the 72 h soak is open.
+## 待修 / 正在处理
 
-## To test (待测试)
+| 编号 | 项目 | 当前证据 |
+|---|---|---|
+| R1 | 信息屏“恢复默认频段” | 仍把 NR 解锁，而本机实测解锁可触发 CP assert；需确定设备默认值或取消此操作。FINDINGS 47.2 |
+| R2 | 信息屏新版发布 | 版本和更新包升至 1.2.0；公开版本仍为 1.1.0，新版待发布 |
 
-In the installed SD image (`bc9cdb6`, with fixes deployed 2026-10-01), not yet
-checked -- most of it needs a SIM card.
+## 待验证
 
-- **Text messages** (e5-linux `b90eead`, e5-infoscreen `7834ba8`):
-  `/usr/libexec/e5-sms` (list, send, delete, forward), LuCI 服务 -> 短信, the info
-  screen's `POST /api/sms-send` and `e5.sms.send()`.  To check:
-  1. LuCI's delete and 回复 on the card in use.
-  2. Sending from the card in use, then from the other card: LuCI switches first
-     (`e5-sim`), waits for the registration (up to 2 min), then sends; the message
-     arrives, long ones in parts.
-  3. The forward: a preset, the test button, then a real message: forwarded once all
-     its parts are in, `{text}` with quotes, newlines and Chinese intact in JSON
-     and in a form body; a failing URL is tried three times and logged.
-  4. `e5-sms-notify` still vibrates, and forwards only with the forward on.
-  5. A plugin's `e5.sms.send(number, text)`.
-  Known limit: ModemManager has one modem, the card in use; the other card's new
-  messages are not seen (its URC ring is drained, FINDINGS 47.1) until it is
-  switched to.  Real dual-card messaging needs the other card's ring as a second
-  AT port (sipc_wwan) and a reader of its own.
-- **Bluetooth 开机启动** (`e5-bluetooth.main.autostart` -> bluetoothd's AutoEnable):
-  off in 高级 -> 蓝牙 (or LuCI 服务 -> 蓝牙), reboot: `bluetoothctl show` says
-  `Powered: no`; on in 高级 -> 蓝牙 works and a headset connects; on again, reboot:
-  powered at boot.
-- **USB replug** (`e5-usb-watch`): a real unplug and replug from a computer's port
-  (SDP/CDP) -- the gadget enumerates again.  Tested only by disconnecting it by hand
-  (connected again after 2 s).  It may also be the 2026-09-28 trial boot that showed
-  no gadget on the host at all.
+| 编号 | 项目 | 缺少的验证 |
+|---|---|---|
+| T1 | 短信剩余流程 | LuCI 删除/回复、当前卡和另一张卡发送、长短信分段、真实 webhook 转发及失败重试、插件发送接口；当前卡真实短信接收和读取已通过 |
+| T2 | 蓝牙电源与开机策略 | 自动启动关/开各重启一次；多次电源切换后的连接稳定性及厂商地址/RF 配置恢复。正常开机识别、耳机音频已通过 |
+| T3 | USB 真实插拔 | 已测软件断开后自动重连；仍缺实体拔插及重新拿到地址的验证 |
+| T4 | 热点客户端 IPv6 与隔离 | 真实手机打开 IPv6-only 站点，以及 Wi-Fi 侧不能访问 telnet；OpenWrt 的 SSH/LuCI 允许 LAN 访问，不要求全部管理端口封闭 |
+| T5 | 温度读数与长期充电 | 电池温度曾短暂掉到 -8°C，未再次复现；充电器温控区约 85°C，壳温依赖其估算，未校准验证；充电保护与 5G 负载长期观察 |
+| T6 | 两张同运营商 SIM | 出现过仅识别一张的报告，缺少相同运营商双卡复现；不同运营商双卡切换已验证 |
 
-## Deployment validation (发布验证)
+## 计划候选项
 
-- Push the repositories (nothing is pushed: e5-linux, e5-infoscreen,
-  infoscreen-plugins).
-- **App store**: create `Enceka/infoscreen-plugins` on GitHub from
-  `../infoscreen-plugins`, push, Pages from Actions.  The screen's 应用商店 reads
-  `https://enceka.github.io/infoscreen-plugins/index.json`.
-- **The screen's online update**: upload the release in e5-infoscreen's `dist/`
-  (v1.1.0, `latest.json` and the tarball) to `Enceka/e5-infoscreen`.
-
-## Next (后续要做)
-
-- **Multiple systems on the SD card**, with independent updates: currently all
-  marked `e5root*` roots share one generation sequence and a common kernel in
-  `boot_b`. Add a system registry on the card, stable system IDs/PARTUUIDs,
-  one A/B pair and trial/rollback state per system, and update target identity
-  checks. All systems will use the same kernel; different-kernel boot is out
-  of scope. The proposed layout and kernel constraints are in
-  `openwrt/MULTIBOOT.md`; no multi-system support is implemented yet.
-- **An idle blank does not lock the session** (Debian/Phosh, FINDINGS 18).
-- **Call audio.**  Calls work in both directions under ModemManager (FINDINGS
-  37.4), but nothing routes the codec into the CP's VoLTE voice path.
-- **The CP's 300 s dump wait after an assert** (FINDINGS 30): answered on OpenWrt by
-  `e5-modemd` (FINDINGS 47.6); the Debian root has no such client yet.
-- **SIM hot plug** (FINDINGS 47.7): the plugin drops the CP's `+ECIND: 3,<v>`.
-- **The info screen's "默认频段" unlocks NR**, which this baseband cannot take
-  (FINDINGS 47.2): use the validated device band lock as the default (b1+b41, n41+n78) or drop it.
-- **Suspend is unusable** while the modem data path refuses it
-  (`sipa 25220000.sipa: thread prepare suspend err`).
-- **The hotspot's own uplink:** with no AP+STA concurrency the only uplink an AP can
-  share is the modem.
-- **Battery, charging and thermals** under the 5G link have only been observed in
-  passing.
-- Builds: `openwrt/build-rootfs.sh` and `upstream/build.sh` run in arm64 containers
-  (OrbStack on this host, native -- `orbctl start` first if `docker` cannot connect).
-
-## Where things stand (短状态)
-
-| | |
-|---|---|
-| board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 13 on slot a |
-| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`, running `c1bb703f0`: SD slot and JEITA startup fix), the installed system under OpenWrt (`E5_MAINLINE=1 openwrt/make-flash-bundle.sh`, `flash.py`): display, touch, keys, USB gadget, Wi-Fi, BT, both SIM cards (FINDINGS 47), charging and fuel gauge, 25 thermal zones (charger NTC and shell estimates unverified), speaker and mic; the PMIC power off; filesystems read-only before a reset (FINDINGS 48.3); no eMMC reliable writes |
-| power | `poweroff` is a real one without the cable; with a charger in, the PMIC powers the E5 up again and it boots (charger mode is logged, not a charging screen) |
-| openwrt | OpenWrt 25.12.5 standalone, on the SD card's partition (the install's default since 2026-09-30; `--update` writes the card's other root partition and boots it as a trial, FINDINGS 49.1; `--data` keeps the image in `/data/e5linux/openwrt.ext4` -- FINDINGS 49) with its own firmware, vendor subset, modem modules and fonts (FINDINGS 39, 43); WAN by ModemManager, LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; the info screen (e5-infoscreen) on the panel |
-| kernel 5.15 | rebuilt `Image` (`kernel/patches/0001-0028`), the Debian root's; still the fallback flash package |
-| rootfs (Debian) | Debian 13 (trixie) arm64 with Phosh 0.46, a loop file inside `/data/e5linux/` |
-| baseband | ModemManager 1.24.0+e5 (`unisoc` plugin) on `wwan0at0` (`sipc_wwan`), data on `sipa_eth0`/`sipa_eth8` by card; CP booted by `modem_control` in the vendor chroot; every card needs its band lock (FINDINGS 47) |
-| SMS | Receiving and listing the current card's real test message verified 2026-10-01 through ModemManager, e5-sms and LuCI RPC; POSIX-incompatible ID regex fixed (FINDINGS 50.1). Sending, delete/reply, forwarding and the other card remain in To test. |
-| wifi | `sprd_wlan_combo` on the WCN chip: AP for the hotspot, station mode on Debian |
-| bluetooth | configured by the kernel like the vendor HAL (factory address, pskey/RF); headphones play under OpenWrt (FINDINGS 45); a failed attach retried (`e5-bt-check`) |
-| disk | the SD card can hold the system (FINDINGS 49); the eMMC's userdata (F2FS) holds the images of the `--data` form -- see Now |
-
-## Open questions
-
-- **`xdg-desktop-portal` has no backend in a fresh install** (Debian): decide which
-  backend the phosh session wants: `xdg-desktop-portal-gtk` or
-  `xdg-desktop-portal-wlr`.
+| 编号 | 项目 | 当前状态 |
+|---|---|---|
+| D1 | SD 卡多系统 | 已写设计，尚未实现；共用一个内核，每系统独立 A/B、配置、更新和回退。`openwrt/MULTIBOOT.md` |
+| D2 | userdata F2FS 根因 | 五次损坏的根因未定位；SD 只读规避已完成，耐久性及新建 F2FS 测试已结束。后续根因研究延期。FINDINGS 48 |
+| D3 | 历史驱动异常 | AGCP 访问丢失、非主用 AP capture 停滞、音频路由/稳压器警告、DPU blank 警告、热点速率声明；触发条件或根因尚未确认。FINDINGS 24/32/34/38、51 |
+| D4 | 主线增强项 | pinctrl、DPU/GPU 调频、GSP、USB/UART/JTAG pin mux、cpufreq 与系统挂起，尚未完成 |

@@ -4493,3 +4493,62 @@ stderr in failures instead of returning only "e5-sms failed"; the frontend no
 longer labels every failure as a missing SIM. `openwrt/tests/sms-list.sh` uses a
 private fake mmcli to cover a nonempty and empty inbox, object paths including
 ID zero, UTF-8 text with quotes/newlines, directions and newest-first sorting.
+
+## 51. Status audit and deferred scope (2026-10-01)
+
+STATUS is a work list, not a second history. Completed SD updates and rollback,
+userdata read-only operation, current-card SMS reception/listing, charging-status
+display/JEITA startup, temperature summaries, app/settings merge, ttyd's dynamic
+LAN bind and Wi-Fi QR encoding are recorded in their sections above. They no
+longer need implementation tasks in STATUS; physical tests and unresolved sensor
+readings remain separate.
+
+Remote branch heads were checked: e5-linux, e5-infoscreen, infoscreen-plugins and
+linux-lts-e5 all matched the corresponding local heads at the start of this
+audit. The claim that none had been pushed was stale. The info screen's v1.1.0
+release is already public with its tarball and latest.json; the original first
+release/upload task is complete. New fixes need a newer version for the device's
+version comparison to offer them.
+
+The app store repository exists and its application check/build pass. The first
+`store` run failed at `actions/configure-pages`: Pages had not been enabled then.
+The later generic Pages deployment succeeded but did not publish the generated
+store index. Pages now reports `build_type=workflow`; the failed store job was
+rerun successfully: the public index and package both downloaded, with size and
+SHA-256 matching the index; the device fetched one app (bigclock). This was
+deployment state, not a package-builder failure. The workflow gains a manual
+trigger and uses Pages' actual base URL.
+
+### e5-modemd is optional abnormal-state recovery
+
+The binary and procd script are installed, but there is no enabled rc.d link and
+no e5-modemd process. The vendor modem_control is running and owns @modemd.
+Normal modem startup/data do not require e5-modemd. Its purpose remains specific:
+the vendor reset path waits for SLOGMODEM DUMP COMPLETE after an assert/block,
+historically 300 s without a client; section 47.6 measured 4-5 s when the helper
+answered. No other component in the current tree sends that acknowledgement.
+It skips collection of a CP crash dump and does not replace ModemManager.
+It remains an optional, currently disabled helper.
+
+### Deferred observations, not claims of fixes
+
+* Deferred Debian/Phosh items: idle blank versus session locking (18),
+  /dev/null permissions (37.3),
+  desktop portal backend selection, the CP dump client on Debian, and the
+  unisoc-cpd 72 h soak remain deferred. The maintained modem stack is MM/netifd.
+* The earpiece test was silent and its hardware existence is unknown; further
+  validation is deferred. Call signalling works, but call audio is postponed.
+  SIM hotplug and simultaneous reception from both cards are not implemented.
+* The one 2026-09-25 flash-from-linux reboot straight into Android is still
+  unexplained. Later flash.py updates worked; that does not establish the cause
+  of the older event. It is historical evidence, not an active release blocker.
+* Audio's guarded AGCP-access loss (32), the non-primary AP capture FE stall,
+  VBC device-change rejection, headset regulator warnings, DPU blank warnings,
+  and bogus advertised hotspot rates are not all resolved. Normal speaker/main
+  mic operation is verified; these observations should be investigated if kept
+  in scope or reproduced, not relabelled as solved.
+* AP+STA concurrency is unavailable; the hotspot currently shares cellular WAN.
+  GPU scanout uses vendor KMS dumb buffers and its frequency is pinned at index 3
+  (384 MHz). Full pinctrl, frequency scaling, GSP and the USB/debug pin mux are
+  enhancements rather than completed milestones. System suspend is blocked by
+  the SIPA data path. The SD slot itself is now implemented and used as the root.

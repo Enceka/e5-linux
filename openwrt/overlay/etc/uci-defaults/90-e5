@@ -4,8 +4,8 @@
 #  * lan: br-lan with the USB port (usb0) and the hotspot, 192.168.9.1/24, and
 #    192.168.77.1 as a second address -- the initramfs's rescue subnet, which a
 #    host may still hold a lease for; DHCP .10-.200, the USB host (the gadget's
-#    host_addr) always at .2, without a default route from us (it has its own
-#    uplink), as dnsmasq on Debian does it;
+#    host_addr) always at .2, with the LAN gateway and DNS for mobile internet
+#    over both IPv4 and IPv6, as dnsmasq on Debian does it;
 #  * wan: the baseband through ModemManager (its unisoc plugin; the modem's
 #    device id is the uid the plugin's rules give it), IPv4 and IPv6;
 #  * IPv6 for the LAN: the carrier gives the bearer a /64 and no prefix
@@ -81,8 +81,6 @@ set dhcp.usb_host.name='usb-host'
 set dhcp.usb_host.mac='02:50:00:00:e5:02'
 set dhcp.usb_host.ip='192.168.9.2'
 set dhcp.usb_host.tag='usbhost'
-set dhcp.usbhost=tag
-add_list dhcp.usbhost.dhcp_option='3'
 UCI
 
 # the armsr default bridges eth0.  Here netifd's bridge has no ports of its

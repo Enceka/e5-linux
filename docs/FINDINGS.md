@@ -3051,7 +3051,8 @@ dnsmasq serves only br0: pool .10-.200, `dhcp-authoritative` (NAKs the old
 192.168.77.x lease at renewal), and the USB host -- the gadget's fixed host MAC
 `02:50:00:00:e5:02` -- always gets 192.168.9.2 with the router option empty, so a
 laptop keeps its own default route (verified: IPv4 default stays on the Mac's own
-interface, IPv6 via the device).  `e5-ipv6-share` puts the /64 on br0, so the RA
+interface, IPv6 via the device; this gateway suppression was removed on
+2026-10-02 after the USB IPv4 report, see §56). `e5-ipv6-share` puts the /64 on br0, so the RA
 reaches both ports.
 
 **The price of one L2: the management services see the hotspot.**  They already
@@ -4793,3 +4794,42 @@ is not. A further active-call DSP/DAPM snapshot is being collected. The old
 snapshot monitor only inspected ObjectManager entries, which did not include
 standalone Call objects; it now follows Modem.Voice.Calls and reads each Call's
 properties directly. No call is initiated by that monitor.
+
+## 56. Installer diagnostics, SD capacity preflight and USB IPv4 (2026-10-02)
+
+The generic "the card does not hold the image..." error hid failures earlier
+in SD installation. `flash.py` now checks the remote exit status at each
+partition/write/mount/extract/verification stage, retains the actual stderr
+and relevant mmc/ext4 kernel messages, and distinguishes a missing adb/su
+completion status from an SD content failure. Absolute image symlinks are
+verified inside its chroot. Missing/empty/non-executable paths are named.
+Gzip CRC and actual uncompressed length, card capacity and write protection
+are checked before partitioning. After the existing erase confirmation, vold
+releases only this card's volumes; remaining mounts abort before GPT changes.
+Seven mocked failure tests pass; no existing SD root was erased for testing.
+
+The Debian multi-system installer checks the complete 32 MiB registry plus
+4096 MiB x 2 allocation with read-only `e5-gpt plan` before any card write.
+Both GPT copies, overlaps, alignment, available entries and fragmented gaps
+are checked using the actual allocator. Failure reports required size, largest
+gap and remaining unallocated space; filesystem free space does not count.
+`--check` prints the plan without installing. Six synthetic GPT cases passed
+with unchanged metadata. Six real stream-writer tests on disposable files
+passed: good image, bad CRC, HTTP failure, one-byte/large oversize, and failed
+destination write. Prefix/suffix contents were unchanged in every case.
+
+The USB IPv6-only report had a concrete DHCP cause: the USB host's fixed MAC
+received an empty option 3 (IPv4 router), while IPv6 RA still advertised the
+device. The Mac's actual DHCP ACK showed IP 192.168.9.2 and DNS 192.168.9.1,
+but no router. Debian now advertises gateway/DNS 192.168.9.1 for the USB tag.
+OpenWrt no longer creates the empty option, and uci-defaults 96 removes only
+the legacy `3` list item from kept configurations. Migration tests preserved
+custom gateway/DNS options and changed nothing where the legacy item was absent.
+
+Live Debian verification used a temporary netns/veth client with a distinct
+MAC/IP (192.168.9.3) and the same usbhost tag. DHCP supplied the correct router
+and DNS; IPv4 ping through mobile NAT answered, and IPv4 HTTPS to www.baidu.com
+returned HTTP 200. The 1.1.1.1 HTTPS endpoint timed out on this carrier, so it
+was not used as the sole connectivity criterion. The temporary client/config
+were removed; the Mac's own route/service order was not changed. Existing
+computer leases need renewal/reconnection to receive the new gateway.

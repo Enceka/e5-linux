@@ -1,0 +1,12 @@
+#!/bin/sh
+# Updates keep /etc/config. Remove only the legacy USB option 3 with no value,
+# which suppressed the IPv4 gateway while IPv6 RA still advertised a router.
+# dnsmasq then supplies the configured LAN gateway; preserve custom options.
+[ "$(uci -q get dhcp.usbhost)" = tag ] || exit 0
+for option in $(uci -q get dhcp.usbhost.dhcp_option); do
+    [ "$option" = 3 ] || continue
+    uci -q del_list dhcp.usbhost.dhcp_option=3 || exit 1
+    uci commit dhcp || exit 1
+    break
+done
+exit 0

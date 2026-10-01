@@ -4475,3 +4475,21 @@ The frontend also invalidates its QR on wireless configuration changes and
 on opening the hotspot page; previously only an SSID change refreshed it.
 Native ucode checks cover protected/open/hidden networks, missing passwords
 and special characters.
+
+### 50.1 A nonempty SMS inbox failed in the ID parser (2026-10-01)
+
+The user sent a test message: ModemManager listed `/SMS/0` as received and
+`e5-sms-notify` saw its Added signal, but LuCI could not read the inbox.
+`e5-sms list` failed inside `sms_id()` with "Repetition not preceded by valid
+expression": its optional path prefix used PCRE's `(?:...)` syntax, which
+ucode's POSIX regex implementation rejects at runtime. An empty inbox never
+called this function, so the previous empty-list checks missed it. The same
+parser is used by delete and forwarding.
+
+The parser now strips the exact ModemManager SMS path prefix and validates the
+remaining decimal ID. The command-line and RPC lists both read the real test
+message, with its text and sender matching ModemManager. The RPC wrapper keeps
+stderr in failures instead of returning only "e5-sms failed"; the frontend no
+longer labels every failure as a missing SIM. `openwrt/tests/sms-list.sh` uses a
+private fake mmcli to cover a nonempty and empty inbox, object paths including
+ID zero, UTF-8 text with quotes/newlines, directions and newest-first sorting.

@@ -12,14 +12,14 @@ function q(s) {
 }
 
 function run(args) {
-	let p = popen(`${TOOL} ${args} 2>/dev/null`);
+	let p = popen(`${TOOL} ${args} 2>&1`);
 	let out = p ? p.read('all') : '';
 	if (p) p.close();
 	try {
 		return json(out ?? '');
 	}
 	catch (e) {
-		return { ok: false, error: trim(out ?? '') || 'e5-sms failed' };
+		return { ok: false, error: trim(out ?? '') || 'e5-sms returned no data' };
 	}
 }
 

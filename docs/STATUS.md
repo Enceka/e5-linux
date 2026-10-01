@@ -55,14 +55,13 @@ FINDINGS.
 
 ## To test (待测试)
 
-In the installed image (`218d47e`, flashed 2026-09-30), not yet checked -- most of
-it needs a SIM card.
+In the installed SD image (`bc9cdb6`, with fixes deployed 2026-10-01), not yet
+checked -- most of it needs a SIM card.
 
 - **Text messages** (e5-linux `b90eead`, e5-infoscreen `7834ba8`):
   `/usr/libexec/e5-sms` (list, send, delete, forward), LuCI 服务 -> 短信, the info
   screen's `POST /api/sms-send` and `e5.sms.send()`.  To check:
-  1. LuCI lists the messages of the card in use, the header naming the card and
-     operator; delete and 回复 work.
+  1. LuCI's delete and 回复 on the card in use.
   2. Sending from the card in use, then from the other card: LuCI switches first
      (`e5-sim`), waits for the registration (up to 2 min), then sends; the message
      arrives, long ones in parts.
@@ -131,6 +130,7 @@ it needs a SIM card.
 | kernel 5.15 | rebuilt `Image` (`kernel/patches/0001-0028`), the Debian root's; still the fallback flash package |
 | rootfs (Debian) | Debian 13 (trixie) arm64 with Phosh 0.46, a loop file inside `/data/e5linux/` |
 | baseband | ModemManager 1.24.0+e5 (`unisoc` plugin) on `wwan0at0` (`sipc_wwan`), data on `sipa_eth0`/`sipa_eth8` by card; CP booted by `modem_control` in the vendor chroot; every card needs its band lock (FINDINGS 47) |
+| SMS | Receiving and listing the current card's real test message verified 2026-10-01 through ModemManager, e5-sms and LuCI RPC; POSIX-incompatible ID regex fixed (FINDINGS 50.1). Sending, delete/reply, forwarding and the other card remain in To test. |
 | wifi | `sprd_wlan_combo` on the WCN chip: AP for the hotspot, station mode on Debian |
 | bluetooth | configured by the kernel like the vendor HAL (factory address, pskey/RF); headphones play under OpenWrt (FINDINGS 45); a failed attach retried (`e5-bt-check`) |
 | disk | the SD card can hold the system (FINDINGS 49); the eMMC's userdata (F2FS) holds the images of the `--data` form -- see Now |

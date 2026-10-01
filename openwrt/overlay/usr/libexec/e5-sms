@@ -69,8 +69,12 @@ function mm_val(v) {
 }
 
 function sms_id(p) {
-	let m = match(`${p}`, /^(?:\/org\/freedesktop\/ModemManager1\/SMS\/)?([0-9]+)$/);
-	return m ? +m[1] : null;
+	// ucode uses POSIX regexes: PCRE's non-capturing groups fail at runtime.
+	// Accept a decimal ID or exactly ModemManager's SMS object-path prefix.
+	let id = `${p}`;
+	if (substr(id, 0, length(SMS_PATH)) == SMS_PATH)
+		id = substr(id, length(SMS_PATH));
+	return match(id, /^[0-9]+$/) ? +id : null;
 }
 
 function sms_get(id) {

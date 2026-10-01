@@ -199,7 +199,7 @@ return view.extend({
 	renderList: function(r) {
 		var msgs = (r && r.messages) || [];
 		if (r && r.error && !msgs.length)
-			return E('p', { 'class': 'cbi-section-descr' }, '读不到短信：' + r.error + '（没有 SIM 卡或调制解调器还没就绪）');
+			return E('p', { 'class': 'cbi-section-descr' }, '读不到短信：' + r.error);
 		if (!msgs.length)
 			return E('p', { 'class': 'cbi-section-descr' }, '没有短信');
 		var rows = msgs.map(L.bind(function(m) {

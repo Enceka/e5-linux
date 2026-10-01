@@ -112,13 +112,19 @@ flash.cmd --update                (Windows; macOS / Linux: ./flash.sh --update)
 
 It updates the boot image and the OpenWrt image over the USB network and
 **keeps OpenWrt's settings** (`/etc/config`, passwords, SSH keys, the traffic
-records); packages added with `apk` are not kept.  The new image takes over at
-the reboot; the old one stays as `/mnt/e5-data/e5linux/openwrt.ext4.old`.
+records, the info screen's apps); packages added with `apk` are not kept.
 
-An SD-card install is not updated this way: its root filesystem is the card's
-partition, which the updater does not write.  Run the flasher from Android again
-with the card in (it keeps nothing on the card, so save what you changed there
-first); `--update` says so and writes nothing.
+On an **SD card install** (the default) the new system goes into a second
+partition of the card -- made in the card's free space by the first update,
+reused after that -- while the old one keeps running; userdata is not touched.
+The reboot starts the new one.  Its first boot is a trial: if it does not come
+up, the next start of Linux goes back to the previous system, settings as they
+were (if the E5 fell back to Android meanwhile: `./flash.sh --boot-openwrt`).
+The update needs about the image's size free on the card (1 GiB and a little
+more).
+
+On an install in the phone's storage (`--data`) the new image takes over at the
+reboot; the old one stays as `/mnt/e5-data/e5linux/openwrt.ext4.old`.
 
 ## Uninstall
 

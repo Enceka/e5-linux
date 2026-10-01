@@ -90,7 +90,7 @@ card_update() {
     gpt=$(dirname "$0")/e5-gpt
     [ -f "$gpt" ] || gpt=/usr/libexec/e5-gpt
     [ -f "$gpt" ] || { echo "no e5-gpt (the card's partition table)" >&2; exit 1; }
-    cur=$(cat /etc/e5/sd-gen 2>/dev/null); case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+    cur=$(cat /etc/e5/sd-gen 2>/dev/null || :); case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
     size=${E5_IMAGE_SIZE:-}
     if [ -z "$size" ]; then
         case "$SRC" in
@@ -114,7 +114,7 @@ card_update() {
             if [ ! -f "$OLD_ROOT/etc/e5/sd-root" ] || [ "$(cat "$OLD_ROOT/etc/e5/sd-trial" 2>/dev/null)" = 0 ]; then
                 echo -1
             else
-                g=$(cat "$OLD_ROOT/etc/e5/sd-gen" 2>/dev/null); case "$g" in ''|*[!0-9]*) g=0 ;; esac
+                g=$(cat "$OLD_ROOT/etc/e5/sd-gen" 2>/dev/null || :); case "$g" in ''|*[!0-9]*) g=0 ;; esac
                 echo "$g"
             fi
             umount "$OLD_ROOT"

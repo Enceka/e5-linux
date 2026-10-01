@@ -172,10 +172,16 @@ showtime
 gnome-sound-recorder
 # output scale/transform changes in a running phoc session (wlr-output-management)
 wlr-randr
+# Screenshot capture for checking the Phosh compositor on the device.
+grim
 # phone: GNOME Calls (dialer, call history), Chatty (SMS; also XMPP/Matrix via
 # libpurple) and Contacts, the phosh set, over modemmanager -- replaced by the
 # patched build with the unisoc plugin (install-packages.sh), run allowlist-only
 # on the two ports tagged for it (ModemManager.service.d/50-e5.conf, FINDINGS 37).
 gnome-calls
+# Calls only recommends its audio-control daemon; include it in the phone
+# research image even with --no-install-recommends. The Unisoc voice route
+# still needs investigation independently of this userspace service.
+callaudiod
 chatty
 gnome-contacts

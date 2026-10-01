@@ -10,8 +10,8 @@ STAGES="${*:-all}"
 want() { case " $STAGES " in *" all "*) return 0 ;; *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 ROOT=/w/work/rootfs-build/rootfs
-OUT=/w/out/rootfs.ext4
-IMG_MIB="${E5_IMG_MIB:-8192}"
+OUT=${E5_ROOTFS_OUT:-/w/out/rootfs.ext4}
+IMG_MIB="${E5_IMG_MIB:-4096}"
 
 if want deps; then
     export DEBIAN_FRONTEND=noninteractive
@@ -141,7 +141,12 @@ if want pack; then
     sync
     umount "$M"
     tune2fs -m 1 "$OUT" >/dev/null
-    e2fsck -f -y "$OUT" >/dev/null 2>&1 || true
+    # Correctable metadata is acceptable; an uncorrected error is not an image
+    # we can hand off. A second read-only pass must be clean.
+    rc=0
+    e2fsck -f -y "$OUT" || rc=$?
+    [ "$rc" -le 1 ] || exit "$rc"
+    e2fsck -f -n "$OUT"
     ls -la "$OUT"
     sha256sum "$OUT"
     echo "installed packages: $(grep -c '^Status: install ok installed' "$ROOT/var/lib/dpkg/status" 2>/dev/null)"

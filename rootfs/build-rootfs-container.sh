@@ -20,7 +20,11 @@
 #   ./build-rootfs-container.sh deps pack      # re-pack after an overlay change
 #   ./build-rootfs-container.sh install        # only the package set changed
 #
-# The result is out/rootfs.ext4, 8 GiB by default (E5_IMG_MIB overrides it).
+# The result is out/rootfs.ext4, 4 GiB by default (E5_IMG_MIB overrides it).
+# E5_ROOTFS_VOLUME selects an independent build tree; use a new volume for a
+# clean build. E5_ROOTFS_OUT is an output path relative to the repository.
+# E5_MAINLINE=1 stages modules from E5_UPSTREAM_OUT (also repository-relative,
+# default upstream/out-release) instead of the vendor 5.15 object tree.
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
@@ -34,6 +38,10 @@ TOP="$(cd "$HERE/.." && pwd)"
 # (It shadows any old host-side tree in work/rootfs-build: the first run after
 # this change fetches and installs from scratch.)
 exec docker run --rm --privileged \
-    -e E5_IMG_MIB="${E5_IMG_MIB:-8192}" \
-    -v "$TOP":/w -v e5-rootfs-build:/w/work/rootfs-build -w /w debian:trixie \
+    -e E5_IMG_MIB="${E5_IMG_MIB:-4096}" \
+    -e E5_ROOTFS_OUT="/w/${E5_ROOTFS_OUT:-out/rootfs.ext4}" \
+    -e E5_MAINLINE="${E5_MAINLINE:-}" \
+    -e E5_UPSTREAM_OUT="/w/${E5_UPSTREAM_OUT:-upstream/out-release}" \
+    -e E5_ANDROID_SUBSET="${E5_ANDROID_SUBSET:+/w/$E5_ANDROID_SUBSET}" \
+    -v "$TOP":/w -v "${E5_ROOTFS_VOLUME:-e5-rootfs-build}":/w/work/rootfs-build -w /w debian:trixie \
     bash /w/rootfs/rootfs-in-container.sh "$@"

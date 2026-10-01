@@ -91,8 +91,8 @@ bash "$HERE/e5-chroot.sh" '
     # Conflicts= against unisoc-cpd and the older owners, which stay installed
     # as the fallback, not enabled.
     #
-    # e5-regdb-load feeds cfg80211 the regulatory database the hotspot's 5 GHz
-    # channels need (the hotspot itself is NetworkManager's "Hotspot" connection,
+    # e5-regdb-load feeds cfg80211 the regulatory database for the 5 GHz
+    # hotspot (the NetworkManager "Hotspot" connection,
     # enabled below), e5-telnetd is the way in on a device with no usable keypad,
     # and e5-gadget-guard keeps the USB gadget alive.  These used to be enabled by
     # hand on a device that was already installed, which is why a fresh install
@@ -134,7 +134,26 @@ echo "=== audio modules ==="
 # snd_soc_sprd_card (it needs the symbols the card exports -- boot/module-order.txt
 # derives the same order for the initramfs from nm output).
 OL="$HERE/../out_linux"
-if [ -d "$OL" ] && [ -f "$OL/include/generated/utsrelease.h" ]; then
+if [ -n "${E5_MAINLINE:-}" ]; then
+    KOUT=${E5_UPSTREAM_OUT:-$HERE/../upstream/out-release}
+    REL=$(cat "$KOUT/kernel.release")
+    [ -s "$KOUT/modules.tar" ] || { echo "no mainline modules.tar in $KOUT" >&2; exit 1; }
+    # Keep every module (including KMS/Panfrost dependencies) from this build.
+    # Move the audio/modem modules to the locations the device scripts expect,
+    # then build a single index; no 5.15 module is staged in this branch.
+    rm -rf "$ROOT/usr/lib/modules/$REL"
+    tar -xf "$KOUT/modules.tar" -C "$ROOT/usr" lib/modules
+    for link in build source; do rm -f "$ROOT/usr/lib/modules/$REL/$link"; done
+    grep -v '^#' "$HERE/../upstream/root-modules.txt" | while read -r entry; do
+        [ -n "$entry" ] || continue
+        src=$(find "$ROOT/usr/lib/modules/$REL/kernel" -name "$(basename "$entry")" -type f)
+        [ -f "$src" ] || { echo "missing mainline module $entry" >&2; exit 1; }
+        mkdir -p "$ROOT/usr/lib/modules/$REL/$(dirname "$entry")"
+        mv "$src" "$ROOT/usr/lib/modules/$REL/$entry"
+    done
+    depmod -b "$ROOT" -e -F "$KOUT/System.map" "$REL"
+    echo "staged mainline modules for $REL"
+elif [ -d "$OL" ] && [ -f "$OL/include/generated/utsrelease.h" ]; then
     REL=$(sed -n 's/^#define UTS_RELEASE "\(.*\)"$/\1/p' "$OL/include/generated/utsrelease.h")
     AMOD="$ROOT/usr/lib/modules/$REL/audio"
     rm -rf "$AMOD"; mkdir -p "$AMOD"
@@ -172,6 +191,21 @@ if [ -d "$OL" ] && [ -f "$OL/include/generated/utsrelease.h" ]; then
 else
     echo "  warn: no out_linux kernel build; skipping audio module staging" >&2
 fi
+
+if [ -n "${E5_ANDROID_SUBSET:-}" ]; then
+    echo "=== device's Android vendor subset ==="
+    [ -x "$E5_ANDROID_SUBSET/vendor/bin/modem_control" ] || {
+        echo "no modem_control in $E5_ANDROID_SUBSET" >&2; exit 1;
+    }
+    mkdir -p "$ROOT/opt/e5/android"
+    cp -a "$E5_ANDROID_SUBSET/." "$ROOT/opt/e5/android/"
+    chown -R 0:0 "$ROOT/opt/e5/android"
+fi
+
+# A standalone image must have the same permissions the old initramfs-overlay
+# path restored at every boot: autologin and NetworkManager need these before
+# either service starts.
+bash "$HERE/e5-chroot.sh" 'set -e; chown -R e5:e5 /home/e5; if [ -f /home/e5/.bash_profile ]; then chmod 0644 /home/e5/.bash_profile; fi; chmod 0600 /usr/lib/NetworkManager/system-connections/*.nmconnection'
 
 echo "=== sessions available ==="
 ls "$ROOT"/usr/share/wayland-sessions/ 2>/dev/null || echo "(none)"

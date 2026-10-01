@@ -23,20 +23,25 @@ D="$HERE/../out/debs-patched"
 install_patched() {  # <build-patched-debs.sh package> <binary packages...>
     local src=$1; shift
     local debs="" p
-    for p in "$@"; do debs="$debs $(ls "$D"/${p}_*+e5*_arm64.deb 2>/dev/null)"; done
-    if [ -z "${debs// }" ]; then
-        echo "warn: no patched $src in out/debs-patched -- run rootfs/build-patched-debs.sh $src"
-        return
-    fi
+    for p in "$@"; do
+        local found="" f
+        for f in "$D"/${p}_*+e5*_arm64.deb "$D"/${p}_*+e5*_all.deb; do
+            [ -f "$f" ] && found="$found $f"
+        done
+        [ -n "$found" ] || { echo "missing patched $p -- run rootfs/build-patched-debs.sh $src" >&2; return 1; }
+        debs="$debs$found"
+    done
     rm -rf "$ROOT/tmp/e5-debs"; mkdir -p "$ROOT/tmp/e5-debs"
     cp $debs "$ROOT/tmp/e5-debs/"
     DEBIAN_FRONTEND=noninteractive bash "$HERE/e5-chroot.sh" "
-        dpkg -i /tmp/e5-debs/*.deb && apt-mark hold $*
-        rm -rf /tmp/e5-debs" || echo "warn: patched $src failed to install"
+        set -e
+        dpkg -i /tmp/e5-debs/*.deb
+        apt-mark hold $*
+        rm -rf /tmp/e5-debs"
 }
 install_patched network-manager network-manager libnm0 gir1.2-nm-1.0
 install_patched modemmanager modemmanager libmm-glib0 gir1.2-modemmanager-1.0
-install_patched phosh phosh phosh-common
+install_patched phosh phosh phosh-common libphosh-0.45-0
 install_patched gnome-control-center gnome-control-center gnome-control-center-data
 
 # The build tree is kept between builds and apt never removes a package that

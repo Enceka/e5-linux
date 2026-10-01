@@ -4552,3 +4552,28 @@ It remains an optional, currently disabled helper.
   (384 MHz). Full pinctrl, frequency scaling, GSP and the USB/debug pin mux are
   enhancements rather than completed milestones. System suspend is blocked by
   the SIPA data path. The SD slot itself is now implemented and used as the root.
+
+## 52. Overview update notification and serialized jobs (2026-10-01)
+
+Info screen 1.3.0 adds a non-modal notice on the overview when a newer release
+is available. Release notes expand into a scrollable region, navigable with
+touch or the keypad. Update now starts the existing verified installer; Later
+saves the offered version and a 24-hour reminder deadline in UCI. Another
+release is not hidden by the earlier deadline. Checks run in the background,
+normally every six hours with a ten-minute retry after failure, without waking
+a blank or key-locked screen. Settings and the overview share one update API.
+
+The API reserves a job slot before spawning the shell worker: reserving only
+inside the worker left a gap in which two HTTP requests could both be accepted.
+A token hands the reservation to the worker. The worker runs private copies of
+the launcher and installer so extraction of a new release cannot alter scripts
+still executing. Failed installs retain the existing rollback path.
+
+On-device checks: a second check request was rejected while a delayed fetch ran;
+a deferred release stayed deferred on the next request, while a higher release
+was offered; a local 1.3.0 package installed from 1.2.0 through the new API,
+passed the existing archive/hash checks, restarted the screen and left a backup.
+The update notice disappeared after installation. Browser checks covered notes
+expansion/keypad scrolling, Later hiding the notice, busy controls and overview
+visibility. Battery temperature is now in the overview battery row, with no
+duplicate temperature tile; the detailed temperature page retains nine items.

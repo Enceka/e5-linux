@@ -9,36 +9,18 @@ FINDINGS.
 
 ## Now (目前要做)
 
-- **The SD card install's update** (FINDINGS 49): `flash.py --update` refuses a card
-  system.  The proposed way (2026-10-01), all of it on the card, nothing on userdata:
-  1. **A second root partition on the card**, written while the first one runs:
-     `device-install-image.sh` on a card system writes the new image into the card's
-     other root partition (created in the free space the first time --
-     `/usr/libexec/e5-gpt`, a GPT editor in ucode, since OpenWrt has no sgdisk; tested
-     on a copy of the card's table, `sgdisk -v` clean), through the whole disk at its
-     offset (the kernel cannot re-read a table whose partition is mounted), then the
-     settings and the device's files as now, then the marker last.
-  2. **boot/init picks the newest**: every marked partition carries a generation
-     (`/etc/e5/sd-gen`); the highest wins.  A new one comes with `/etc/e5/sd-trial`:
-     boot/init sets it to 0 as it boots it, `e5-boot-ok` removes it once the system is
-     up, and a partition still at 0 is skipped -- the previous one boots again, with
-     its settings as they were.
-  3. `flash.py --update`: the card path instead of the refusal, no `boot-os` write.
-  Needs: the image rebuilt (e5-boot-ok, e5-gpt), a boot image (boot/init), a device
-  test (update, trial confirmed; a broken trial falls back).
-- **Userdata's F2FS is damaged across power cycles under mainline (four times,
-  2026-09-29; FINDINGS 48)** -- metadata blocks of the last checkpoints came back
-  older after a reset or power off, the fourth time after a clean unmount.  The SD
-  card install moves the root off userdata, **but boot/init still mounts userdata
-  read-write for the whole session** (to read `e5linux/boot-os`, then moved to
-  `/mnt/e5-data` with `discard`), so the risk is smaller, not gone.  For a card
-  system: mount it read-only, or only for the moment of reading and writing
-  `boot-os`.  The cause itself: not lost flushes (48.2: 10 power cycles, every block
-  intact) and not a fresh F2FS under load (30 cycles clean).  Still to try, one at a
-  time: Android writing the filesystem in between Linux boots (it had in all four
-  cases), an aged filesystem filled to 80-90 %, runs of 20+ minutes, `discard` off;
-  only then the eMMC path of 48.4 (cache, shutdown, HSQ vs swcq, discard
-  granularity).
+- **Userdata's F2FS is damaged across power cycles under mainline (five times,
+  2026-09-29 and 2026-10-01; FINDINGS 48)** -- metadata of the last checkpoints came
+  back older after a reset or power off, three times after a clean unmount; the
+  third and the fifth were each one SIT block read back older than the checkpoint
+  after it.  The fifth had no Android in between (48.5).  **A card system now
+  leaves userdata read-only** (since 2026-10-01), so the maintained form no longer
+  writes it; the systems on userdata are for tests only and risk it.  The cause:
+  not lost flushes (48.2: 10 power cycles, every block intact), not a fresh F2FS
+  under load (30 cycles clean).  Still to try: an aged filesystem filled to 80-90 %,
+  runs of 20+ minutes with a loop root, `discard` off; the SIT block of the dump
+  (`logs/linux-fail-20261001/`) against the checkpoint; then the eMMC path of 48.4
+  (cache, shutdown, HSQ vs swcq, discard granularity).
 - **Two SIM cards of one operator: only one is recognised** (reported 2026-09-29,
   no test setup yet).  To look into in the unisoc plugin's two-card bring-up and
   `e5-sim` (FINDINGS 47): whether both are brought up when their IMSI prefix is the
@@ -133,9 +115,9 @@ it needs a SIM card.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 13 on slot a |
-| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`), the installed system under OpenWrt (`E5_MAINLINE=1 openwrt/make-flash-bundle.sh`, `flash.py`): display, touch, keys, USB gadget, Wi-Fi, BT, both SIM cards (FINDINGS 47), charging and fuel gauge, thermal as on 5.15, speaker and mic; the PMIC power off; filesystems read-only before a reset (FINDINGS 48.3); no eMMC reliable writes |
+| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`, `af5e09329` with the SD slot), the installed system under OpenWrt (`E5_MAINLINE=1 openwrt/make-flash-bundle.sh`, `flash.py`): display, touch, keys, USB gadget, Wi-Fi, BT, both SIM cards (FINDINGS 47), charging and fuel gauge, thermal as on 5.15, speaker and mic; the PMIC power off; filesystems read-only before a reset (FINDINGS 48.3); no eMMC reliable writes |
 | power | `poweroff` is a real one without the cable; with a charger in, the PMIC powers the E5 up again and it boots (charger mode is logged, not a charging screen) |
-| openwrt | OpenWrt 25.12.5 standalone, on the SD card's partition (the install's default since 2026-09-30; `--data` keeps the image in `/data/e5linux/openwrt.ext4` -- FINDINGS 49) with its own firmware, vendor subset, modem modules and fonts (FINDINGS 39, 43); WAN by ModemManager, LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; the info screen (e5-infoscreen) on the panel |
+| openwrt | OpenWrt 25.12.5 standalone, on the SD card's partition (the install's default since 2026-09-30; `--update` writes the card's other root partition and boots it as a trial, FINDINGS 49.1; `--data` keeps the image in `/data/e5linux/openwrt.ext4` -- FINDINGS 49) with its own firmware, vendor subset, modem modules and fonts (FINDINGS 39, 43); WAN by ModemManager, LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; the info screen (e5-infoscreen) on the panel |
 | kernel 5.15 | rebuilt `Image` (`kernel/patches/0001-0028`), the Debian root's; still the fallback flash package |
 | rootfs (Debian) | Debian 13 (trixie) arm64 with Phosh 0.46, a loop file inside `/data/e5linux/` |
 | baseband | ModemManager 1.24.0+e5 (`unisoc` plugin) on `wwan0at0` (`sipc_wwan`), data on `sipa_eth0`/`sipa_eth8` by card; CP booted by `modem_control` in the vendor chroot; every card needs its band lock (FINDINGS 47) |

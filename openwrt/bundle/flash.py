@@ -666,19 +666,33 @@ def update(a):
         say(f'更新 / updating {host}')
         env = dict(os.environ, E5_TELNET_HOST=host, E5_TELNET_PASS=pw, E5_TELNET_WAIT='1800')
         telnet = [sys.executable, os.path.join(SCRIPTS, 'tools', 'e5-telnet.py')]
-        fetch = (f'cd /tmp && wget -q -O dfb.sh {u}/dfb.sh && wget -q -O dii.sh {u}/dii.sh && '
-                 f'sh dfb.sh {u}/boot-head.img {bj["sha256_head56m"]} {mb} && ')
-        # an SD card system (the default install): device-install-image.sh writes
-        # the new image into the card's other root partition, the next boot is its
-        # trial, and userdata is not touched (FINDINGS 49)
-        card = (f'wget -q -O e5-gpt {u}/e5-gpt && '
-                f'E5_IMAGE_SIZE={gz_usize(os.path.join(F, "openwrt.ext4.gz"))} sh dii.sh {u}/openwrt.ext4.gz && '
-                'echo E5-UPDATE-$((1+1))')
-        # the form on userdata (--data, kept for tests)
-        data = (f'sh dii.sh {u}/openwrt.ext4.gz && '
-                'd=/mnt/e5-data/e5linux && rm -f $d/boot-os-next && echo openwrt > $d/boot-os && sync && '
-                'echo E5-UPDATE-$((1+1))')
-        cmd = fetch + f'if [ -f /etc/e5/sd-root ]; then {card}; else {data}; fi'
+        # The steps as a script the device fetches: a long command line typed over
+        # telnet gets lost (the 80-column pty's line editing), so only a short one is.
+        steps_sh = f"""set -e
+cd /tmp
+wget -q -O dfb.sh {u}/dfb.sh
+wget -q -O dii.sh {u}/dii.sh
+sh dfb.sh {u}/boot-head.img {bj["sha256_head56m"]} {mb}
+if [ -f /etc/e5/sd-root ]; then
+    # an SD card system (the default install): the new image goes into the card's
+    # other root partition, the next boot is its trial; userdata is not touched
+    # (FINDINGS 49)
+    wget -q -O e5-gpt {u}/e5-gpt
+    E5_IMAGE_SIZE={gz_usize(os.path.join(F, "openwrt.ext4.gz"))} sh dii.sh {u}/openwrt.ext4.gz
+else
+    # the form on userdata (--data, kept for tests)
+    sh dii.sh {u}/openwrt.ext4.gz
+    d=/mnt/e5-data/e5linux
+    rm -f $d/boot-os-next
+    echo openwrt > $d/boot-os
+    sync
+fi
+echo E5-UPDATE-$((1+1))
+"""
+        with open(os.path.join(td, 'update.sh'), 'w', newline='\n') as f:
+            f.write(steps_sh)
+        files['/update.sh'] = os.path.join(td, 'update.sh')
+        cmd = f'cd /tmp && wget -q -O e5-update.sh {u}/update.sh && sh e5-update.sh'
         # the device's own steps as they happen: the boot image, the unpacking,
         # the settings kept, the device's files
         lines = []

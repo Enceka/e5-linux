@@ -4577,3 +4577,29 @@ The update notice disappeared after installation. Browser checks covered notes
 expansion/keypad scrolling, Later hiding the notice, busy controls and overview
 visibility. Battery temperature is now in the overview battery row, with no
 duplicate temperature tile; the detailed temperature page retains nine items.
+
+## 53. Mainline flash bundle: fresh SD install verified (2026-10-01)
+
+Bundle `e5-openwrt-flash-25.12.5-mainline-20261001-3dc73ff` contains the rebuilt
+6.18.54 release kernel (`00064-gc1bb703f034c`) and a freshly generated OpenWrt
+25.12.5 generic image with info screen 1.3.0, the overview update notification,
+battery-temperature layout and the SMS ID-parser fix. Package checksums passed;
+the image has no per-device firmware/vendor subset and the boot image has no
+Debian overlay. ZIP and tar.gz were generated; Windows execution is not tested.
+
+The macOS first-install path was tested from normal rooted Android on slot a:
+`--check` passed, then the default SD-card installation completed all eight
+steps. GPT was recreated with one `e5root` partition, both previous OpenWrt
+roots removed, about 13.4 GiB left unallocated. Firmware/vendor files were
+collected from that device's Android and unpacked onto the card. The existing
+SSID/key were supplied as initial-install parameters, with no restoration of
+the previous configuration archive. A private configuration backup remains in
+`work/fresh-flash-20261001/`, outside the distributable package.
+
+After first boot: image `3dc73ff`, info screen 1.3.0, root `/dev/mmcblk1p1`,
+userdata read-only, default/next boot Linux, modem connected with IPv4/IPv6
+addresses, IPv4 ping successful, hotspot up, Bluetooth powered, sound card and
+DSP registered, current-card SMS listing readable, Argon login served and the
+app-store index fetched. No kernel panic/oops was found. A subsequent ordinary
+reboot returned to the same SD root and Linux default. This does not replace
+the remaining physical client, Bluetooth-cycle or thermal checks in STATUS.

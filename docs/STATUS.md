@@ -6,9 +6,9 @@
 当前维护范围：OpenWrt + 主线 6.18 + SD 卡安装。userdata 安装只用于测试；
 Debian/Phosh、听筒和通话音频按此前决定延期。e5-modemd 保留为可选辅助，当前未启用。
 
-设备基线：内核 `6.18.54-e5-00064-gc1bb703f034c`，SD 镜像 `bc9cdb6`，
-`/dev/mmcblk1p1`、generation 2；userdata 当前只读。10 月 1 日的界面和短信修复已直接部署，
-尚未合入新的整机刷入包。
+设备基线：内核 `6.18.54-e5-00064-gc1bb703f034c`，SD 镜像 `3dc73ff`，
+`/dev/mmcblk1p1`、generation 0；userdata 当前只读。2026-10-01 从 Android 通过新包
+完成 SD 卡全新安装，信息屏 1.3.0 和当日修复已包含在镜像中。
 
 ## 待修 / 正在处理
 

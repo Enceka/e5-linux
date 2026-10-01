@@ -23,7 +23,11 @@ snapshot() {
     } > "$BASE/$tag-pcm.txt" 2>&1
     {
         find /sys/kernel/debug/asoc -type f -path '*/dapm/*' 2>/dev/null |
-        while IFS= read -r f; do echo "$f"; cat "$f"; done
+        while IFS= read -r f; do
+            # Builtins avoid launching hundreds of cats during a short call.
+            IFS= read -r first < "$f" || :
+            printf '%s %s\n' "$f" "$first"
+        done
     } > "$BASE/$tag-dapm.txt" 2>&1
     dmesg > "$BASE/$tag-dmesg.txt" 2>&1
 }

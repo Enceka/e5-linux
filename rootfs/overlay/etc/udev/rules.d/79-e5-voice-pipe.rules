@@ -1,0 +1,2 @@
+# The session's E5 CallAudio backend consumes DSP network/bandwidth messages.
+SUBSYSTEM=="misc", KERNEL=="audio_pipe_voice", GROUP="audio", MODE="0660"

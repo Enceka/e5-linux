@@ -1,0 +1,6 @@
+#!/bin/sh
+# Preserve the stock backend on other cards; this adapter is for the E5 DSP.
+if grep -q sprdphone-sc2730 /proc/asound/cards; then
+    exec /usr/bin/python3 /opt/e5/e5-call-audio.py
+fi
+exec /usr/bin/callaudiod

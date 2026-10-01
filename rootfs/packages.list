@@ -118,6 +118,7 @@ wireless-regdb
 # overlay ships gotty instead -- one static aarch64 binary, same job, and
 # UFI-TOOLS' ttyd_unit/ttyd_port point at its unit (gotty.service, port 1146).
 python3
+python3-gi
 
 # --- field diagnostics ---
 # Both were missed while chasing the modem, the daemon and the Wi-Fi by hand.

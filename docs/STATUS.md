@@ -38,4 +38,4 @@ userdata 保持只读。构建和多系统验证见 FINDINGS §54。
 | D2 | userdata F2FS 根因 | 五次损坏的根因未定位；SD 只读规避已完成，耐久性及新建 F2FS 测试已结束。后续根因研究延期。FINDINGS 48 |
 | D3 | 历史驱动异常 | AGCP 访问丢失、非主用 AP capture 停滞、音频路由/稳压器警告、DPU blank 警告、热点速率声明；触发条件或根因尚未确认。FINDINGS 24/32/34/38、51 |
 | D4 | 主线增强项 | pinctrl、DPU/GPU 调频、GSP、USB/UART/JTAG pin mux、cpufreq 与系统挂起，尚未完成 |
-| D5 | 电话语音链路 | Debian/Phosh、Calls、callaudiod、ModemManager 和 DSP 已就绪；通话音频路由与听筒仍未验证。本次没有拨号，实际通话测试先请用户协助。FINDINGS 54 |
+| D5 | 电话语音链路 | Debian/Phosh、Calls、callaudiod、ModemManager 和 DSP 已就绪；通话音频路由与听筒仍未验证。用户已手动测试 10099，前两版仍下行无声；HAL 对应的 voice/CVS/profile 和音量修正已部署，继续验证。按键和 0.8 缩放已通过。实际拨号仍由用户操作。FINDINGS 55 |

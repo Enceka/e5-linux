@@ -4707,3 +4707,72 @@ An automated Debian updater, registered-card installer migration, interrupted
 registry/GPT recovery and real failed-startup/power-cut tests remain open
 (`openwrt/MULTIBOOT.md`). Existing charger/regulator/portal warnings were not
 reclassified as fixed just because the desktop booted.
+
+## 55. Phone keys, 0.8 scaling and the E5 voice backend (2026-10-01/02)
+
+The user requested downlink audio first (E5 cannot hear 10099), physical
+phone/hangup key bindings in Calls, and scale 0.8. Uplink is explicitly deferred.
+All real calls in this session were placed and ended manually by the user;
+the assistant used local audio-mode probes and read-only modem queries.
+
+Physical input capture confirmed green KEY_PHONE=169 (sprd-keypad) and red
+KEY_POWER=116 (gpio-keys). The existing diagnostic tools misleadingly called
+169 NEXT and 523 PHONE; 523 is KEY_NUMERIC_POUND, not the green key.
+Calls 48.2-1+e5.1 now captures Phone/PickupPhone in its main and call windows:
+the green key opens the dialpad or submits its explicit nonempty number,
+and answers an incoming call. No implicit redial is added. Phosh
+0.46.0-3+deb13u1+e5.4 uses short power-key release to hang up the active Calls
+object via the existing CUI interface; idle locking/waking and long press
+retain their existing handling. The new behaviour is gated by
+/etc/e5/keypad-call-keys. Both packages built and were installed, including
+phosh-common and the matching libphosh. After a device reboot the user
+confirmed both physical keys worked. Scale 0.8 was persisted in phoc.ini;
+wlroots reports its quantized 0.796875 value. No failed systemd units were found.
+
+Stock callaudiod skipped the E5 card because its ACP-disabled PipeWire nodes
+have no speaker/earpiece ports. Calls' SelectMode and EnableSpeaker failed.
+Voice codec switches were off; FE_ST_VOICE was never opened. A device-specific
+adapter now implements the existing org.mobian_project.CallAudio session-bus
+API. It uses the hostless FE_ST_VOICE (hw:0,5, determined by name), prepares
+and starts both directions without copying AP samples. A playback application
+pointer advance is needed: plain ALSA start returned EPIPE with an empty
+buffer; snd_pcm_forward enabled the kernel's hostless start. DSP startup,
+hw_params and trigger acknowledged, with both directions RUNNING. Switching
+back to default closed the streams and restored mixer/profile state exactly.
+Fake-hardware tests cover idempotent start, mute, full restore and cleanup
+when the second stream fails to start.
+
+Those facts did not prove downlink audio. The user reported silence with the
+initial adapter, and again after a trial which changed the separate voice
+DG controls. Both real calls reached active state and the adapter ran during
+them; the phone-key/hangup-key test succeeded in the second. The DG trial was
+removed in favour of the vendor HAL's actual volume/profile path.
+
+Reference: jingpad-bsp/vendor_sprd_modules_audio, branch W21.24.3, commit
+059714f9f094efb6cd0bbfb5e1454b04abc77925; local copy under
+work/voice-20261001/hal-reference/. Its whale/audio_control.cpp and
+whale/audio_param/dsp_control.c provide the Unisoc VBC procedure. The E5's
+own XML route and parameters in work/android-ref remain the board authority.
+
+The subsequent correction uses voice scene 5 and the logical parameter ID
+matching Handsfree NB1/WB1/SWB1/FB1 (7/9/11/12), with the same mode offset:
+(mode << 24) | (mode << 16) | 5. It applies DSP VBC, Audio Structure and CVS;
+this E5 driver's CVS selector is named NXP Profile Select (profile index 2).
+The actual vendor voice volume is VBC_VOLUME = volume + 1, set to 9 here.
+That control declares UINT_MAX as a signed maximum (-1), so amixer clamped
+9 to -1 and failed; the existing raw control writer now handles it alongside
+profile selects. Local readback is 0x07070005 for all three NB profiles,
+VBC_VOLUME=9, with successful start/stop. Android's codec IIS0 output is DAC0,
+so the earlier DAC1 override was also corrected.
+
+The backend consumes audio_pipe_voice channel 2 notifications to follow the
+DSP's network bandwidth. Command 0 carries network mask and rate mode;
+0/1/2/3 select NB/WB/SWB/FB. An audio-group udev rule grants access to that
+one pipe. Unknown/assert messages are logged; no modem reset, automatic
+hangup or DSP reset is performed. Speaker is the only supported call output
+until the receiver route has been acoustically verified.
+
+Evidence and source/build logs are in work/voice-20261001/. The HAL-aligned
+revision awaits a further user-controlled downlink test at this checkpoint;
+no claim of audible call audio is made yet. The changes are committed in
+separate build, SD, scale, phone-key and audio commits as requested.

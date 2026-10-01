@@ -3,11 +3,39 @@
 # a 32 MiB e5boot registry in unallocated space, preserving every old partition.
 # Dependencies e5-gpt, e5-os and e5-sd-registry are fetched from the same URL.
 # The shared boot image is flashed separately, after the installed roots verify.
-# Usage: device-install-sd.sh BASE_URL RAW_IMAGE_SHA256 KERNEL_RELEASE
+# Usage: device-install-sd.sh BASE_URL RAW_IMAGE_SHA256 KERNEL_RELEASE [--check]
 set -eu
 URL=${1:?base URL} EXPECT=${2:?raw ext4 SHA256} RELEASE=${3:?kernel release}
+MODE=${4:-}
+case "$MODE" in ''|--check) ;; *) echo "unknown option $MODE" >&2; exit 2 ;; esac
 case "$EXPECT" in *[!a-f0-9]*|'') exit 2 ;; esac
 [ "${#EXPECT}" = 64 ] || exit 2
+
+# One bounded write, with separate download/decompression/write errors.
+write_slot_image() {
+    local disk=$1 start=$2 blocks=$3 source=$4 rc=0
+    local fifo=$T/download
+    rm -f "$fifo" "$T/download.rc" "$T/gzip.rc" "$T/excess"
+    mkfifo "$fifo"
+    # The shell opens the FIFO before wget, including DNS/HTTP failures. This
+    # ensures gzip sees EOF rather than waiting forever for a writer to open it.
+    ( status=0; wget -O - "$source" >"$fifo" 2>"$T/download.err" || status=$?; echo "$status" > "$T/download.rc" ) &
+    fetch_pid=$!
+    ( status=0; gzip -dc "$fifo" 2>"$T/gzip.err" || status=$?; echo "$status" > "$T/gzip.rc" ) |
+        ( dd of="$disk" bs=1048576 seek=$((start/2048)) count="$blocks" iflag=fullblock conv=fsync,notrunc 2>"$T/write.err" || exit "$?"
+          # Consume one extra byte to detect even a small oversized image, and
+          # wait for gzip to finish checking the CRC of an exactly sized one.
+          dd bs=1 count=1 of="$T/excess" 2>/dev/null || exit "$?"
+          [ ! -s "$T/excess" ] || { echo "image exceeds the $blocks MiB slot" >"$T/write.err"; exit 1; }
+        ) || rc=$?
+    wait "$fetch_pid"
+    fetch_pid=
+    rm -f "$fifo"
+    if [ "$rc" != 0 ]; then cat "$T/write.err" >&2; echo "card write rejected (status $rc)" >&2; return 1; fi
+    if [ "$(cat "$T/download.rc")" != 0 ]; then cat "$T/download.err" >&2; echo "image download failed" >&2; return 1; fi
+    if [ "$(cat "$T/gzip.rc")" != 0 ]; then cat "$T/gzip.err" >&2; echo "image decompression failed" >&2; return 1; fi
+}
+
 [ "$(uname -r)" = "$RELEASE" ] || { echo "shared kernel version mismatch" >&2; exit 1; }
 [ -f /etc/openwrt_release ] && [ -f /etc/e5/sd-root ] || { echo "run from the SD OpenWrt system" >&2; exit 1; }
 ROOTDEV=$(awk '$2 == "/" {print $1}' /proc/mounts)
@@ -25,16 +53,20 @@ ucode "$GPT" list "$DISK" > "$T/table-before"
 for name in e5boot debian-a debian-b; do
     ! grep -q " $name\$" "$T/table-before" || { echo "$name already exists" >&2; exit 1; }
 done
-# Preflight before the first write, not after partially adding a layout.
-awk -v last="$(cat /sys/class/block/${DISK##*/}/size)" '
-    BEGIN { at=2048; best=0 }
-    { if ($2-at > best) best=$2-at; at=$3+1 }
-    END { if (last-33-at > best) best=last-33-at; exit !(best >= 16846848) }
-' "$T/table-before" || { echo "no contiguous space for 32 MiB + 2 x 4 GiB" >&2; exit 1; }
+# Simulate the same aligned allocation used by add, including GPT entries and
+# fragmented free regions, before formatting or writing a single card sector.
+echo "== capacity check: $DISK; required e5boot 32 MiB + Debian 4096 MiB x 2"
+if ! ucode "$GPT" plan "$DISK" e5boot:65536 debian-a:8388608 debian-b:8388608 > "$T/plan"; then
+    echo "SD installation aborted before writing the card: allocation check failed (details above)" >&2
+    exit 1
+fi
+cat "$T/plan"
+[ "$MODE" != --check ] || { echo "SD-CHECK-DONE; nothing written to the card"; exit 0; }
 LO=$(losetup -f)
 M=$T/root
 mkdir -p "$M"
-trap 'umount "$M" 2>/dev/null || :; losetup -d "$LO" 2>/dev/null || :' EXIT
+fetch_pid=
+trap '[ -z "$fetch_pid" ] || { kill "$fetch_pid" 2>/dev/null || :; wait "$fetch_pid" 2>/dev/null || :; }; rm -f "$T/download"; umount "$M" 2>/dev/null || :; losetup -d "$LO" 2>/dev/null || :' EXIT
 boot=$(ucode "$GPT" add "$DISK" e5boot 65536)
 set -- $boot; BOOTN=$1 BOOTSTART=$2
 losetup -o $((BOOTSTART * 512)) "$LO" "$DISK"
@@ -56,10 +88,9 @@ for slot in a b; do
     echo "== Debian $slot: partition $n, 4096 MiB, sector $start"
     # Only the new partition's sectors are written. Full raw-image verification
     # catches download/decompression/short-write failures before registration.
-    wget -q -O - "$URL/rootfs.ext4.gz" | gzip -dc |
-        dd of="$DISK" bs=1048576 seek=$((start/2048)) conv=fsync
+    write_slot_image "$DISK" "$start" 4096 "$URL/rootfs.ext4.gz" || { echo "Debian $slot: installation stopped" >&2; exit 1; }
     got=$(dd if="$DISK" bs=1048576 skip=$((start/2048)) count=4096 2>/dev/null | sha256sum | cut -d' ' -f1)
-    [ "$got" = "$EXPECT" ] || { echo "image checksum mismatch for Debian $slot" >&2; exit 1; }
+    [ "$got" = "$EXPECT" ] || { echo "Debian $slot: image checksum mismatch (expected $EXPECT, read $got); incomplete/corrupt image or card I/O failure" >&2; exit 1; }
     losetup -o $((start*512)) "$LO" "$DISK"
     mount -t ext4 "$LO" "$M"
     [ -f "$M/etc/debian_version" ] && [ -x "$M/sbin/init" ] || exit 1

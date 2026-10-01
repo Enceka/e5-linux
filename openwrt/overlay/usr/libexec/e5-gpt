@@ -6,6 +6,7 @@
 //
 //   e5-gpt list DISK                  N START END NAME, one line per partition
 //   e5-gpt add DISK NAME SECTORS      a Linux partition in the largest free gap, 1 MiB aligned: N START END
+//   e5-gpt plan DISK NAME:SECTORS ... simulate all allocations, read-only: NAME N START END
 let fs = require('fs');
 
 function die(msg) {
@@ -46,8 +47,8 @@ function put(s, off, bytes) {
 }
 
 let cmd = ARGV[0], disk = ARGV[1];
-if (!(cmd in ['list', 'add', 'uuid']) || !disk)
-	die('usage: e5-gpt list DISK | e5-gpt uuid DISK N | e5-gpt add DISK NAME SECTORS');
+if (!(cmd in ['list', 'add', 'uuid', 'plan']) || !disk)
+	die('usage: e5-gpt list DISK | uuid DISK N | add DISK NAME SECTORS | plan DISK NAME:SECTORS ...');
 let h = fs.open(disk, cmd == 'add' ? 'r+' : 'r') || die(`${disk}: ${fs.error()}`);
 function rd(lba, count) {
 	h.seek(lba * 512, 0);
@@ -83,12 +84,13 @@ function load(lba) {
 
 let ZERO16 = lebytes(0, 16);
 let p = load(1);
-let parts = [], empty = -1;
+let parts = [], empty = -1, free_entries = [];
 for (let i = 0; i < p.num; i++) {
 	let e = substr(p.tab, i * 128, 128);
 	if (substr(e, 0, 16) == ZERO16) {
 		if (empty < 0)
 			empty = i;
+		push(free_entries, i);
 		continue;
 	}
 	let name = '';
@@ -121,35 +123,69 @@ if (cmd == 'uuid') {
 	exit(0);
 }
 
-let name = ARGV[2], want = +ARGV[3];
-if (!match(name ?? '', /^[A-Za-z0-9_-]{1,36}$/) || type(want) != 'int' || want < 2048)
-	die('add: a name (letters, digits, - and _, 36 at most) and a size in sectors');
-if (empty < 0)
-	die('the table has no free entry');
-for (let x in parts)
-	if (x.name == name)
-		die(`partition ${name} already exists`);
 let b = load(p.alt);
+if (p.tab != b.tab || p.num != b.num || p.first != b.first || p.last != b.last || b.alt != 1 ||
+    substr(p.hd, 56, 16) != substr(b.hd, 56, 16))
+	die('primary and backup GPT disagree; repair the partition table before installing');
 
 // the largest free gap between the usable sectors, the partitions sorted
-let sorted = sort(parts, (x, y) => x.start - y.start), gaps = [], at = p.first;
-for (let x in sorted) {
-	if (x.start > at)
-		push(gaps, [at, x.start - 1]);
-	if (x.end + 1 > at)
+function available() {
+	let sorted = sort(parts, (x, y) => x.start - y.start), gaps = [], at = p.first;
+	for (let x in sorted) {
+		if (x.start < at || x.end < x.start || x.end > p.last)
+			die(`invalid/overlapping partition ${x.n} (${x.name})`);
+		if (x.start > at)
+			push(gaps, [at, x.start - 1]);
 		at = x.end + 1;
+	}
+	if (p.last >= at)
+		push(gaps, [at, p.last]);
+	return gaps;
 }
-if (p.last >= at)
-	push(gaps, [at, p.last]);
-let best = null;
-for (let g in gaps) {
-	let s = int((g[0] + 2047) / 2048) * 2048;
-	if (s + want - 1 <= g[1] && (!best || g[1] - s > best[1] - best[0]))
-		best = [s, g[1]];
+function allocation(name, want) {
+	if (!match(name ?? '', /^[A-Za-z0-9_-]{1,36}$/) || type(want) != 'int' || want < 2048)
+		die('invalid partition request: name and integer size >= 2048 sectors required');
+	for (let x in parts)
+		if (x.name == name)
+			die(`partition ${name} already exists`);
+	let best = null, total = 0, largest = 0;
+	for (let g in available()) {
+		let s = int((g[0] + 2047) / 2048) * 2048;
+		let size = max(0, g[1] - s + 1);
+		total += size;
+		largest = max(largest, size);
+		if (size >= want && (!best || size > best[1] - best[0] + 1))
+			best = [s, g[1]];
+	}
+	if (!best)
+		die(`insufficient unallocated space on ${disk} for ${name}: required ${want / 2048} MiB, largest aligned gap ${largest / 2048} MiB, total remaining ${total / 2048} MiB; free space inside existing filesystems cannot be used`);
+	return [best[0], best[0] + want - 1];
 }
-if (!best)
-	die(`no free gap of ${want} sectors on ${disk}`);
-let start = best[0], end = start + want - 1;
+
+if (cmd == 'plan') {
+	let count = length(ARGV) - 2, planned = [];
+	if (count < 1)
+		die('plan: specify every NAME:SECTORS request');
+	if (count > length(free_entries))
+		die(`insufficient GPT entries: required ${count}, available ${length(free_entries)}; nothing was written`);
+	for (let i = 0; i < count; i++) {
+		let request = split(ARGV[i + 2], ':');
+		if (length(request) != 2)
+			die('plan: expected NAME:SECTORS');
+		let range = allocation(request[0], +request[1]);
+		let x = { n: free_entries[i] + 1, start: range[0], end: range[1], name: request[0] };
+		push(parts, x);
+		push(planned, x);
+	}
+	for (let x in planned)
+		print(`${x.name} ${x.n} ${x.start} ${x.end}\n`);
+	exit(0);
+}
+
+if (empty < 0)
+	die('the GPT has no free entry; nothing was written');
+let name = ARGV[2], want = +ARGV[3], range = allocation(name, want);
+let start = range[0], end = range[1];
 
 let guid = fs.readfile('/dev/urandom', 16) || die('no /dev/urandom');
 guid = put(guid, 7, chr((ord(guid, 7) & 0x0F) | 0x40));      // version 4

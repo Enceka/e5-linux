@@ -35,6 +35,22 @@ image before registration. The original OpenWrt partition entry was byte-for-byt
 unchanged. The OpenWrt updater validates the current slot's registration,
 rejects foreign root identities and registers its own new slot after writing.
 
+Before any card write, the installer runs `e5-gpt plan` for all three new
+partitions: 32 MiB plus 4096 MiB twice. It checks both GPT copies, available
+entries, partition overlaps and the same 1 MiB alignment/largest-gap allocation
+that `add` uses. Each root must fit an unallocated gap; filesystem free space
+does not count. Failure shows the requested size, largest aligned gap and total
+remaining space, and leaves the card untouched. Separate gaps are supported.
+Pass `--check` as the fourth argument to `device-install-sd.sh` to print the
+plan and exit before writing. The image URL, raw SHA-256 and shared kernel
+release remain its first three arguments.
+
+Image writes stop at each 4096 MiB slot's boundary, reject even a one-byte
+oversize image, report download/gzip/write errors separately and verify the
+entire raw-image SHA-256 before mounting or registering it. Automated tests use
+synthetic GPTs and small disposable image files; the existing multi-system card
+was not erased to test these failure paths.
+
 Device tests passed: both Debian desktops booted, persistent/one-shot choices,
 one-shot Debian followed by ordinary reboot back to OpenWrt, OpenWrt update
 into its B slot, full SHA-256 equality of both 4 GiB Debian partitions before

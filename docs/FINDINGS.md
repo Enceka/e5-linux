@@ -4876,6 +4876,23 @@ properties 0 -> 1 -> 0 and exact mixer restoration after SelectMode(0).
 These tests make no modem/call request. Receiver acoustic verification during
 a user-controlled call remains pending; the speaker downlink is already heard.
 
+### 55.5 Default receiver downlink confirmed (2026-10-02)
+
+After 2c726fc, the user manually called 10099 again and replied "可以了".
+The real-call journal shows receiver profile 0x5, both PCMs running, CP voice
+enabled, and successful cleanup after the user ended the call. Together with
+the earlier speaker result, downlink is now heard on both output routes and
+the default-speaker issue is resolved. This call's journal has no speaker
+toggle; in-call switching has the hardware/D-Bus verification in §55.4, not
+a separately logged acoustic switch during this call.
+
+The active receiver mixer/DAPM/PCM/kernel snapshots are saved privately under
+`work/voice-20261001/receiver-confirmed/`; the confirmation journal is
+`receiver-user-confirmed.txt`. Diagnostic watchers and temporary HTTP servers
+were stopped, ModemManager logging returned to INFO, and both voice PCMs
+were closed. The actual CallAudio service remains available for normal use.
+No failed systemd units were reported. Uplink is still explicitly deferred.
+
 ## 56. Installer diagnostics, SD capacity preflight and USB IPv4 (2026-10-02)
 
 The generic "the card does not hold the image..." error hid failures earlier

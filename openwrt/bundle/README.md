@@ -102,6 +102,13 @@ flash.cmd --boot-openwrt          (Windows; macOS / Linux: ./flash.sh --boot-ope
 A failed OpenWrt boot falls back to Android on its
 own after two tries.
 
+If installation fails, keep the complete terminal error. It identifies the
+failed stage (partitioning, writing, mounting, extracting device files or
+verifying content), the device's error/exit code and relevant SD/ext4 kernel
+messages. Content verification lists the missing, empty or non-executable
+files. Capacity and write protection are checked before repartitioning; an
+Android volume that remains mounted stops installation before the GPT changes.
+
 ## Update
 
 With the E5 running OpenWrt and connected over USB, run the new package's:

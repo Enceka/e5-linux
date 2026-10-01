@@ -22,11 +22,13 @@ Runs on Windows, macOS and Linux with Python 3.8+ and adb (Android
 platform-tools).  flash.cmd (Windows) and flash.sh start it.  See README.md.
 """
 import argparse
+import gzip
 import hashlib
 import http.server
 import json
 import os
 import random
+import re
 import shutil
 import socket
 import string
@@ -82,6 +84,7 @@ class busy:
     def __init__(self, label):
         self.label = label
         self.done = threading.Event()
+        self.failed = False
 
     def _run(self):
         t0 = time.time()
@@ -91,7 +94,8 @@ class busy:
             sys.stdout.write(f'\r   {spin[i % 4]} {self.label}  {int(time.time() - t0)} s   ')
             sys.stdout.flush()
             i += 1
-        sys.stdout.write(f'\r   OK {self.label}  {int(time.time() - t0)} s          \n')
+        result = 'FAILED' if self.failed else 'OK'
+        sys.stdout.write(f'\r   {result} {self.label}  {int(time.time() - t0)} s          \n')
         sys.stdout.flush()
 
     def __enter__(self):
@@ -100,6 +104,7 @@ class busy:
         return self
 
     def __exit__(self, *exc):
+        self.failed = bool(exc[0])
         self.done.set()
         self.t.join()
 
@@ -118,11 +123,17 @@ def sha256(path):
 
 
 def gz_usize(path):
-    """The uncompressed size of a gzip file, from its last four bytes (ISIZE;
-    modulo 4 GiB, and these images are 1 GiB)."""
-    with open(path, 'rb') as f:
-        f.seek(-4, os.SEEK_END)
-        return int.from_bytes(f.read(4), 'little')
+    """Check gzip integrity and count its real size (ISIZE wraps at 4 GiB)."""
+    size = 0
+    try:
+        with gzip.open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(1 << 20), b''):
+                size += len(chunk)
+    except (OSError, EOFError) as error:
+        die(f'cannot decompress {os.path.basename(path)}: {error}')
+    if not size:
+        die(f'{os.path.basename(path)} contains an empty image')
+    return size
 
 
 def boot_json():
@@ -180,6 +191,37 @@ def su(cmd, timeout=600):
     # one argument for adb, one single-quoted string for su: cmd has no '
     assert "'" not in cmd
     return adb('shell', f"{SU} -c '{cmd}'", timeout=timeout)
+
+
+def su_checked(stage, cmd, timeout=600):
+    """Fail at the actual remote stage; adb success alone is insufficient.
+
+    Do not print the command: settings commands can contain private values.
+    The subshell's set -e catches earlier failures in a sequence too.
+    """
+    marker = '__E5_STAGE_STATUS__='
+    wrapped = f'(set -e; {cmd}); e5_stage_rc=$?; echo {marker}$e5_stage_rc'
+    try:
+        out = su(wrapped, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        die(f'{stage}: timed out after {timeout} seconds; check the device/adb connection')
+    except OSError as error:
+        die(f'{stage}: cannot run adb: {error}')
+    matches = list(re.finditer(r'^' + marker + r'(\d+)\s*$', out, re.M))
+    if not matches:
+        die(f'{stage}: device returned no completion status (adb disconnected or su failed).\n'
+            + out.strip()[-2000:])
+    match = matches[-1]
+    body = out[:match.start()].rstrip()
+    status = int(match.group(1))
+    if status:
+        try:
+            context = su('dmesg | grep -iE "mmc|sdhci|ext4|I/O error|read-only|crc|Buffer I/O" | tail -18', timeout=20)
+        except (subprocess.TimeoutExpired, OSError):
+            context = '(kernel diagnostics unavailable: device did not respond)'
+        die(f'{stage}: failed (exit {status}).\n{body[-3000:]}\n'
+            f'SD/filesystem kernel messages:\n{context.strip()[-3000:]}')
+    return body
 
 
 def push(local, remote, label):
@@ -372,8 +414,44 @@ def device_sd():
 
 
 def device_size(dev):
-    out = su('blockdev --getsize64 %s' % dev).strip()
-    return int(out) if out.isdigit() else 0
+    out = su_checked(f'读取容量 / reading capacity of {dev}', 'blockdev --getsize64 %s' % dev).strip()
+    if not out.isdigit() or int(out) <= 0:
+        die(f'cannot determine the capacity of {dev}: {out!r}')
+    return int(out)
+
+
+def sd_device_numbers(dev):
+    name = dev.rsplit('/', 1)[-1]
+    out = su_checked('读取 SD 分区设备号 / reading SD device numbers',
+                     f'for p in /sys/class/block/{name} /sys/class/block/{name}p*; do '
+                     '[ -f "$p/dev" ] && cat "$p/dev"; done; true')
+    numbers = {line.strip() for line in out.splitlines() if re.fullmatch(r'\d+:\d+', line.strip())}
+    if not numbers:
+        die(f'cannot read SD block device numbers for {dev}; refusing to change its partition table')
+    return numbers
+
+
+def unmount_android_sd(dev):
+    """After erase confirmation, ask vold to release only this card's volumes."""
+    numbers = sd_device_numbers(dev)
+    volumes = su_checked('检查 Android SD 卷 / checking Android SD volumes', 'sm list-volumes all')
+    for line in volumes.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0].split(':', 1)[-1].replace(',', ':') in numbers and fields[1] == 'mounted':
+            volume = fields[0]
+            if not re.fullmatch(r'(public|private):\d+,\d+', volume):
+                continue
+            su_checked(f'卸载 Android SD 卷 / unmounting {volume}', f'sm unmount {volume}')
+    # mountinfo uses major:minor, while vold names volumes major,minor.
+    remaining = []
+    for line in su_checked('检查 SD 卸载结果 / checking SD mounts', 'cat /proc/self/mountinfo').splitlines():
+        fields = line.split()
+        if len(fields) >= 5 and fields[2] in numbers:
+            remaining.append(fields[4])
+    if remaining:
+        die(f'{dev} is still mounted at {", ".join(remaining)}. '
+            'Unmount the SD volume in Android storage settings (leave the card inserted) '
+            'and retry. The partition table was not changed.')
 
 
 def install_sd(a):
@@ -395,8 +473,18 @@ def install_sd(a):
         die(f'the boot control block is not the one this package expects ({live}): '
             'boot Android normally once, then try again')
     sd = device_sd()
-    if device_size(sd) < 2 << 30:
-        die('the card in the slot is smaller than 2 GiB')
+    capacity = device_size(sd)
+    img = os.path.join(F, 'openwrt.ext4.gz')
+    raw_size = gz_usize(img)
+    needed = raw_size + (2 << 20) + 34 * 512
+    if capacity < max(needed, 2 << 30):
+        die(f'SD capacity is insufficient: {sd} has {capacity / (1 << 20):.1f} MiB; '
+            f'image/GPT/alignment require {needed / (1 << 20):.1f} MiB '
+            '(minimum supported card: 2048 MiB). Nothing was written.')
+    readonly = su_checked('检查 SD 只读状态 / checking card write protection',
+                          f'cat /sys/class/block/{sd.rsplit("/", 1)[-1]}/ro').strip()
+    if readonly != '0':
+        die(f'{sd} is read-only (ro={readonly}); cannot install. Nothing was written.')
 
     apn, ssid, key = a.apn, a.ssid, a.wifi_key
     if not a.y:
@@ -421,26 +509,34 @@ def install_sd(a):
 
     with tempfile.TemporaryDirectory() as work:
         say(f'分区并格式化 / partitioning and formatting the card')
-        img = os.path.join(F, 'openwrt.ext4.gz')
+        unmount_android_sd(sd)
         # The root partition is only as large as the image: the rest of the card
         # stays free, for more systems (another partition the initramfs can be
         # pointed at) and a persistent store of its own.  So the filesystem is
         # not grown to the card -- it fills the partition exactly as built.
-        sec = (gz_usize(img) + 511) // 512 + 2048       # a MiB of slack past it
-        su(f'sgdisk --zap-all {sd}')
-        su(f'sgdisk --new=1:0:+{sec} --typecode=1:8300 --change-name=1:e5root {sd}')
+        sec = (raw_size + 511) // 512 + 2048       # a MiB of slack past it
+        su_checked('清理 GPT / clearing partition table', f'sgdisk --zap-all {sd}')
+        su_checked('建立 SD 根分区 / creating root partition',
+                   f'sgdisk --new=1:0:+{sec} --typecode=1:8300 --change-name=1:e5root {sd}')
+        su_checked('刷新 SD 分区表 / refreshing kernel partition table', f'blockdev --rereadpt {sd}')
         part = sd + 'p1'
         for _ in range(20):
             if 'ok' in su(f'[ -b {part} ] && echo ok'):
                 break
             time.sleep(1)
         else:
-            die('the card shows no first partition after partitioning')
+            details = su(f'ls -l {sd}*; cat /proc/partitions; dmesg | grep -iE "mmc|sdhci|error|crc" | tail -15')
+            die(f'{part} did not appear within 20 seconds after partitioning.\n{details}')
+        actual_size = device_size(part)
+        if actual_size < raw_size or actual_size != sec * 512:
+            die(f'{part} has an unexpected size: {actual_size} bytes; expected {sec * 512}. '
+                'The kernel may still hold the old partition table; no image was written.')
 
         say('写入 OpenWrt / OpenWrt -> the card')
         push(img, f'{TMP}/openwrt.ext4.gz', 'openwrt.ext4.gz')
         with busy('解压到 SD 卡 / unpacking onto the card'):
-            su(f'gzip -dc {TMP}/openwrt.ext4.gz > {part} && sync', timeout=1800)
+            su_checked('解压并写入 SD / decompressing image onto card',
+                       f'gzip -dc {TMP}/openwrt.ext4.gz > {part}; sync', timeout=1800)
         su(f'rm -f {TMP}/openwrt.ext4.gz')
         # (no e2fsck here: the image is built by a newer e2fsprogs than the
         # device's, whose feature set -- metadata_csum_seed, orphan_file -- the
@@ -459,19 +555,36 @@ def install_sd(a):
         adb('push', conf, f'{TMP}/e5-install.conf', check=True)
         adb('push', mark, f'{TMP}/e5-sd-root', check=True)
         m = f'{TMP}/e5sd'
-        su(f'umount {m} 2>/dev/null; mkdir -p {m}; mount -t ext4 {part} {m}')
+        su(f'umount {m} 2>/dev/null')
+        su_checked('挂载 SD 根分区 / mounting root partition',
+                   f'mkdir -p {m}; mount -t ext4 {part} {m}')
         with busy('在卡上写设置和设备文件 / writing the settings and the device files'):
-            su(f'mkdir -p {m}/etc/e5; '
+            su_checked('写入设置和设备固件 / writing settings and device firmware',
+               f'mkdir -p {m}/etc/e5; '
                f'mv {TMP}/e5-install.conf {m}/etc/e5/install.conf; '
                f'chmod 600 {m}/etc/e5/install.conf; '
                f'mv {TMP}/e5-sd-root {m}/etc/e5/sd-root; '
                f'tar -xf {TMP}/e5-device-files.tar -C {m}; '
                f'sha256sum {TMP}/e5-device-files.tar | cut -c1-64 > {m}/etc/e5/device-files.stamp; '
                'sync', timeout=900)
-        ok = 'ok' in su(f'[ -x {m}/sbin/init ] && [ -f {m}/lib/firmware/wcnmodem.bin ] && echo ok')
-        su(f'umount {m}; rm -f {TMP}/e5-device-files.tar')
-        if not ok:
-            die('the card does not hold the image and the device files it should')
+        # Resolve absolute symlinks in the image's root, not Android's root.
+        su_checked('检查镜像用户空间 / checking image userspace', f'chroot {m} /bin/busybox true')
+        missing = []
+        for name in ('sbin/init', 'lib/firmware/wcnmodem.bin', 'opt/e5/android/vendor/bin/modem_control',
+                     'etc/e5/install.conf', 'etc/e5/sd-root'):
+            test = f'if ! chroot {m} /bin/busybox test -s /{name}; then echo missing-or-empty:/{name}; '
+            if name in ('sbin/init', 'opt/e5/android/vendor/bin/modem_control'):
+                test += f'elif ! chroot {m} /bin/busybox test -x /{name}; then echo not-executable:/{name}; '
+            result = su_checked(f'检查 SD 文件 / checking /{name}', test + 'fi')
+            if result:
+                missing.append(result)
+        if missing:
+            details = su(f'df -h {m}; df -i {m}; mount | grep {m}; '
+                         f'ls -ld {m}/sbin/init {m}/lib/firmware {m}/opt/e5/android/vendor/bin/modem_control')
+            su(f'umount {m}')
+            die(f'SD content verification failed on {part}:\n' + '\n'.join(missing) + '\n' + details)
+        su_checked('卸载并同步 SD / unmounting card', f'sync; umount {m}')
+        su(f'rm -f {TMP}/e5-device-files.tar')
         print(f'   OpenWrt and {size} bytes of device files are on the card')
         free = device_size(sd) - device_size(part)
         print(f'   {free >> 30}.{(free % (1 << 30)) * 10 // (1 << 30)} GiB of the card '
@@ -480,7 +593,8 @@ def install_sd(a):
         say('写入启动镜像 / boot image -> boot_b')
         push(os.path.join(F, 'boot.img'), f'{TMP}/e5-boot.img', 'boot.img')
         with busy('写入并校验 boot_b / writing and verifying boot_b'):
-            su(f'dd if={TMP}/e5-boot.img of=/dev/block/by-name/boot_b bs=4M 2>/dev/null; sync')
+            su_checked('写入 boot_b / writing boot_b',
+                       f'dd if={TMP}/e5-boot.img of=/dev/block/by-name/boot_b bs=4M; sync')
             ok = su('sha256sum /dev/block/by-name/boot_b').split()[0:1] == [bj['sha256']]
         if not ok:
             die('boot_b did not verify; Android stays as it is')

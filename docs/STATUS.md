@@ -96,6 +96,13 @@ it needs a SIM card.
 
 ## Next (后续要做)
 
+- **Multiple systems on the SD card**, with independent updates: currently all
+  marked `e5root*` roots share one generation sequence and a common kernel in
+  `boot_b`. Add a system registry on the card, stable system IDs/PARTUUIDs,
+  one A/B pair and trial/rollback state per system, and update target identity
+  checks. All systems will use the same kernel; different-kernel boot is out
+  of scope. The proposed layout and kernel constraints are in
+  `openwrt/MULTIBOOT.md`; no multi-system support is implemented yet.
 - **An idle blank does not lock the session** (Debian/Phosh, FINDINGS 18).
 - **Call audio.**  Calls work in both directions under ModemManager (FINDINGS
   37.4), but nothing routes the codec into the CP's VoLTE voice path.
@@ -118,7 +125,7 @@ it needs a SIM card.
 | | |
 |---|---|
 | board | Rongyue E5 (UMS9621/qogirn6lite, CPU T158), 4 GiB RAM, Android 13 on slot a |
-| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`, `af5e09329` with the SD slot), the installed system under OpenWrt (`E5_MAINLINE=1 openwrt/make-flash-bundle.sh`, `flash.py`): display, touch, keys, USB gadget, Wi-Fi, BT, both SIM cards (FINDINGS 47), charging and fuel gauge, thermal as on 5.15, speaker and mic; the PMIC power off; filesystems read-only before a reset (FINDINGS 48.3); no eMMC reliable writes |
+| mainline | 6.18.54 in `linux-lts-e5` (branch `e5-6.18`, running `c1bb703f0`: SD slot and JEITA startup fix), the installed system under OpenWrt (`E5_MAINLINE=1 openwrt/make-flash-bundle.sh`, `flash.py`): display, touch, keys, USB gadget, Wi-Fi, BT, both SIM cards (FINDINGS 47), charging and fuel gauge, 25 thermal zones (charger NTC and shell estimates unverified), speaker and mic; the PMIC power off; filesystems read-only before a reset (FINDINGS 48.3); no eMMC reliable writes |
 | power | `poweroff` is a real one without the cable; with a charger in, the PMIC powers the E5 up again and it boots (charger mode is logged, not a charging screen) |
 | openwrt | OpenWrt 25.12.5 standalone, on the SD card's partition (the install's default since 2026-09-30; `--update` writes the card's other root partition and boots it as a trial, FINDINGS 49.1; `--data` keeps the image in `/data/e5linux/openwrt.ext4` -- FINDINGS 49) with its own firmware, vendor subset, modem modules and fonts (FINDINGS 39, 43); WAN by ModemManager, LAN `br-lan` = usb0 + AP, IPv6 /64 on the LAN; the info screen (e5-infoscreen) on the panel |
 | kernel 5.15 | rebuilt `Image` (`kernel/patches/0001-0028`), the Debian root's; still the fallback flash package |

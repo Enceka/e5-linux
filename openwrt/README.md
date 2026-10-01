@@ -61,6 +61,7 @@ What the E5 needs besides, in `overlay/`:
 | `etc/init.d/e5-pulseaudio`, `etc/pulse/system.pa` | PulseAudio for the speaker and Bluetooth audio (A2DP), started by `e5-audio` once the DSP runs; a connecting headset becomes the output, its disconnection falls back to the speaker |
 | `etc/init.d/e5-audio`, `usr/libexec/e5-volume`, `etc/config/e5-audio` | the speaker: the sound card and the audio DSP at boot (`e5-audio-dsp start`: the 24 vendor modules by insmod, the AGDSP image, the profile selects with `e5-ctl-raw`, the UCM route applied with amixer), then the saved volume -- 16 levels on the speaker's digital gain, level 15 = Android's media gain; `e5-volume play beep` |
 | `etc/init.d/e5-luci`, `usr/libexec/e5-luci-revision` | LuCI's Cellular Network page shows the modem's revision one row per line (Platform Version, Project Version, BASE Version, HW Version, Build) instead of run together; applied by the build and again at boot |
+| `usr/libexec/e5-ttyd-bind`, `etc/hotplug.d/iface/90-e5-ttyd` | Optional ttyd: `interface '@lan'` binds netifd's primary LAN address, rather than the bridge's older rescue address; follows LAN address changes. The package is not preinstalled. |
 | `etc/uci-defaults/93-e5-luci` | first boot: LuCI in Chinese with the Argon theme (both preinstalled; Argon from its release's packages, pinned in `build-rootfs.sh`) |
 | `etc/init.d/e5-apn-auto`, `usr/libexec/e5-apn-auto` | the APN from the SIM's operator (MCC+MNC) when none was given (`network.wan.apn_auto=1`), at every boot |
 | `etc/init.d/e5-sms-notify`, `usr/libexec/e5-sms-notify` | a new SMS vibrates (`e5-vibrate`, `/etc/config/e5-notify`) and is counted unread (`/tmp/run/e5-sms/unread`, `e5-sms-notify read`) |
@@ -71,6 +72,12 @@ and the scripts the two systems share come from `rootfs/overlay/opt/e5`
 (`vendor-start.sh`, `e5-next-boot`, `e5-os`, ...).
 
 ## Build
+
+The maintained SD-card install updates the inactive root partition, then boots
+it as a trial. Routine updates alternate between two roots; an image that no
+inactive root can hold gets a larger partition. These are rollback roots for
+one system. The proposed multiple-system layout, with a shared kernel and an
+A/B pair per installation, is in [`MULTIBOOT.md`](MULTIBOOT.md).
 
 On the host (Docker, arm64 -- native on Apple silicon):
 

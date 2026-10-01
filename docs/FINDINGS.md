@@ -3838,6 +3838,28 @@ Still open: one boot read the battery temperature at 17.9, 5.2, -7.3, -8.0,
 `temp` and charger-manager alike); the next boot with a sampler from 113 s had
 no such dip.
 
+### 41.2 Temperature sources on the running E5 (2026-10-01)
+
+The kernel exposes 25 thermal zones. They are zones, not 25 independently
+verified physical sensors: SoC physical/core/cluster/GPU/multimedia/LTE/NR zones,
+board/PA/charger NTCs, estimated front/back shell temperatures, the aggregate
+SoC zone and battery temperature. At one sample CPU/SoC were about 37 C, GPU
+36 C, LTE/NR 36-37 C, board and RF PA 36-37 C, battery 31.7 C. The charger zone
+read 84.7 C. `sprd_shell_thm.c` computes the front/back estimates from the
+board/PA/charger history; their apparent 43/48 C should not be treated as
+measured case temperatures while the charger conversion remains unverified.
+
+The info screen's overview and temperature details now show nine summaries:
+CPU (maximum core/cluster zone), GPU, SoC, LTE, NR (maximum of the two NR zones),
+multimedia, board, battery and RF PA. A Show more button reveals the remaining
+individual zones in the details page. The
+API converts thermal sysfs millidegrees and power-supply tenths of a degree to
+Celsius, and caches the sample for 5 s. All zone names and readings remain in
+Advanced Info, with the charger and dependent shell estimates labelled as
+unverified. RAM, eMMC and the SD card expose no separate temperature reading
+here; do not relabel the SoC reading as their temperature. These display
+changes do not alter charging or thermal protection.
+
 ## 42. Touch under OpenWrt: libudev-zero wants ABS_X/ABS_Y (2026-09-27)
 
 On OpenWrt the panel took no touch: the info screen's cage never saw the
@@ -4408,3 +4430,48 @@ card holds more than one root:
   image instead of after it, it ran before `mmcblk1` appeared.
 * A card system mounts userdata read-only (48): read-write only for a system that
   lives there (kept for tests) or to take a one-boot choice off it.
+
+### 49.2 Repeated updates and the multi-system boundary (2026-10-01)
+
+Ordinary updates reuse the other sufficiently large `e5root*` partition;
+they do not create a new partition on every update. The current card has
+`e5root` (1 GiB) and `e5root2` (1.25 GiB). If neither inactive candidate fits
+a larger future image, the updater allocates another with 256 MiB of headroom.
+
+This is one system with rollback roots, not multiple independently maintained
+systems. The updater identifies candidates by `e5root*` names and the boot
+selector compares generations across all marked roots. A second OS using those
+markers could be overwritten or selected accidentally. Rootfs rollback also
+does not roll back `boot_b`, which the bundle updates separately. Multiple
+systems need explicit system IDs, partition identities and separate A/B pairs;
+the design and its shared-kernel constraint are in `openwrt/MULTIBOOT.md`.
+
+## 50. LuCI SMS layout, ttyd's LAN bind and Wi-Fi QR codes (2026-10-01)
+
+The Argon theme gives headings and default form labels widths that do not suit
+the SMS page's ad-hoc layout. The inbox refresh button was pushed against the
+card edge, the compose labels left large gaps, and the forwarding description
+was outside the card. The view now has scoped CSS, a header toolbar, a compact
+compose form and a forwarding card containing its description and template
+help. No SMS transport or forwarding semantics were changed.
+
+Installing ttyd with its default `interface '@lan'` resolved the logical
+network to `br-lan`; libwebsockets selected the first address added to that
+bridge, the initramfs compatibility address `192.168.77.1`. Nothing listened on
+`192.168.9.1:7681`. `e5-ttyd-bind` changes that logical bind to
+`network_get_ipaddr` (netifd's primary address), skips startup if no address is
+ready, and an interface hotplug hook rebinds on up/down/address updates. The UCI
+setting remains `@lan`, so a changed LAN does not require editing ttyd's address.
+The optional package's service gets the adjustment at build/boot and interface
+events. Device test: an isolated test LAN changed from `198.18.0.1` to `.2`;
+ttyd moved its listener automatically. The real LAN was not changed.
+
+The info screen's Wi-Fi QR generator used `wifi_config().secured`, a field
+that only `wifi_status()` had computed. It was therefore always false and
+encoded protected hotspots as `WIFI:T:nopass`, omitting the password. The
+configuration now supplies the security flag; QR output includes security,
+escaped SSID/passphrase and the hidden flag. It uses a four-module quiet zone.
+The frontend also invalidates its QR on wireless configuration changes and
+on opening the hotspot page; previously only an SSID change refreshed it.
+Native ucode checks cover protected/open/hidden networks, missing passwords
+and special characters.

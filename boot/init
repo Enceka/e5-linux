@@ -361,9 +361,16 @@ has_init() { [ -x "$1/lib/systemd/systemd" ] || [ -x "$1/sbin/init" ]; }
 # SDROOT.  "Removable" cannot be asked of this controller (both mmcblk devices
 # report removable=0), so it is the mmcblk device that is not the one carrying
 # Android's partitions -- the one misc lives on.
+# A card can hold more than one marked root: an update (device-install-image.sh)
+# writes the new system into another partition of the card while the old one
+# runs.  Each carries a generation (/etc/e5/sd-gen, 0 when there is none) and the
+# highest boots.  A new one comes with /etc/e5/sd-trial: set to 0 here as it is
+# booted, removed by e5-boot-ok once the system is up -- one still at 0 did not
+# come up and is passed over, so the one before it boots again.
 sd_root() {
     [ -n "$misc" ] || return 1
     emmc=${misc#/dev/}; emmc=${emmc%%p*}
+    SDROOT= SDTRIAL= best=-1
     for d in /sys/class/block/mmcblk*; do
         n=${d##*/}
         case "$n" in *p[0-9]*|*boot*) continue ;; esac
@@ -372,14 +379,24 @@ sd_root() {
             [ -b "$part" ] || continue
             mount -t ext4 -o ro,noatime "$part" /sdtry 2>/dev/null || continue
             if [ -x /sdtry/sbin/init ] && [ -f /sdtry/etc/e5/sd-root ]; then
-                SDROOT=$part
-                umount /sdtry
-                return 0
+                gen=$(cat /sdtry/etc/e5/sd-gen 2>/dev/null)
+                case "$gen" in ''|*[!0-9]*) gen=0 ;; esac
+                trial=
+                [ -f /sdtry/etc/e5/sd-trial ] && trial=$(cat /sdtry/etc/e5/sd-trial 2>/dev/null)
+                if [ -f /sdtry/etc/e5/sd-trial ] && [ "$trial" = 0 ]; then
+                    log "stage=sd-candidate $part gen=$gen failed-trial (passed over)"
+                elif [ "$gen" -gt "$best" ]; then
+                    log "stage=sd-candidate $part gen=$gen${trial:+ trial}"
+                    best=$gen SDROOT=$part SDTRIAL=
+                    [ -f /sdtry/etc/e5/sd-trial ] && SDTRIAL=1
+                else
+                    log "stage=sd-candidate $part gen=$gen (older)"
+                fi
             fi
             umount /sdtry
         done
     done
-    return 1
+    [ -n "$SDROOT" ]
 }
 # e5linux/boot-os names the system to start: a directory of that name on the
 # image (/openwrt), or the Debian root at the top of it (anything else).
@@ -419,9 +436,33 @@ pick_root() {
 }
 
 mkdir -p /newroot /data /disk /sdtry
-rootdir= data_mounted=
+rootdir= data_mounted= on_card=
 [ -n "$data" ] && f2fs_last_cp "$data"
-if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/datamount.err; then
+# The SD card system is the one maintained (the systems on userdata are for
+# tests), and it leaves userdata read-only: mainline damaged that F2FS across
+# power cycles even after a clean unmount (docs/FINDINGS.md 48).  So userdata is
+# first mounted read-only, to read e5linux/boot-os, and read-write only for a
+# system that lives on it (or to take a one-boot choice off it).
+card= want= once=
+if [ -n "$data" ] && { mount -t f2fs -o ro,noatime,nodiratime "$data" /data 2>/run/datamount.err ||
+                       mount -t f2fs -o ro,norecovery,noatime,nodiratime "$data" /data 2>>/run/datamount.err; }; then
+    want=$(cat /data/e5linux/boot-os-next 2>/dev/null)
+    [ -n "$want" ] || want=$(cat /data/e5linux/boot-os 2>/dev/null)
+    once=$([ -f /data/e5linux/boot-os-next ] && echo 1)
+    umount /data
+fi
+if [ -z "$e5_trial" ] && { [ -z "$want" ] || [ "$want" = sd ]; } && sd_root; then
+    card=1
+    log "stage=card-system userdata read-only"
+    if [ -n "$once" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>>/run/datamount.err; then
+        read_boot_os /data >/dev/null
+        umount /data
+    fi
+    if [ -n "$data" ] && { mount -t f2fs -o ro,noatime,nodiratime "$data" /data 2>>/run/datamount.err ||
+                           mount -t f2fs -o ro,norecovery,noatime,nodiratime "$data" /data 2>>/run/datamount.err; }; then
+        data_mounted=1
+    fi
+elif [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>>/run/datamount.err; then
     log "stage=data-mounted"
     data_mounted=1
     want=$(read_boot_os /data)
@@ -458,7 +499,7 @@ if [ -n "$data" ] && mount -t f2fs -o noatime,nodiratime "$data" /data 2>/run/da
             rootdir=
         fi
     fi
-else
+elif [ -z "$card" ]; then
     log "stage=data-mount-fail $(cat /run/datamount.err 2>/dev/null)"
 fi
 
@@ -466,19 +507,18 @@ fi
 # OpenWrt image to a partition of the removable card and marks it
 # /etc/e5/sd-root.  A trial (e5.openwrt=) never uses it.  It is preferred when
 # userdata names no system (e5linux/boot-os, which both installers write: `sd`
-# for the card, `openwrt` for the image in userdata -- so the last install wins)
-# and it is the fallback otherwise, so a card whose userdata cannot be mounted
-# still boots.
-if [ -z "$e5_trial" ] &&
-   { [ -z "$want" ] || [ "$want" = sd ] || [ -z "$rootdir" ]; } && sd_root; then
-    if [ -n "$rootdir" ]; then
-        umount /disk 2>/dev/null
-        [ -n "$rootloop" ] && losetup -d "$rootloop" 2>/dev/null
-        rootdir=
-    fi
+# for the card, `openwrt` for the image in userdata -- so the last install wins;
+# decided above, `card`) and it is the fallback otherwise, so a card whose
+# userdata cannot be mounted still boots.
+if [ -n "$card" ] || { [ -z "$e5_trial" ] && [ -z "$rootdir" ] && sd_root; }; then
     if mount -t ext4 -o noatime "$SDROOT" /disk 2>>/run/rootmount.err; then
-        rootdir=/disk
+        rootdir=/disk on_card=1
         log "stage=openwrt-sd $SDROOT"
+        # (the first boot of an update: e5-boot-ok removes the file once it is up)
+        if [ -n "$SDTRIAL" ]; then
+            echo 0 > /disk/etc/e5/sd-trial && sync
+            log "stage=openwrt-sd-trial $SDROOT"
+        fi
     else
         log "stage=openwrt-sd-fail $(cat /run/rootmount.err 2>/dev/null)"
     fi
@@ -495,7 +535,8 @@ if [ -n "$rootdir" ]; then
         # that moment -- and again whenever the archive changed or an update
         # brought an image without them.
         dft=/data/e5linux/device-files.tar
-        if [ -f /newroot/etc/e5/image-form ] && [ -f "$dft" ]; then
+        # (a card system carries its own, from its install or update)
+        if [ -z "$on_card" ] && [ -f /newroot/etc/e5/image-form ] && [ -f "$dft" ]; then
             stamp=$(sha256sum "$dft" | cut -d' ' -f1)
             if [ ! -f /newroot/lib/firmware/wcnmodem.bin ] ||
                [ "$(cat /newroot/etc/e5/device-files.stamp 2>/dev/null)" != "$stamp" ]; then
@@ -535,7 +576,8 @@ if [ -n "$rootdir" ]; then
     fi
     mkdir -p /run/e5linux && cp /etc/misc-bc-slot-a.bin /etc/misc-bc-slot-b-trial.bin /run/e5linux/ 2>/dev/null
     # what this initramfs can do, for the installers of the running system
-    echo "openwrt-image userdata-boot-os" > /run/e5linux/init-features
+    echo "openwrt-image userdata-boot-os sd-gen" > /run/e5linux/init-features
+    [ -n "$on_card" ] && echo "$SDROOT" > /run/e5linux/sd-root-dev
     [ -n "$misc" ] && echo "$misc" > /run/e5linux/misc-dev
     [ -n "$data" ] && echo "$data" > /run/e5linux/data-dev
     init=/sbin/init

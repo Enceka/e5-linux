@@ -1,0 +1,162 @@
+#!/usr/bin/ucode
+// The SD card's partition table, for the card install's update (openwrt/device-install-image.sh): OpenWrt
+// has no sgdisk, and the card's root is mounted while it runs, so the kernel is not asked to re-read the
+// table -- a partition added here is written through the whole disk at its offset, and appears as a node
+// at the next boot.  GPT only, 512-byte sectors; both copies (primary and backup) are rewritten.
+//
+//   e5-gpt list DISK                  N START END NAME, one line per partition
+//   e5-gpt add DISK NAME SECTORS      a Linux partition in the largest free gap, 1 MiB aligned: N START END
+let fs = require('fs');
+
+function die(msg) {
+	warn(`e5-gpt: ${msg}\n`);
+	exit(1);
+}
+
+let crctab = [];
+for (let n = 0; n < 256; n++) {
+	let c = n;
+	for (let k = 0; k < 8; k++)
+		c = (c & 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1);
+	push(crctab, c);
+}
+function crc32(s) {
+	let c = 0xFFFFFFFF;
+	for (let i = 0; i < length(s); i++)
+		c = crctab[(c ^ ord(s, i)) & 0xFF] ^ (c >> 8);
+	return c ^ 0xFFFFFFFF;
+}
+
+function le(s, off, n) {
+	let v = 0;
+	for (let i = n - 1; i >= 0; i--)
+		v = v * 256 + ord(s, off + i);
+	return v;
+}
+function lebytes(v, n) {
+	let b = [];
+	for (let i = 0; i < n; i++) {
+		push(b, chr(v % 256));
+		v = int(v / 256);
+	}
+	return join('', b);
+}
+function put(s, off, bytes) {
+	return substr(s, 0, off) + bytes + substr(s, off + length(bytes));
+}
+
+let cmd = ARGV[0], disk = ARGV[1];
+if (!(cmd in ['list', 'add']) || !disk)
+	die('usage: e5-gpt list DISK | e5-gpt add DISK NAME SECTORS');
+let h = fs.open(disk, cmd == 'add' ? 'r+' : 'r') || die(`${disk}: ${fs.error()}`);
+function rd(lba, count) {
+	h.seek(lba * 512, 0);
+	let s = h.read(count * 512);
+	if (length(s) != count * 512)
+		die(`${disk}: short read at sector ${lba}`);
+	return s;
+}
+function wr(lba, s) {
+	h.seek(lba * 512, 0);
+	h.write(s) == length(s) || die(`${disk}: write failed at sector ${lba}`);
+}
+
+// a header and its table, checked
+function load(lba) {
+	let hd = rd(lba, 1);
+	if (substr(hd, 0, 8) != 'EFI PART')
+		die(`no GPT header at sector ${lba}`);
+	let hsize = le(hd, 12, 4);
+	if (hsize < 92 || hsize > 512)
+		die(`odd GPT header size ${hsize}`);
+	if (crc32(put(substr(hd, 0, hsize), 16, lebytes(0, 4))) != le(hd, 16, 4))
+		die(`the GPT header at sector ${lba} fails its checksum`);
+	let g = { lba: lba, hd: hd, hsize: hsize, alt: le(hd, 32, 8), first: le(hd, 40, 8), last: le(hd, 48, 8),
+		elba: le(hd, 72, 8), num: le(hd, 80, 4), esize: le(hd, 84, 4) };
+	if (g.esize != 128 || g.num < 1 || g.num > 1024)
+		die(`odd GPT table (${g.num} entries of ${g.esize} bytes)`);
+	g.tab = substr(rd(g.elba, int((g.num * 128 + 511) / 512)), 0, g.num * 128);
+	if (crc32(g.tab) != le(hd, 88, 4))
+		die(`the GPT table of the header at sector ${lba} fails its checksum`);
+	return g;
+}
+
+let ZERO16 = lebytes(0, 16);
+let p = load(1);
+let parts = [], empty = -1;
+for (let i = 0; i < p.num; i++) {
+	let e = substr(p.tab, i * 128, 128);
+	if (substr(e, 0, 16) == ZERO16) {
+		if (empty < 0)
+			empty = i;
+		continue;
+	}
+	let name = '';
+	for (let j = 56; j < 128; j += 2) {
+		let c = le(e, j, 2);
+		if (!c)
+			break;
+		name += (c < 128) ? chr(c) : '?';
+	}
+	push(parts, { n: i + 1, start: le(e, 32, 8), end: le(e, 40, 8), name: name });
+}
+
+if (cmd == 'list') {
+	for (let x in parts)
+		print(`${x.n} ${x.start} ${x.end} ${x.name}\n`);
+	exit(0);
+}
+
+let name = ARGV[2], want = +ARGV[3];
+if (!match(name ?? '', /^[A-Za-z0-9_-]{1,36}$/) || type(want) != 'int' || want < 2048)
+	die('add: a name (letters, digits, - and _, 36 at most) and a size in sectors');
+if (empty < 0)
+	die('the table has no free entry');
+let b = load(p.alt);
+
+// the largest free gap between the usable sectors, the partitions sorted
+let sorted = sort(parts, (x, y) => x.start - y.start), gaps = [], at = p.first;
+for (let x in sorted) {
+	if (x.start > at)
+		push(gaps, [at, x.start - 1]);
+	if (x.end + 1 > at)
+		at = x.end + 1;
+}
+if (p.last >= at)
+	push(gaps, [at, p.last]);
+let best = null;
+for (let g in gaps) {
+	let s = int((g[0] + 2047) / 2048) * 2048;
+	if (s + want - 1 <= g[1] && (!best || g[1] - s > best[1] - best[0]))
+		best = [s, g[1]];
+}
+if (!best)
+	die(`no free gap of ${want} sectors on ${disk}`);
+let start = best[0], end = start + want - 1;
+
+let guid = fs.readfile('/dev/urandom', 16) || die('no /dev/urandom');
+guid = put(guid, 7, chr((ord(guid, 7) & 0x0F) | 0x40));      // version 4
+guid = put(guid, 8, chr((ord(guid, 8) & 0x3F) | 0x80));      // variant
+let uname = '';
+for (let i = 0; i < length(name); i++)
+	uname += chr(ord(name, i), 0);
+// the Linux filesystem type, 0FC63DAF-8483-4772-8E79-3D69D8477DE4, in GPT's byte order
+let linux = chr(0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4);
+let entry = linux + guid + lebytes(start, 8) + lebytes(end, 8) + lebytes(0, 8) + uname;
+entry += lebytes(0, 128 - length(entry));
+let tab = put(p.tab, empty * 128, entry);
+let tcrc = lebytes(crc32(tab), 4);
+
+// the backup first, then the primary: a cut in between leaves one good copy that the kernel takes
+for (let g in [b, p]) {
+	// (the rest of a last sector the table does not fill is kept)
+	let rest = length(tab) % 512;
+	wr(g.elba, tab + (rest ? substr(rd(g.elba + int(length(tab) / 512), 1), rest) : ''));
+	let hd = put(g.hd, 88, tcrc);
+	hd = put(hd, 16, lebytes(0, 4));
+	hd = put(hd, 16, lebytes(crc32(substr(hd, 0, g.hsize)), 4));
+	wr(g.lba, hd);
+	h.flush();
+}
+h.close();
+print(`${empty + 1} ${start} ${end}\n`);

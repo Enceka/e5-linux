@@ -6,11 +6,22 @@
 START=99
 
 start() {
+	# the first boot of a card update (boot/init, device-install-image.sh): it is
+	# up, so it stays the system -- a trial still marked at the next boot is
+	# passed over for the one before it
+	if [ -f /etc/e5/sd-trial ]; then
+		rm -f /etc/e5/sd-trial && sync
+		logger -t e5-boot-ok "the card update's first boot is up: kept ($(cat /etc/e5/image-version 2>/dev/null))"
+	fi
 	# flash.py --boot-openwrt from Android asks for OpenWrt as the default
 	# again, taken once the system is up (a boot that fails keeps Android)
 	local f=/mnt/e5-data/e5linux/openwrt-default-boot
 	if [ "$(cat $f 2>/dev/null)" = linux ]; then
-		rm -f $f
+		# (a card system has userdata read-only: writable for this one file)
+		rm -f $f 2>/dev/null || {
+			mount -o remount,rw /mnt/e5-data && rm -f $f
+			mount -o remount,ro /mnt/e5-data
+		}
 		/opt/e5/e5-next-boot linux 2>&1 | logger -t e5-boot-ok
 		return
 	fi

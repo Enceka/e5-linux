@@ -7,6 +7,15 @@
 #
 #   device-install-image.sh IMAGE.ext4.gz|URL [--try|--switch]
 #
+# On an SD card system (flash.py's default install, /etc/e5/sd-root) the update
+# goes onto the card instead, and userdata is not touched: the new image is
+# written into another root partition of the card (made in the card's free space
+# the first time, /usr/libexec/e5-gpt), the configuration and the device's files
+# copied in as below, and it is marked with the next generation and a trial --
+# boot/init boots the highest generation, and a trial that does not come up
+# leaves the next boot to the one before it.  E5_IMAGE_SIZE (bytes, unpacked) is
+# needed with a URL.  --try and --switch do not apply there.
+#
 # The image is unpacked next to the installed one (openwrt.ext4.part) and
 # renamed at the end.  The running standalone OpenWrt cannot be replaced under
 # itself: its update goes to openwrt.ext4.new, which the initramfs swaps in at
@@ -25,7 +34,172 @@ SRC=${1:?image}
 MODE=${2:-}
 case "$MODE" in ''|--try|--switch) ;; *) echo "unknown option $MODE" >&2; exit 2 ;; esac
 
+# The configuration of the OpenWrt at $1 into the new root $2 (/etc/config,
+# passwords, SSH keys, /etc/e5, the traffic records, the info screen's apps),
+# the new image's own version files kept.
+keep_config() {
+    local from=$1 N=$2 f p
+    echo "== keeping the configuration of $from"
+    for f in image-version image-form build-time; do
+        cp "$N/etc/e5/$f" "/tmp/e5-img.$f" 2>/dev/null || rm -f "/tmp/e5-img.$f"
+    done
+    for p in etc/config etc/shadow etc/passwd etc/group etc/dropbear etc/e5 etc/e5linux \
+             etc/uhttpd.crt etc/uhttpd.key etc/vnstat etc/e5-infoscreen; do
+        [ -e "$from/$p" ] || continue
+        if [ -d "$from/$p" ] && [ -d "$N/$p" ]; then
+            cp -a "$from/$p/." "$N/$p/"
+        else
+            rm -rf "$N/$p"
+            cp -a "$from/$p" "$N/$p"
+        fi
+    done
+    for f in image-version image-form build-time; do
+        rm -f "$N/etc/e5/$f"
+        [ -f "/tmp/e5-img.$f" ] && mv "/tmp/e5-img.$f" "$N/etc/e5/$f"
+    done
+}
+
+# The device's own files (firmware, the Android vendor subset) as a tar on
+# stdout, read through a plain (non-recursive) bind of the root that has them --
+# the Debian image for the directory form, / otherwise: the vendor chroot has
+# /proc, /sys and /dev mounted inside it while the baseband runs, and a tar of
+# the live tree walked into those.  Nothing (and false) when this system has none.
+VIEW=/tmp/e5-img.view
+device_files_tar() {
+    local src=/ list rc=1
+    [ -f /mnt/e5-disk/usr/lib/firmware/wcnmodem.bin ] && src=/mnt/e5-disk
+    mkdir -p "$VIEW" && mount --bind "$src" "$VIEW"
+    if [ -f "$VIEW/lib/firmware/wcnmodem.bin" ] && [ -x "$VIEW/opt/e5/android/vendor/bin/modem_control" ]; then
+        list=$(cd "$VIEW" && for f in lib/firmware/wcnmodem.bin lib/firmware/gnssmodem.bin \
+                   lib/firmware/wifi_board_config*.ini lib/firmware/tsx_data lib/firmware/l_agdsp_a.img \
+                   lib/firmware/audio_structure lib/firmware/dsp_vbc lib/firmware/cvs \
+                   lib/firmware/aw87xxx_acf.bin lib/firmware/sprd opt/e5/android; do
+                   [ -e "$f" ] && echo "$f"; done)
+        (cd "$VIEW" && tar -cf - $list) && rc=0
+    fi
+    umount "$VIEW"
+    return $rc
+}
+
+# ------------------------------------------------------------ the SD card
+card_update() {
+    local rootdev disk curn cur gpt size need t n start end name g best bestgen lo next tries
+    rootdev=$(awk '$2 == "/" && $1 ~ /^\/dev\/mmcblk[0-9]+p[0-9]+$/ { d = $1 } END { print d }' /proc/mounts)
+    [ -n "$rootdev" ] || { echo "the card's root partition is not mounted as /" >&2; exit 1; }
+    disk=${rootdev%p*} curn=${rootdev##*p}
+    gpt=$(dirname "$0")/e5-gpt
+    [ -f "$gpt" ] || gpt=/usr/libexec/e5-gpt
+    [ -f "$gpt" ] || { echo "no e5-gpt (the card's partition table)" >&2; exit 1; }
+    cur=$(cat /etc/e5/sd-gen 2>/dev/null); case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+    size=${E5_IMAGE_SIZE:-}
+    if [ -z "$size" ]; then
+        case "$SRC" in
+            http://*|https://*) echo "E5_IMAGE_SIZE (the unpacked size) is needed with a URL" >&2; exit 2 ;;
+        esac
+        # (gzip's last four bytes: the unpacked size, modulo 4 GiB)
+        size=$(tail -c 4 "$SRC" | od -An -tu4 | tr -d ' ')
+    fi
+    need=$(( (size + 511) / 512 ))
+    echo "== the card: $disk, running from partition $curn (generation $cur), the image $((size >> 20)) MiB"
+
+    # The partition to write: another root of the card (e5root*) that holds the
+    # image -- the oldest generation, a failed trial or an unmarked one first;
+    # never the running one, never a partition of another name.
+    lo=$(losetup -f)
+    best= bestgen=
+    gen_at() {
+        losetup -r -o $(($1 * 512)) "$lo" "$disk" 2>/dev/null || { echo -1; return; }
+        mkdir -p "$OLD_ROOT"
+        if mount -t ext4 -o ro,noload "$lo" "$OLD_ROOT" 2>/dev/null; then
+            if [ ! -f "$OLD_ROOT/etc/e5/sd-root" ] || [ "$(cat "$OLD_ROOT/etc/e5/sd-trial" 2>/dev/null)" = 0 ]; then
+                echo -1
+            else
+                g=$(cat "$OLD_ROOT/etc/e5/sd-gen" 2>/dev/null); case "$g" in ''|*[!0-9]*) g=0 ;; esac
+                echo "$g"
+            fi
+            umount "$OLD_ROOT"
+        else
+            echo -1
+        fi
+        losetup -d "$lo"
+    }
+    t=$(ucode "$gpt" list "$disk") || exit 1
+    while read -r n start end name; do
+        [ "$n" = "$curn" ] && continue
+        case "$name" in e5root*) ;; *) continue ;; esac
+        [ $((end - start + 1)) -ge "$need" ] || continue
+        g=$(gen_at "$start")
+        echo "   partition $n ($name, $(( (end - start + 1) >> 11 )) MiB): generation $g"
+        if [ -z "$best" ] || [ "$g" -lt "$bestgen" ]; then best="$n $start $end" bestgen=$g; fi
+    done <<EOT
+$t
+EOT
+    if [ -z "$best" ]; then
+        # (room for a larger image later: 256 MiB past this one)
+        n=2; while echo "$t" | grep -q " e5root$n\$"; do n=$((n + 1)); done
+        best=$(ucode "$gpt" add "$disk" "e5root$n" $((need + 524288))) || exit 1
+        echo "== a new root partition on the card: e5root$n ($best)"
+    fi
+    set -- $best
+    n=$1 start=$2 end=$3
+    [ $((start % 2048)) = 0 ] || { echo "partition $n does not start on a MiB" >&2; exit 1; }
+
+    # the partition is not bootable while it is written: its superblock goes first
+    echo "== writing the image into partition $n"
+    dd if=/dev/zero of="$disk" bs=1048576 seek=$((start / 2048)) count=4 conv=fsync 2>/dev/null
+    rm -f /tmp/e5-img.fail
+    case "$SRC" in
+        http://*|https://*) { wget -q -O - "$SRC" || touch /tmp/e5-img.fail; } | gunzip -c ;;
+        *) gunzip -c "$SRC" ;;
+    esac | dd of="$disk" bs=1048576 seek=$((start / 2048)) conv=fsync 2>/tmp/e5-img.dd ||
+        { cat /tmp/e5-img.dd >&2; echo "writing the card failed" >&2; exit 1; }
+    [ ! -e /tmp/e5-img.fail ] || { rm -f /tmp/e5-img.fail; echo "download failed" >&2; exit 1; }
+
+    losetup -o $((start * 512)) "$lo" "$disk"
+    mkdir -p "$NEW_ROOT"
+    mount -t ext4 "$lo" "$NEW_ROOT" ||
+        { losetup -d "$lo"; echo "the written partition does not mount" >&2; exit 1; }
+    N=$NEW_ROOT
+    trap 'umount "$NEW_ROOT" 2>/dev/null; losetup -d "$lo" 2>/dev/null' EXIT
+    [ -x "$N/sbin/init" ] && [ -f "$N/etc/openwrt_release" ] || { echo "not an OpenWrt image" >&2; exit 1; }
+    keep_config / "$N"
+    # (marked last, below: until then the partition is no candidate)
+    rm -f "$N/etc/e5/sd-root" "$N/etc/e5/sd-trial"
+    if [ ! -f "$N/lib/firmware/wcnmodem.bin" ]; then
+        if device_files_tar > /tmp/e5-img.dft; then
+            tar -xf /tmp/e5-img.dft -C "$N"
+            sha256sum /tmp/e5-img.dft | cut -d' ' -f1 > "$N/etc/e5/device-files.stamp"
+            echo "== the device's files copied in"
+        else
+            rm -f /tmp/e5-img.dft
+            echo "the image has no firmware or vendor subset, and this system has none to give" >&2
+            exit 1
+        fi
+        rm -f /tmp/e5-img.dft
+    fi
+    mkdir -p "$N/etc/e5linux"
+    cp /run/e5linux/misc-bc-slot-a.bin /run/e5linux/misc-bc-slot-b-trial.bin "$N/etc/e5linux/" 2>/dev/null || true
+    next=$((cur + 1))
+    echo "$next" > "$N/etc/e5/sd-gen"
+    echo 1 > "$N/etc/e5/sd-trial"
+    cp /etc/e5/sd-root "$N/etc/e5/sd-root"
+    ver=$(cat "$N/etc/e5/image-version" 2>/dev/null || echo "?")
+    sync
+    umount "$NEW_ROOT" && losetup -d "$lo"
+    trap - EXIT
+    sync
+    echo "installed: card partition $n ($ver, generation $next), started at the next boot"
+    echo "   (its first boot is a trial: one that does not come up returns to partition $curn)"
+    grep -qs sd-gen /run/e5linux/init-features ||
+        echo "   the boot image in use predates card updates: flash this package's boot image too"
+    exit 0
+}
+
 D=/mnt/e5-data
+DIR=$D/e5linux IMG=$D/e5linux/openwrt.ext4
+PART=$IMG.part NEW_ROOT=/tmp/e5-img.new OLD_ROOT=/tmp/e5-img.old
+[ -f /etc/e5/sd-root ] && [ -f /etc/openwrt_release ] && card_update
+
 # userdata: the initramfs leaves it at /mnt/e5-data; one that predates that
 # keeps it to itself, and the partition is mounted a second time (the same
 # f2fs, not a copy)
@@ -39,8 +213,6 @@ if ! grep -qs " $D " /proc/mounts; then
     mount -t f2fs -o noatime "$dev" "$D"
     echo "== mounted userdata ($dev) at $D"
 fi
-DIR=$D/e5linux IMG=$D/e5linux/openwrt.ext4
-PART=$IMG.part NEW_ROOT=/tmp/e5-img.new OLD_ROOT=/tmp/e5-img.old
 mkdir -p "$DIR"
 
 # the running root: the image itself when OpenWrt runs from it
@@ -84,28 +256,7 @@ elif [ -d /openwrt/etc/config ]; then
 fi
 
 N=$NEW_ROOT
-if [ -n "$from" ]; then
-    echo "== keeping the configuration of $from"
-    # (the new image's own, not the kept ones)
-    for f in image-version image-form build-time; do
-        cp "$N/etc/e5/$f" "/tmp/e5-img.$f" 2>/dev/null || rm -f "/tmp/e5-img.$f"
-    done
-    # (etc/e5-infoscreen: the apps installed on the info screen)
-    for p in etc/config etc/shadow etc/passwd etc/group etc/dropbear etc/e5 etc/e5linux \
-             etc/uhttpd.crt etc/uhttpd.key etc/vnstat etc/e5-infoscreen; do
-        [ -e "$from/$p" ] || continue
-        if [ -d "$from/$p" ] && [ -d "$N/$p" ]; then
-            cp -a "$from/$p/." "$N/$p/"
-        else
-            rm -rf "$N/$p"
-            cp -a "$from/$p" "$N/$p"
-        fi
-    done
-    for f in image-version image-form build-time; do
-        rm -f "$N/etc/e5/$f"
-        [ -f "/tmp/e5-img.$f" ] && mv "/tmp/e5-img.$f" "$N/etc/e5/$f"
-    done
-fi
+[ -n "$from" ] && keep_config "$from" "$N"
 umount "$OLD_ROOT" 2>/dev/null || true
 
 if [ ! -f "$N/etc/e5/install.conf" ] && command -v nmcli >/dev/null 2>&1; then
@@ -132,30 +283,15 @@ fi
 
 # An image built without the device's files (E5_DEVICE_FILES=0) takes them
 # from userdata's device-files.tar, which boot/init unpacks as well; made here
-# from this system's own when there is none yet.  Read through a plain
-# (non-recursive) bind of the root that has them -- the Debian image for the
-# directory form, / otherwise: the vendor chroot has /proc, /sys and /dev
-# mounted inside it while the baseband runs, and a tar of the live tree
-# walked into those.
-DFT=$DIR/device-files.tar VIEW=/tmp/e5-img.view
+# from this system's own when there is none yet (device_files_tar).
+DFT=$DIR/device-files.tar
 if [ ! -f "$N/lib/firmware/wcnmodem.bin" ] && [ ! -f "$DFT" ]; then
-    src=/
-    [ -f /mnt/e5-disk/usr/lib/firmware/wcnmodem.bin ] && src=/mnt/e5-disk
-    mkdir -p "$VIEW" && mount --bind "$src" "$VIEW"
-    if [ -f "$VIEW/lib/firmware/wcnmodem.bin" ] && [ -x "$VIEW/opt/e5/android/vendor/bin/modem_control" ]; then
+    if device_files_tar > "$DFT.part"; then
         echo "== the device's files from this system -> $DFT"
-        list=$(cd "$VIEW" && for f in lib/firmware/wcnmodem.bin lib/firmware/gnssmodem.bin \
-                   lib/firmware/wifi_board_config*.ini lib/firmware/tsx_data lib/firmware/l_agdsp_a.img \
-                   lib/firmware/audio_structure lib/firmware/dsp_vbc lib/firmware/cvs \
-                   lib/firmware/aw87xxx_acf.bin lib/firmware/sprd opt/e5/android; do
-                   [ -e "$f" ] && echo "$f"; done)
-        if (cd "$VIEW" && tar -cf "$DFT.part" $list); then
-            mv "$DFT.part" "$DFT"
-        else
-            rm -f "$DFT.part"
-        fi
+        mv "$DFT.part" "$DFT"
+    else
+        rm -f "$DFT.part"
     fi
-    umount "$VIEW"
 fi
 if [ ! -f "$N/lib/firmware/wcnmodem.bin" ]; then
     if [ -f "$DFT" ]; then

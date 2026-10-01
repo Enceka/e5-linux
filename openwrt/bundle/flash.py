@@ -604,7 +604,7 @@ def boot_openwrt(a):
     find_adb()
     android_checks()
     bj = boot_json()
-    if 'ok' not in su(f'[ -f {D}/openwrt.ext4 ] && echo ok'):
+    if 'ok' not in su(f'{{ [ -f {D}/openwrt.ext4 ] || [ "$(cat {D}/boot-os 2>/dev/null)" = sd ]; }} && echo ok'):
         die('OpenWrt is not installed: run the first install')
     mb = bj['persist_log_offset'] // 1048576
     head = su(f'dd if=/dev/block/by-name/boot_b bs=1048576 count={mb} 2>/dev/null | sha256sum').split()[0:1]
@@ -650,6 +650,7 @@ def update(a):
         files = {'/boot-head.img': head,
                  '/openwrt.ext4.gz': os.path.join(F, 'openwrt.ext4.gz'),
                  '/dii.sh': os.path.join(F, 'device-install-image.sh'),
+                 '/e5-gpt': os.path.join(F, 'e5-gpt'),
                  '/dfb.sh': os.path.join(F, 'device-flash-boot.sh')}
 
         class H(http.server.SimpleHTTPRequestHandler):
@@ -665,14 +666,19 @@ def update(a):
         say(f'更新 / updating {host}')
         env = dict(os.environ, E5_TELNET_HOST=host, E5_TELNET_PASS=pw, E5_TELNET_WAIT='1800')
         telnet = [sys.executable, os.path.join(SCRIPTS, 'tools', 'e5-telnet.py')]
-        inner = (f'cd /tmp && wget -q -O dfb.sh {u}/dfb.sh && wget -q -O dii.sh {u}/dii.sh && '
-                 f'sh dfb.sh {u}/boot-head.img {bj["sha256_head56m"]} {mb} && sh dii.sh {u}/openwrt.ext4.gz && '
-                 'd=/mnt/e5-data/e5linux && rm -f $d/boot-os-next && echo openwrt > $d/boot-os && sync && '
-                 'echo E5-UPDATE-$((1+1))')
-        # a card-installed system is not updated in place: its image is the card's
-        # partition, which device-install-image.sh does not write (it writes
-        # userdata), so say so instead of updating the wrong system
-        cmd = ('if [ -f /etc/e5/sd-root ]; then echo E5-SD-ROOT; else ' + inner + '; fi')
+        fetch = (f'cd /tmp && wget -q -O dfb.sh {u}/dfb.sh && wget -q -O dii.sh {u}/dii.sh && '
+                 f'sh dfb.sh {u}/boot-head.img {bj["sha256_head56m"]} {mb} && ')
+        # an SD card system (the default install): device-install-image.sh writes
+        # the new image into the card's other root partition, the next boot is its
+        # trial, and userdata is not touched (FINDINGS 49)
+        card = (f'wget -q -O e5-gpt {u}/e5-gpt && '
+                f'E5_IMAGE_SIZE={gz_usize(os.path.join(F, "openwrt.ext4.gz"))} sh dii.sh {u}/openwrt.ext4.gz && '
+                'echo E5-UPDATE-$((1+1))')
+        # the form on userdata (--data, kept for tests)
+        data = (f'sh dii.sh {u}/openwrt.ext4.gz && '
+                'd=/mnt/e5-data/e5linux && rm -f $d/boot-os-next && echo openwrt > $d/boot-os && sync && '
+                'echo E5-UPDATE-$((1+1))')
+        cmd = fetch + f'if [ -f /etc/e5/sd-root ]; then {card}; else {data}; fi'
         # the device's own steps as they happen: the boot image, the unpacking,
         # the settings kept, the device's files
         lines = []
@@ -681,14 +687,11 @@ def update(a):
                 for raw in pr.stdout:
                     line = raw.decode('utf-8', 'replace').replace('\r', '').rstrip('\n')
                     lines.append(line)
-                    if line.startswith(('==', 'installed', 'WARNING', 'error', 'the image')):
+                    if line.startswith(('==', 'installed', 'WARNING', 'error', 'the image', '   ')):
                         sys.stdout.write('\r   ' + line + ' ' * 20 + '\n')
                         sys.stdout.flush()
         out = '\n'.join(lines)
         srv.shutdown()
-        if 'E5-SD-ROOT' in out:
-            die('this E5 boots OpenWrt from an SD card: its update is the SD install, '
-                'run ./flash.sh with the card in the slot (nothing was written)')
         if 'E5-UPDATE-2' not in out:
             print('\n'.join(out.splitlines()[-20:]))
             die('the update did not finish (the log is above)')

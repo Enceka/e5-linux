@@ -18,6 +18,8 @@ echo "INSTALL-DONE rc=$?"
 #   phosh 0.46.0+e5 and gnome-control-center 48.4+e5: the hotspot switch and
 #     the Wi-Fi panel recognise the bridged "Hotspot"; phone mode keeps the
 #     window close button.
+#   bluez 5.82+e5: larger SDP MTU for headsets whose replies exceed 672 bytes
+#     (pairing succeeds but service discovery/audio connection fails).
 ROOT="${E5_ROOT:-$HERE/../work/rootfs-build/rootfs}"
 D="$HERE/../out/debs-patched"
 install_patched() {  # <build-patched-debs.sh package> <binary packages...>
@@ -44,6 +46,7 @@ install_patched modemmanager modemmanager libmm-glib0 gir1.2-modemmanager-1.0
 install_patched phosh phosh phosh-common libphosh-0.45-0
 install_patched gnome-control-center gnome-control-center gnome-control-center-data
 install_patched gnome-calls gnome-calls
+install_patched bluez bluez libbluetooth3
 
 # The build tree is kept between builds and apt never removes a package that
 # stopped being asked for, so anything dropped from packages.list stays in the

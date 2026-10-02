@@ -42,6 +42,10 @@
 #       creating a NAT-sharing one, and never adds ipv4.method=shared to a port
 #   02  Modem Details shows the serving cell (band, channel, PCI, cell id,
 #       TAC, bandwidth, RSRP/RSRQ/SINR) and the neighbour cells
+#
+# bluez:
+#   01  larger SDP MTU for headphones which send replies larger than the
+#       default 672 bytes; otherwise pairing finishes but audio setup stalls
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG=${1:?package}

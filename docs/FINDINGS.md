@@ -5047,3 +5047,76 @@ were removed; the Mac's own route/service order was not changed. Existing
 computer leases need renewal/reconnection to receive the new gateway.
 After the Android comparison reboot, the Mac's real USB DHCP ACK also contained
 `router={192.168.9.1}`, confirming the fix for the actual gadget host MAC.
+
+## 57. Debian Bluetooth scanning and headset setup (2026-10-02)
+
+The user reported no scan results and then a pairing-code dialog/failing
+headset setup. This was two concrete issues, followed by a gap in the older
+SDP workaround. BlueZ, rfkill, btattach, GNOME Bluetooth and both unit-specific
+configuration payloads were installed; the controller had the factory address
+and manufacturer 0x01ec. Missing RF/pskey firmware was not the cause.
+
+### Vendor transport block restored after HCI attachment
+
+The vendor `bluetooth` rfkill was soft-blocked while hci0 was unblocked and
+BlueZ said Powered=yes. A saved platform switch value 1 was restored by
+systemd-rfkill after btattach had already configured the controller. The
+transport then dropped HCI commands because MARLIN_BLUETOOTH was physically
+off. btmon showed LE scan commands timing out and MGMT returning
+Authentication Failed (0x05), without a peer authentication exchange.
+Releasing the transport block and reattaching restored real scan results.
+
+`e5-bt-attach.service` now waits for systemd-rfkill and runs
+`/opt/e5/e5-bt-transport-ready` before attach. The helper releases only the
+vendor switch named bluetooth; it leaves hci0's logical switch and BlueZ
+preferences alone, and reports a hard block rather than ignoring it.
+
+A real reboot test deliberately put the old platform block value 1 back into
+its saved file. Journal ordering was restore at 08:56:10, helper release and
+attach at 08:56:11, then bluetoothd. All switches were unblocked, native pskey/
+RF/core-enable succeeded with the factory address, and no powered-off HCI
+drops or startup command timeouts appeared. Debian A and B have the new unit
+and helper. This validates the contradictory saved-state case, not every
+radio-off/on or autostart-disabled policy combination.
+
+### Bonding succeeded; SDP setup and reconnect needed fixes
+
+The user-selected Redmi Buds 6 Youth headset was Paired=yes/Bonded=yes even
+while GNOME Settings reported setup timeout and then AlreadyExists. It had
+stored a key; the failure did not establish a wrong pairing code. GNOME's
+standard agent advertises DisplayYesNo and can request local confirmation.
+The selected headset was trusted; global pairing confirmation was not disabled.
+
+The kernel dropped its 679-byte SDP response on a default 672-byte receive
+MTU. Debian had BlueZ 5.82-1.1, so the existing `bluez-01-sdp-large-mtu.patch`
+had never been installed by the Debian image builder. The builder now requires
+patched bluez/libbluetooth3 and holds them like its other E5 packages.
+
+Reconnection exposed a second path: src/profile.c opens profile-specific SDP
+searches with flags=0. Such a search can cache a 672-byte session before the
+device-wide browse requests SDP_LARGE_MTU; merely patching get_sdp_flags() was
+insufficient. New patch bluez-02 applies SDP_LARGE_MTU centrally in
+create_search_context(), so all new client sessions, including profile queries,
+use 1013 bytes before entering the cache. OpenWrt's build script also consumes
+this patch list, but its live image was not rebuilt in this session.
+
+Both patches applied and BlueZ built as 5.82-1.1+e5.2. On-device HCI capture
+then showed an explicit MTU 1013 offer, the full 679-byte reply and its
+continuation received, and ServicesResolved=yes. The headset connected,
+remained bonded/trusted, retained its name and appeared as a PipeWire audio
+output. No new L2CAP overflow appeared in the final connection window.
+The user confirmed their headset test worked before this additional reconnect
+fix. Both Debian slots now have bluez/libbluetooth3 +e5.2 on hold; their pairing
+stores remain separate. Userdata stayed read-only.
+
+Evidence is private under `work/bluetooth-debian-20261002/` and the similarly
+named health/build/boot/runtime logs in `work/`. Native Bluetooth service
+start is asynchronous; a connection issued immediately after restarting
+bluetoothd returned NotReady until adapter initialization completed. The
+successful checks waited for an available powered adapter.
+
+Remaining: the E5 cellular voice adapter routes only to receiver/speaker.
+Bluetooth media/HFP registration does not implement the CP-to-SCO call route;
+the user explicitly has not tested Bluetooth telephone audio. No call was
+initiated here. AVRCP also logged missing uinput; CONFIG_INPUT_UINPUT is not
+enabled in this kernel, so remote media-button handling needs separate work.

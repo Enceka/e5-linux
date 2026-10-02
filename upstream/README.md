@@ -45,10 +45,12 @@ Use a new Docker volume for a fresh Debian arm64 tree, and the release kernel
 without `e5.openwrt=`. `E5_MAINLINE=1` stages that build's full module set,
 including the 24 audio modules and WWAN port, instead of `out_linux`'s 5.15
 modules. The patched ModemManager, NetworkManager, Phosh (including its shared
-library) and Control Center packages must be present in `out/debs-patched/`.
+library), Control Center, Calls and BlueZ (with libbluetooth3) packages must be
+present in `out/debs-patched/`.
 The default image size is now 4 GiB, for a Debian A/B pair of 4 GiB each.
 
 ```sh
+rootfs/build-patched-debs.sh bluez
 E5_RELEASE=1 upstream/build.sh
 E5_MAINLINE=1 E5_IMG_MIB=4096 \
   E5_ROOTFS_VOLUME=e5-debian-fresh-<date> \
@@ -61,8 +63,10 @@ E5_MAINLINE=1 E5_IMG_MIB=4096 \
 The three path variables are relative to the repository. The Android subset
 and firmware come from this device; images including them are private build
 outputs. `callaudiod` is explicitly installed for Calls, and `grim` for desktop
-checks. This prepares the userspace for voice research; it does not implement
-the Unisoc CP voice route.
+checks. The E5 CallAudio adapter implements the hostless CP voice route to the
+receiver/speaker. Bluetooth cellular-call SCO routing remains separate work.
+BlueZ's E5 patches are required for headsets with oversized SDP replies, both
+when pairing and when a profile search opens the cached session on reconnect.
 
 `rootfs/device-install-sd.sh URL RAW_SHA256 KERNEL_RELEASE` runs from an
 existing SD OpenWrt installation. It adds `e5boot` (32 MiB) and `debian-a` /

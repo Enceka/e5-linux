@@ -20,3 +20,7 @@
 # the mapping when the keypad device appears.
 evdev:input:b0000v0000p0000e0000*
  KEYBOARD_KEY_8=kpenter
+ # Matrix row 0, column 4 is the physical # key. Keep it explicit because
+ # the keypad driver otherwise exposes the raw numeric-pound code without a
+ # desktop key name that Calls/GTK consistently consumes.
+ KEYBOARD_KEY_4=numericpound

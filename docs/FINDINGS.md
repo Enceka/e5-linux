@@ -5334,3 +5334,32 @@ handover remain unfinished. No PSTN call was initiated, answered or ended.
 Evidence is under work/bluetooth-debian-20261002/user-test*, and the prototype
 is under work/voice-20261001/serve/bt-pw-user-test.py. The controller firmware,
 SD roots/registry and shared boot image were not modified.
+
+### Synchronized speech and software disconnect/reconnect result
+
+The user then replied “说过了” while the test was still running. The matching
+13:05–13:06 window contained pronounced speech-level changes, including peak
+23161/RMS 5888.8, followed by near-zero quiet intervals. hw:0,14 was RUNNING
+and hw:0,2 was closed. The recording client's link to the test source had
+already been checked explicitly, so this feedback validates the temporary
+headset microphone input rather than an internal-mic fallback.
+
+A software Bluetooth disconnect removed the headset transport. The test
+released the capture channel, removed its source and register probe, and
+PipeWire selected Internal Microphone. A subsequent 2-second internal-mic
+capture completed with rc=0 in 2.229 seconds, confirming the channel and DSP
+were usable afterward. Both capture PCMs were closed at completion.
+
+Disconnect produced an expected low-level arecord I/O error when SCO ended
+and a stale-device RPC diagnostic after BlueZ removed its device global.
+The prototype was adjusted to skip that RPC and profile selection when the
+device is gone. Its teardown had nevertheless completed; this was not a
+new DSP failure. Reconnecting succeeded with the bond/trust retained, and
+A2DP was explicitly restored afterward. Physical headset power-off, general
+automatic reconnect/capture policy and Bluetooth telephone audio are still
+unverified or unfinished. No call-control operation was performed.
+
+Evidence: user-speech-feedback.txt, user-test-disconnect.txt,
+user-test-reconnect.txt and user-test-media-restored.txt under the same
+private work directory. The interactive test has ended; no test microphone
+service remains active.

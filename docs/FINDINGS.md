@@ -5120,3 +5120,73 @@ Bluetooth media/HFP registration does not implement the CP-to-SCO call route;
 the user explicitly has not tested Bluetooth telephone audio. No call was
 initiated here. AVRCP also logged missing uinput; CONFIG_INPUT_UINPUT is not
 enabled in this kernel, so remote media-button handling needs separate work.
+
+## 58. Bluetooth headset microphone investigation: still no valid audio (2026-10-02)
+
+The user reported no headset microphone sound and provided spoken test
+feedback. The earlier scanning/bonding/SDP/media fixes remain verified; this
+investigation did not establish a working microphone or Bluetooth telephone
+audio. All PSTN calls continued to be user-operated.
+
+The 09:21 user call's E5 CallAudio log selected the receiver. The service has
+no Bluetooth CP/SCO route; S_VOICE_P_BT was off after the call. Thus a connected
+Bluetooth headset is not proof that the cellular audio uses it.
+
+PipeWire initially selected A2DP/SBC. It had a smart Bluetooth input proxy
+(`bluez_input.<address>`) as the default source; the initial commentary that
+the default was the internal mic was inaccurate. A2DP had no underlying
+microphone capture node. Selecting HFP/mSBC created an actual input, but an
+8-second 16 kHz recording produced 126265 samples, all zero. HCI showed a
+successful eSCO connection (60-byte packets, transparent air mode) with no
+received SCO payloads. A duplex test added silent playback: 1187 SCO TX
+packets, zero RX, and another all-zero recording. This is more than a missing
+desktop input selection or a pairing-code problem.
+
+### Bounded controller-mode probes, not a deployed firmware fix
+
+The unit's stock PSKey has g_sys_sco_transmit_mode=0. Its self-describing INI
+places this one-byte field at offset 76 in the 176-byte payload. Two volatile
+setup probes changed only that byte, retaining the full original blob:
+
+| Value | Observed result |
+|---|---|
+| 0 (original) | HFP link succeeds; no HCI SCO RX data; capture all zero |
+| 1 | SCO RX appears (1835 packets in one monitor); mSBC yields 240-byte all-zero payloads, CVSD 120-byte all-zero payloads; recordings/meter remain zero |
+| 2 | No SCO RX; recording remains zero |
+
+The probes do not define the undocumented field's semantics. Value 1 is not
+a verified HCI microphone fix merely because packets appeared. A 45-second
+numeric-only level meter also remained zero; no voice transcription was made.
+The stock blob was restored byte-for-byte and the controller reinitialized.
+
+The unit's own ODM image was read from its checked super metadata and
+extracted privately. In odm/lib64/libbt-vendor.so, the SCO_CFG operation
+invokes its success callback without sending a further HCI command; the
+SET_AUDIO_STATE operation returns -1. This did not support the hypothesis
+that the Linux setup had simply omitted an extra vendor SCO initialization
+command. No vendor library, radio firmware or modem NV was modified.
+
+### Stock DSP/IIS capture path also not working yet
+
+Android's audio XML selects IIS3 for Bluetooth, and FE_ST_CAPTURE_BTSCO_DSP
+for 48 kHz mono recording. On this kernel the FE is hw:0,14, scene 15/ADC2.
+Temporary mixer probes enabled its BT backend, IIS3 ADC port selection,
+16-bit input width and master controls while keeping the HFP link active.
+They returned `arecord: read error: Input/output error` with zero frames.
+Waiting for SCO, using the stock 960/1920-frame period/buffer and starting
+both hostless BT voice directions with the BTHS/WB profile did not restore
+capture. Every probe closed its streams and restored the previous controls.
+
+Pointer debugging showed a valid initial DMA buffer address af725000 and
+offset 0 repeatedly, with no forward movement. The earlier hypothesis of an
+invalid pointer being mistaken for a buffer offset was not established.
+The remaining work is the actual SCO-to-DSP/IIS input and capture/DMA path;
+the precise missing clock/routing/driver condition has not yet been isolated.
+It cannot be reported as solved by installing a utility package or selecting
+HFP alone.
+
+Final state: original PSKey value 0, A2DP playback restored, headset still
+paired/bonded/trusted/connected, voice and BT capture PCMs closed, pointer
+debug disabled and no active Call objects. Both Debian slots retain BlueZ
+5.82-1.1+e5.2 and the boot/rfkill fixes. Diagnostic logs and own-unit ODM
+extraction are private under work/bluetooth-debian-20261002*.

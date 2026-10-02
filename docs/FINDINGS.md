@@ -1042,6 +1042,8 @@ The fix is the ordinary one -- a udev/hwdb key remap, applied by udev's `keyboar
 builtin at device-add time, so it is in the kernel's scancode table and costs no
 latency at all:
 
+The keypad table also exposes the physical # key at matrix scancode 0x04. The image now declares `KEYBOARD_KEY_4=numericpound` explicitly so the dialer receives a stable numeric-pound key instead of relying on the raw numeric code.
+
     # rootfs/overlay/etc/udev/hwdb.d/61-e5-keypad.hwdb
     evdev:input:b0000v0000p0000e0000*
      KEYBOARD_KEY_8=kpenter

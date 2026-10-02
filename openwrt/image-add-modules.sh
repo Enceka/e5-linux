@@ -11,7 +11,7 @@ set -euo pipefail
 IN=$1 MODS=$2 OUT=$3
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
-zcat "$IN" > "$T/img"
+gzip -dc "$IN" > "$T/img"
 mkdir "$T/m"
 tar -xf "$MODS" -C "$T/m"
 rel=$(ls "$T/m/lib/modules")

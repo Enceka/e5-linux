@@ -69,7 +69,7 @@ image_files() {
     if [ -n "${E5_IMAGE_FROM:-}" ]; then
         # (the image itself: there is no rootfs tarball of it here)
         local d; d=$(mktemp -d)
-        zcat "$IMG" > "$d/img"
+        gzip -dc "$IMG" > "$d/img"
         mkdir "$d/r" && debugfs -R "rdump / $d/r" "$d/img" >/dev/null 2>&1
         (cd "$d/r" && find . | sed 's|^\./||')
         rm -rf "$d"

@@ -1,0 +1,15 @@
+[Unit]
+Description=E5 microphone capture and Bluetooth SCO routing
+Requires=pipewire.service
+After=pipewire.service wireplumber.service
+PartOf=pipewire.service
+ConditionPathExists=/opt/e5/e5-capture.py
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/e5/e5-capture.py
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=8
+
+[Install]
+WantedBy=default.target

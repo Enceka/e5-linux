@@ -115,6 +115,7 @@ bash "$HERE/e5-chroot.sh" '
     # DSP with no firmware).  Enabling fails softly when the unit is absent, and
     # the service itself refuses to start the DSP without the card registered.
     systemctl --root=/ enable e5-audio.service >/dev/null 2>&1 || echo "warn: e5-audio enable failed (no unit staged?)"
+    systemctl --global enable e5-capture.service >/dev/null 2>&1 || echo "warn: capture broker enable failed"
     systemctl --root=/ enable serial-getty@ttyGS0.service >/dev/null 2>&1 || echo "warn: getty enable failed"
     systemctl set-default graphical.target >/dev/null 2>&1 || true
     echo "enabled:"; ls /etc/systemd/system/graphical.target.wants/ /etc/systemd/system/multi-user.target.wants/ 2>/dev/null | head -30
@@ -151,7 +152,11 @@ if [ -n "${E5_MAINLINE:-}" ]; then
         mkdir -p "$ROOT/usr/lib/modules/$REL/$(dirname "$entry")"
         mv "$src" "$ROOT/usr/lib/modules/$REL/$entry"
     done
-    depmod -b "$ROOT" -e -F "$KOUT/System.map" "$REL"
+    if command -v depmod >/dev/null 2>&1; then
+        depmod -b "$ROOT" -e -F "$KOUT/System.map" "$REL"
+    else
+        python3 "$HERE/../boot/gen-modules-dep.py" "$ROOT/usr/lib/modules/$REL" > "$ROOT/usr/lib/modules/$REL/modules.dep"
+    fi
     echo "staged mainline modules for $REL"
 elif [ -d "$OL" ] && [ -f "$OL/include/generated/utsrelease.h" ]; then
     REL=$(sed -n 's/^#define UTS_RELEASE "\(.*\)"$/\1/p' "$OL/include/generated/utsrelease.h")

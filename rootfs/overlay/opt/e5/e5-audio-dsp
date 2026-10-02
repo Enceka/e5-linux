@@ -245,6 +245,9 @@ set_routes_amixer() {
 }
 
 set_routes() {
+    # Keep a declared, restorable IIS0 pinctrl state from the start.
+    # Android also keeps IIS0 on VBC IIS3 after Bluetooth is stopped.
+    amixer -q -c 0 cset name=SYS_IIS0 vbc_iis3 || return 1
     card=$(awk '/sprdphone/ {print $1; exit}' /proc/asound/cards 2>/dev/null)
     [ -n "$card" ] || { echo "no sprdphone card" >&2; return 1; }
     if ! command -v alsaucm >/dev/null 2>&1; then

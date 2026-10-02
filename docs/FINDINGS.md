@@ -5123,6 +5123,10 @@ enabled in this kernel, so remote media-button handling needs separate work.
 
 ## 58. Bluetooth headset microphone investigation: still no valid audio (2026-10-02)
 
+This was the initial investigation result. The subsequent controlled PCM
+tests in §59 identify two missing operations and obtain nonzero audio; the
+normal desktop input and Bluetooth cellular-call route are still unfinished.
+
 The user reported no headset microphone sound and provided spoken test
 feedback. The earlier scanning/bonding/SDP/media fixes remain verified; this
 investigation did not establish a working microphone or Bluetooth telephone
@@ -5190,3 +5194,102 @@ paired/bonded/trusted/connected, voice and BT capture PCMs closed, pointer
 debug disabled and no active Call objects. Both Debian slots retain BlueZ
 5.82-1.1+e5.2 and the boot/rfkill fixes. Diagnostic logs and own-unit ODM
 extraction are private under work/bluetooth-debian-20261002*.
+
+## 59. Bluetooth SCO PCM input: missing IIS matrix and post-open SRC setup (2026-10-02)
+
+Continued investigation obtained nonzero samples through the stock Bluetooth
+DSP capture front end. This is a working, bounded PCM experiment, not yet a
+deployed default desktop microphone or Bluetooth cellular-call implementation.
+The controller retained its original PSKey throughout these tests; no PSTN
+call was placed, answered or ended by the tooling.
+
+### The ALSA SYS_IIS control was reporting a switch that never happened
+
+The unit's route XML selects `SYS_IIS0=vbc_iis3` for both bt_sco and bt_mic.
+The running mainline kernel has CONFIG_PINCTRL unset, so the pinctrl consumer
+functions compile to successful no-ops. `sys_iis_sel_put()` updated its cache
+and reported success while the physical matrix stayed unchanged. This was
+missing from the earlier VBC-only routing experiments.
+
+The unit's vendor pin table identifies IIS_INF0_SYS_SEL as control register 5,
+bits 4:0, in the QogirN6Lite pin controller. Its live DT translates the base
+to 0x642e0000 and declares value 11 for vbc_iis3_0. A temporary module checked
+the compatible/resource, mapped only this register, saved the original field
+and restored that field on unload without overwriting neighboring bits.
+It allowed only the two selections declared by this unit's IIS0 states.
+
+The actual register changed from 0x02904080 to 0x0290408b and back. Controlled
+capture with the original selection 0 still failed with EIO and yielded no
+samples; selection 11 produced nonzero PCM. The stock mode-0 controller thus
+does have a working PCM input path, even though PipeWire's ordinary HCI SCO
+source remains silent. AP capture hw:0,17 still timed out and is not the
+validated input.
+
+Read-only MCDT status also showed ADC4 write and read positions advancing,
+with DMA request 14 and the configured 320-word watermark. A larger capture
+buffer exposed the movement that the earlier short EIO probes missed. This
+does not require an invalid-pointer workaround or a speculative DMA patch.
+
+### BT SRC must be applied again after the capture scene starts
+
+With the IIS matrix corrected, requesting 96000 mono S16 frames at 48 kHz
+took about 6.096 seconds on mSBC. A request at 16 kHz was similarly slow.
+Internal DSP microphone capture still completed its 2-second/48-kHz test in
+about 2.15 seconds, so this was specific to the Bluetooth scene.
+
+The existing local HAL reference opens the input PCM before its final device
+selection, which reapplies VBC_SRC_BT_DAC and VBC_SRC_BT_ADC. Reapplying those
+controls after the experimental PCM reached RUNNING corrected the timing:
+
+| Codec | BT SRC reapplied | Captured frames/rate | Measured wall time |
+|---|---|---|---|
+| mSBC | 16000 | 96000 / 48000 Hz | 2.070 s |
+| CVSD | 8000 | 96000 / 48000 Hz | 2.067 s |
+
+Both completed normally with nonzero samples. Setting BT SRC or ADC2 SRC
+only before opening the PCM did not correct the timing. A permanent capture
+route needs this ordering on every new scene; declaring a different sample
+rate for the incorrectly timed data is not the final solution.
+
+A temporary PipeWire source fed the corrected 48-kHz PCM into pw-cat and
+resampled normally for a 16-kHz recording client. The final 9-second bounded
+test returned 143331 frames with nonzero data and no overrun. An earlier
+prototype waited two seconds before attaching its client and overran; the
+final prototype waits for node registration and attaches immediately.
+The virtual source was removed afterward. The default BlueZ input proxy has
+not been redirected to this path. The live numeric meter showed large level
+changes, but the user's spoken-test reply arrived after its bounded window;
+do not describe that as a synchronized speech validation of the final bridge.
+
+WirePlumber's intended hardware SCO integration uses platform routing with
+its offload loopback nodes; the relevant primary reference is its
+[0.5.8 BlueZ monitor](https://raw.githubusercontent.com/PipeWire/wireplumber/0.5.8/src/scripts/monitors/bluez.lua)
+and [platform example](https://raw.githubusercontent.com/PipeWire/wireplumber/0.5.8/tests/examples/bt-pinephone.lua).
+That integration, playback/CP routing and transitions back to media remain
+separate from the successful local capture experiment.
+
+### Kernel commits and deployment boundary
+
+The kernel repository now has three separate commits:
+
+* `459f49dd3`: wider control-index packing and per-SoC pad offsets/pull layout,
+  preserving the existing SC9860 probe behavior.
+* `94822e4e0`: the GPL QogirN6Lite pin/matrix table from the local vendor tree.
+* `d7484f958`: SYS_IIS rejects disabled pinctrl, propagates lookup/selection
+  errors and updates its cache only after a successful switch.
+
+A full Image/modules build enabled QogirN6Lite and also compiled SC9860;
+the VBC object separately compiled with the original PINCTRL-disabled config.
+The clean committed candidate is 6.18.54-e5-00067-gd7484f958a3f, retained with
+its config and modules under out/bluetooth-pinctrl-20261002. It has not been
+booted or deployed to the shared SD kernel. The live release remains
+6.18.54-e5-00064-gc1bb703f034c, and the normal build config still leaves
+pinctrl disabled pending that boot validation. Existing SD roots, registry
+and userdata were not changed.
+
+Evidence and temporary probe sources are private under
+work/bluetooth-debian-20261002; HTTP-served Python probes are under
+work/voice-20261001/serve. Tests restored mixer state, unloaded the register
+probe and closed their PCMs. Final cleanup restores A2DP and removes temporary
+audio recordings. No controller mode change or experimental background
+capture service is a deployed fix.

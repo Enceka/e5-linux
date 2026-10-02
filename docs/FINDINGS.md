@@ -5365,3 +5365,33 @@ Evidence: user-speech-feedback.txt, user-test-disconnect.txt,
 user-test-reconnect.txt and user-test-media-restored.txt under the same
 private work directory. The interactive test has ended; no test microphone
 service remains active.
+
+## 61. SCO switching release bundle (2026-10-02)
+
+The capture ownership fix is now in the mainline kernel commits `af3bdc64e`
+and `20f1a47fc`. The latter rejects a competing DSP capture scene before
+firmware startup; the former clears stale FE DMA ownership after failed setup.
+The release build is `6.18.54-e5-00069-g20f1a47fc2cb`, with QogirN6Lite
+pinctrl enabled so `SYS_IIS0=vbc_iis3` performs a physical matrix switch.
+
+Debian’s rootfs now contains an exclusive per-user capture broker. It publishes
+one `e5_microphone` source through PipeWire, opens the internal or HFP SCO FE
+only while a client is using that source, takes the BlueZ SCO offload lease for
+HFP, reapplies the negotiated BT SRC after the PCM reaches RUNNING, and releases
+the old FE before switching. The internal ALSA microphone node is disabled from
+the desktop graph to prevent two clients from claiming MCDT ADC4. CallAudio
+remains the CP voice adapter and does not silently route cellular calls through
+Bluetooth.
+
+The one-click SD test package is private at
+`out/e5-debian-sco-switch-20261002.tar.gz` (913 MiB). `flash-sd.sh` selects the
+existing OpenWrt slot, serves the 4 GiB Debian image and shared boot image over
+the USB LAN, runs the installer’s GPT/free-space/checksum preflight, registers
+Debian A/B, flashes `boot_b`, and arms one trial boot. It never formats an
+existing registered card and does not initiate a phone call. The package
+contains the new kernel release, boot image, compressed rootfs, registry tools,
+and SHA-256 manifest.
+
+The UFI-TOOLS main repository has separate commits removing both TG group and
+TG channel links and replacing the external donation QR with the user-provided
+`donate.jpg` byte-for-byte. The mirrored Debian overlay carries the same assets.

@@ -1,0 +1,52 @@
+#!/bin/sh
+set -eu
+URL=${1:?base URL} EXPECT=${2:?raw rootfs sha256} SIZE=${3:?unpacked bytes}
+RELEASE=${4:?kernel release} BOOT_SHA=${5:?boot sha256}
+BOOT_URL=${6:-$URL/boot.img} MISC_URL=${7:-$URL/boot.misc-slot-b-trial.bin}
+case "$EXPECT$BOOT_SHA" in *[!a-f0-9]*) exit 2 ;; esac
+[ "${#EXPECT}" = 64 ] && [ "${#BOOT_SHA}" = 64 ] || exit 2
+ROOTDEV=$(findmnt -n -o SOURCE / 2>/dev/null || awk '$2=="/"{print $1}' /proc/mounts)
+case "$ROOTDEV" in /dev/mmcblk*p*) ;; *) echo "root is not an SD partition" >&2; exit 1 ;; esac
+DISK=${ROOTDEV%p*} CURRENT=${ROOTDEV##*p}
+META=/mnt/e5-boot; META_MOUNTED=0
+if [ ! -f "$META/format" ]; then
+    mkdir -p "$META"
+    for u in /sys/class/block/mmcblk*p*/uevent; do
+        [ "$(sed -n 's/^PARTNAME=//p' "$u")" = e5boot ] || continue
+        mount -t ext4 -o rw,noatime "/dev/$(basename "$(dirname "$u")")" "$META"
+        META_MOUNTED=1; break
+    done
+fi
+[ -f "$META/format" ] && [ "$(cat "$META/format")" = 1 ] || { echo "registered SD metadata unavailable" >&2; exit 1; }
+[ "$(cat "$META/default")" = debian ] || { echo "Debian is not the selected SD system" >&2; exit 1; }
+T=/run/e5-debian-update; mkdir -p "$T/root" "$T/target"
+cleanup() { umount "$T/root" 2>/dev/null || :; umount "$T/target" 2>/dev/null || :; [ "$META_MOUNTED" = 1 ] && umount "$META" 2>/dev/null || :; rm -rf "$T"; }
+trap cleanup EXIT
+target= target_gen=
+for p in "$DISK"p*; do
+    [ -b "$p" ] && [ "${p##*p}" != "$CURRENT" ] || continue
+    umount "$T/root" 2>/dev/null || :
+    mount -t ext4 -o ro,noload "$p" "$T/root" 2>/dev/null || continue
+    [ "$(cat "$T/root/etc/e5/sd-system" 2>/dev/null || :)" = debian ] || { umount "$T/root"; continue; }
+    g=$(cat "$T/root/etc/e5/sd-gen" 2>/dev/null || echo 0); case "$g" in ''|*[!0-9]*) g=0 ;; esac
+    [ -n "$target" ] && [ "$g" -ge "$target_gen" ] || { target=$p; target_gen=$g; }
+    umount "$T/root"
+done
+[ -n "$target" ] || { echo "no inactive Debian slot" >&2; exit 1; }
+g=$(cat /etc/e5/sd-gen 2>/dev/null || echo 0); case "$g" in ''|*[!0-9]*) g=0 ;; esac
+next=$((g + 1)); [ "$next" -gt "$target_gen" ] || next=$((target_gen + 1))
+blocks=$(blockdev --getsize64 "$target"); [ "$blocks" -ge "$SIZE" ] || exit 1
+echo "== Debian update: $ROOTDEV -> $target, generation $next"
+wget -q -O - "$URL/rootfs.ext4.gz" | gzip -dc | dd of="$target" bs=4M conv=fsync status=progress
+got=$(dd if="$target" bs=4M count=$((SIZE / 4194304)) 2>/dev/null | sha256sum | cut -d' ' -f1)
+[ "$got" = "$EXPECT" ] || { echo "root image hash mismatch: $got" >&2; exit 1; }
+mount -t ext4 -o rw,noatime "$target" "$T/target"
+[ -f "$T/target/etc/debian_version" ] && [ -x "$T/target/sbin/init" ] && [ -d "$T/target/usr/lib/modules/$RELEASE/audio" ] || exit 1
+mkdir -p "$T/target/etc/e5"; printf 'debian-sd updated %s\n' "$next" > "$T/target/etc/e5/sd-root"
+echo debian > "$T/target/etc/e5/sd-system"; echo "$next" > "$T/target/etc/e5/sd-gen"; echo 1 > "$T/target/etc/e5/sd-trial"; sync; umount "$T/target"
+wget -q -O "$T/boot.img" "$BOOT_URL"; [ "$(sha256sum "$T/boot.img" | cut -d' ' -f1)" = "$BOOT_SHA" ] || exit 1
+dd if="$T/boot.img" of=/dev/block/by-name/boot_b bs=4M conv=fsync
+[ "$(sha256sum /dev/block/by-name/boot_b | cut -d' ' -f1)" = "$BOOT_SHA" ] || exit 1
+wget -q -O "$T/misc.bin" "$MISC_URL"; dd if="$T/misc.bin" of=/dev/block/by-name/misc bs=1 seek=2048 conv=notrunc
+printf '%s\n' "$RELEASE" > "$META/kernel-release"; printf '%s\n' debian > "$META/default"; rm -f "$META/next"; sync
+echo "DEBIAN-UPDATE-READY; reboot to trial slot $target"

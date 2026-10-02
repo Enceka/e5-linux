@@ -15,7 +15,7 @@ gzip -dc "$IN" > "$T/img"
 mkdir "$T/m"
 tar -xf "$MODS" -C "$T/m"
 rel=$(ls "$T/m/lib/modules")
-[ "$(echo "$rel" | wc -l)" = 1 ] || { echo "$MODS: not one release: $rel" >&2; exit 1; }
+[ "$(printf '%s\n' "$rel" | wc -l | tr -d ' ')" = 1 ] || { echo "$MODS: not one release: $rel" >&2; exit 1; }
 if debugfs -R "stat /lib/modules/$rel" "$T/img" 2>/dev/null | grep -q '^Inode:'; then
     echo "the image has /lib/modules/$rel already" >&2; exit 1
 fi

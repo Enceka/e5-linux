@@ -1,0 +1,19 @@
+#!/bin/sh
+# The vendor tty has a chip-level rfkill in addition to hci0's logical switch.
+# Restore rfkill first, then allow this transport to power/configure the core.
+# hci0's saved block and BlueZ Powered preference remain under desktop control.
+set -eu
+for entry in /sys/class/rfkill/rfkill*; do
+    [ -r "$entry/name" ] || continue
+    [ "$(cat "$entry/name")" = bluetooth ] || continue
+    [ "$(cat "$entry/type")" = bluetooth ] || continue
+    if [ "$(cat "$entry/hard")" != 0 ]; then
+        echo "E5 Bluetooth transport is hardware blocked: $entry" >&2
+        exit 1
+    fi
+    if [ "$(cat "$entry/soft")" != 0 ]; then
+        echo "E5 Bluetooth: releasing the vendor transport block before HCI attach"
+        /usr/sbin/rfkill unblock "${entry##*rfkill}"
+    fi
+    [ "$(cat "$entry/soft")" = 0 ] || { echo "E5 Bluetooth transport remains blocked" >&2; exit 1; }
+done

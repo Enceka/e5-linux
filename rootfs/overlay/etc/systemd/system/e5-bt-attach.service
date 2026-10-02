@@ -1,6 +1,7 @@
 [Unit]
 Description=E5 Bluetooth: attach the WCN controller on /dev/ttyBT0
-After=e5-vendor.service
+Wants=systemd-rfkill.service
+After=e5-vendor.service systemd-rfkill.service
 # Stopped after bluetoothd, never alongside it: bluetoothd powers the adapter
 # off on its way out, and that power-off is when the kernel sends the BT core
 # its disable (btsprd, kernel/patches/0021).  Killed first, btattach closed
@@ -15,6 +16,7 @@ ConditionPathExists=/dev/ttyBT0
 
 [Service]
 Type=simple
+ExecStartPre=/opt/e5/e5-bt-transport-ready
 # Opening the tty is what powers MARLIN_BLUETOOTH on (mtty_open -> start_marlin),
 # so btattach has to stay in the foreground and stay alive: it holds the HCI
 # line discipline on the tty for as long as the controller exists.

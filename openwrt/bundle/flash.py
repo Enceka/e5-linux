@@ -793,6 +793,10 @@ if [ -f /etc/e5/sd-root ]; then
     # (FINDINGS 49)
     wget -q -O e5-gpt {u}/e5-gpt
     E5_IMAGE_SIZE={gz_usize(os.path.join(F, "openwrt.ext4.gz"))} sh dii.sh {u}/openwrt.ext4.gz
+    # Updating OpenWrt is an explicit operator choice; make it the persistent
+    # SD default after the new slot has verified, rather than leaving Debian
+    # selected from an earlier multi-system session.
+    e5-os openwrt
 else
     # the form on userdata (--data, kept for tests)
     sh dii.sh {u}/openwrt.ext4.gz

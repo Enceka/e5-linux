@@ -5293,3 +5293,44 @@ work/voice-20261001/serve. Tests restored mixer state, unloaded the register
 probe and closed their PCMs. Final cleanup restores A2DP and removes temporary
 audio recordings. No controller mode change or experimental background
 capture service is a deployed fix.
+
+## 60. Connection-switch testing needs exclusive microphone capture (2026-10-02)
+
+The requested behavior is routing that follows headset connection/use and
+returns to the device afterward, rather than permanently choosing Bluetooth.
+Preparing an interactive test exposed another integration requirement:
+FE_ST_CAPTURE_DSP (internal microphone, hw:0,2) and
+FE_ST_CAPTURE_BTSCO_DSP (hw:0,14) both use MCDT_CHAN4. The vendor FE header
+explicitly declares this sharing. GNOME Settings had multiple live capture
+streams and held the internal PCM open when Bluetooth capture was attempted.
+That attempt failed hw_params, followed by a DSP error with dsp_ready=0.
+Recovery was followed by a reboot; its precise reboot cause was not captured.
+The device returned to the existing 00064 kernel and audio service.
+
+A switching implementation must release the previous physical capture before
+opening the next scene. A successful virtual recording alone is insufficient:
+a client can fall back to the internal microphone when its target disappears.
+The temporary interactive test therefore checks that hw:0,2 is closed before
+opening hw:0,14 and stops on a failed recorder. It holds the headset SCO
+transport through Bluetooth offload acquisition instead of a recording of
+the smart BlueZ proxy that could activate the internal source. It reapplies
+BT SRC after the actual PCM is RUNNING.
+
+The recovered test showed hw:0,2 closed, hw:0,14 RUNNING with its pointer
+advancing, and the recording client's link explicitly connected to
+`E5 蓝牙耳机麦克风测试`. Numeric levels included peak 6738/RMS 1297.45;
+there was no concurrent internal-mic stream. This is stronger input-source
+evidence than merely seeing nonzero data from a recording client.
+
+The private bt-pw-user-test.py is a 15-minute test, not an installed service.
+It temporarily selects its input, watches disconnection/call objects, and
+restores the prior input preference only while its own preference is still
+selected. Cleanup frees the physical capture and restores mixers before
+removing the published source or moving clients back to the internal mic.
+Speech feedback and physical disconnection recovery are requested from the
+user. General reconnect policy, capture arbitration and cellular-call
+handover remain unfinished. No PSTN call was initiated, answered or ended.
+
+Evidence is under work/bluetooth-debian-20261002/user-test*, and the prototype
+is under work/voice-20261001/serve/bt-pw-user-test.py. The controller firmware,
+SD roots/registry and shared boot image were not modified.

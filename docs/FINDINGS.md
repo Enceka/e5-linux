@@ -4946,6 +4946,67 @@ filtered `recent-two-calls-relevant.txt`, full kernel/system logs and final
 health checks. The review made no audio, modem or kernel changes. Receiver
 startup timeout and CGEV parsing are tracked as follow-up fixes.
 
+### 55.7 Receiver readiness: healthy after startup, early polling times out (2026-10-02)
+
+The requested receiver investigation compared the original Android capture,
+the vendor 5.15 source and the mainline port. Stock Android's audible call
+also logged `ear_switch_event check rcv dvld failed, -110` twice, with
+ANA_STS1=0 and masks 0x400/0x2. It also logged failed initial FDIN polling.
+The relevant polling/event code is unchanged by the mainline port; the
+failure is not unique to Debian.
+
+`tools/e5-receiver-check.py` was added as a read-only on-device capture tool.
+It reads the actual analog register values, decodes receiver enable/clock/
+depop/valid bits, saves PCM/DAPM state and follows only the properties of
+user-created calls. It never controls calls, changes mixers, opens streams
+or consumes the voice notification pipe. Register-offset parsing and missing
+dump rejection were checked, then the tool ran successfully on the device.
+Register dumps are sequential, not atomic during a route transition.
+
+The user manually called 10099 at 08:26 and confirmed audible output.
+Snapshots showed ANA_STS1=0x403 on the receiver, with RCV_DCCAL_DVLD,
+RCV_LOOP_DVLD and RCV_DAC_FDIN_DVLD all set, SDAHPL_RCV selected, RCV_EN,
+DIG_CLK_RCV_EN and RCV_DPOP_EN set, and both voice PCMs RUNNING. Speaker
+selection cleared the receiver route/enable/valid bits; returning to receiver
+restored them. Ending the call cleared receiver enable/clock/depop/valid
+state and closed both PCMs. Evidence: `receiver-register-check/` and
+`receiver-register-call.txt` under private `work/voice-20261001/`.
+
+Two local probes (no modem action) narrowed the startup sequence further:
+
+| Stage | ANA_STS1 | Meaning |
+|---|---|---|
+| Routes selected, no PCM | 0x000 | receiver inactive |
+| Playback PCM prepared | 0x000 | enable/depop on, status still settling |
+| Both PCMs prepared | 0x402 | receiver calibration/loop valid, no FDIN yet |
+| Playback PCM started | 0x403 | calibration/loop/data valid |
+| Both started, parameters applied, unmuted | 0x403 | all three valid |
+| Stopped | 0x000 | receiver inactive |
+
+The complete-start and live-switch probe sampled ten settled receiver states;
+all were 0x403. Both probes verified exact mixer-control restoration. The
+stage reads add small delays, so they establish ordering, not a measured
+minimum hardware calibration time.
+
+The code checks FDIN in SDAHPL_RCV PRE_PMU (subsequence 102), before EAR
+Switch (109) enables RCV_EN and before playback PCM trigger. It waits about
+100 ms for a data-valid condition that is not ready at that stage. EAR Switch
+then enables the receiver and waits only 4 ms for calibration/loop readiness.
+Both conditions subsequently become valid, as the snapshots demonstrate.
+The concrete issue is premature startup status checking; this evidence does
+not show a receiver that remains uncalibrated or fails to power down.
+
+No kernel workaround was deployed or timeout hidden. A driver correction
+still needs to place data-valid checking after the data path starts and use
+an appropriate bounded calibration wait, then be tested for receiver/speaker
+switching and shutdown. Changing a single DAPM event or increasing a timeout
+without preserving that sequence would not establish the fix.
+
+A separate new WARN at 08:25:11 came from `sprd_dpu_stop` calling
+`cancel_work_sync` during display blanking (phoc), before this call. Its trace
+does not involve the receiver capture or codec; it is saved in
+`receiver-warning-and-sequence.txt` and remains a display-driver follow-up.
+
 ## 56. Installer diagnostics, SD capacity preflight and USB IPv4 (2026-10-02)
 
 The generic "the card does not hold the image..." error hid failures earlier

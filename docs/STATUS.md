@@ -19,7 +19,7 @@ userdata 保持只读。构建和多系统验证见 FINDINGS §54。
 |---|---|---|
 | R1 | 信息屏“恢复默认频段” | 仍把 NR 解锁，而本机实测解锁可触发 CP assert；需确定设备默认值或取消此操作。FINDINGS 47.2 |
 | R2 | 信息屏新版发布 | 设备和更新包升至 1.3.0；概览更新浮窗已验证，公开版本仍为 1.2.0，新版待发布 |
-| R3 | 听筒上电校准超时 | 两通实测中 EAR Switch PRE_PMU 出现 3 次 `rcv dvld failed, -110`，后端虽正常启动且下行有声，硬件状态等待超时仍须查因。FINDINGS 55.6 |
+| R3 | 听筒上电检测时序 | 原厂 Android 同样超时。分阶段实测：准备后状态从 0 到 0x402，启动后 0x403，听筒有声且挂断状态清零。FDIN 检测早于 RCV_EN/PCM trigger，校准/loop 检测仅等 4 ms；需要调整驱动检测阶段及等待时序，尚未部署内核修复。FINDINGS 55.7 |
 | R4 | ModemManager CGEV 解析 | 通话中 `NW ACT 11,17` / `11,18` 共 4 条无法解析警告；通话状态正常，需补网络上下文激活事件格式支持。FINDINGS 55.6 |
 
 ## 待验证
@@ -39,6 +39,6 @@ userdata 保持只读。构建和多系统验证见 FINDINGS §54。
 |---|---|---|
 | D1 | SD 多系统后续 | OpenWrt + Debian 双 A/B、选择和回退已验证；Debian 自动更新、已注册卡迁移、注册表/GPT 中断恢复及真实失败启动/断电验证待做。`openwrt/MULTIBOOT.md`，FINDINGS 54 |
 | D2 | userdata F2FS 根因 | 五次损坏的根因未定位；SD 只读规避已完成，耐久性及新建 F2FS 测试已结束。后续根因研究延期。FINDINGS 48 |
-| D3 | 历史驱动异常 | AGCP 访问丢失、非主用 AP capture 停滞、音频路由/稳压器警告、DPU blank 警告、热点速率声明；触发条件或根因尚未确认。FINDINGS 24/32/34/38、51 |
+| D3 | 历史驱动异常 | AGCP 访问丢失、非主用 AP capture 停滞、音频路由/稳压器警告、DPU blank 警告（新增 sprd_dpu_stop/cancel_work_sync WARN）、热点速率声明；触发条件或根因尚未确认。FINDINGS 24/32/34/38、51、55.7 |
 | D4 | 主线增强项 | pinctrl、DPU/GPU 调频、GSP、USB/UART/JTAG pin mux、cpufreq 与系统挂起，尚未完成 |
 | D5 | 电话语音链路后续 | Android 对照和 Debian 扬声器、默认听筒下行均已用户实听确认；两通新增通话记录 WB 参数及实际免提切换成功，挂断恢复正常。上行延期；各次切换实听未单独区分，SWB/FB、音量键、耳机及来电场景仍未验证。Calls 另有高度 593/553 px 溢出警告。按键和 0.8 缩放已通过。实际拨号仍由用户操作。FINDINGS 55.3–55.6 |

@@ -1,0 +1,16 @@
+--- a/src/sdp-client.c
++++ b/src/sdp-client.c
+@@ -301,6 +301,13 @@ static int create_search_context(struct search_context **ctxt,
+ 	if (!ctxt)
+ 		return -EINVAL;
+ 
++	/* Profile-specific searches (e.g. Handsfree on reconnect) pass flags=0
++	 * and may populate the session cache before the device-wide browse.
++	 * Give every new SDP client socket the headset-compatible MTU, so a
++	 * cached profile socket cannot leave subsequent browsing at 672 bytes.
++	 */
++	flags |= SDP_LARGE_MTU;
++
+ 	s = get_cached_sdp_session(src, dst);
+ 	if (!s)
+ 		s = sdp_connect(src, dst, SDP_NON_BLOCKING | flags);

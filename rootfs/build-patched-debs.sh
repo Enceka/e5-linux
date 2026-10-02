@@ -46,6 +46,8 @@
 # bluez:
 #   01  larger SDP MTU for headphones which send replies larger than the
 #       default 672 bytes; otherwise pairing finishes but audio setup stalls
+#   02  apply it to profile-specific searches too, including cached sessions
+#       opened before the device-wide browse during reconnection
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG=${1:?package}

@@ -4893,6 +4893,59 @@ were stopped, ModemManager logging returned to INFO, and both voice PCMs
 were closed. The actual CallAudio service remains available for normal use.
 No failed systemd units were reported. Uplink is still explicitly deferred.
 
+### 55.6 Two further calls: successful audio lifecycle, receiver warnings (2026-10-02)
+
+The user made two more calls and reported hearing the other end in a phone
+recording. After USB was reconnected, the same Debian boot was still running
+(uptime over six hours); no call was initiated by the assistant. Journal windows:
+
+| Call | Dialing | Active | Terminated | Audio cleanup |
+|---|---|---|---|---|
+| modem0/call2 | 08:08:43 | 08:08:50 | 08:09:07 (reason unknown) | VOICE-STOPPED 08:09:07.505 |
+| modem0/call3 | 08:09:34 | 08:09:43 | 08:09:54 (local hangup) | VOICE-STOPPED 08:09:55.029 |
+
+Both audio sessions started the two hostless PCMs and explicitly unmuted.
+Both negotiated DSP bandwidth 1 (WB): receiver profile 0x02020005 and speaker
+0x09090005 were applied. Speaker/receiver requests completed with no adapter
+traceback, failed operation, DSP assert/timeout or kernel panic/oops in the
+examined logs. The first call switched receiver -> speaker -> receiver ->
+speaker; the second switched receiver -> speaker. The user's recording result
+does not by itself establish uplink quality or acoustic verification of each
+individual switch. After both calls, no Call objects remained, both PCMs were
+closed, and prior mixer/profile state had been restored. PipeWire and
+WirePlumber were active; the modem remained connected and registered on 5G NR.
+
+The review did find unresolved errors:
+
+* `ear_switch_event check rcv dvld failed, -110` and the paired DAPM
+  `PRE_PMU: EAR Switch event failed` appeared at 08:08:44, 08:08:46 and 08:09:35.
+  The codec's receiver startup polls ANA_STS1 for the RCV calibration/loop
+  valid bits with a 4 ms timeout. This affected startup and switching back to
+  the receiver; the adapter's successful ALSA start does not eliminate this
+  hardware warning. Its cause and effect on reliability remain unresolved.
+* Four ModemManager warnings could not parse `+CGEV: NW ACT 11,17` / `11,18`.
+  Calls still reached active/terminated normally. These are network-context
+  activation notifications and a modem-event parser gap, not failed dial
+  requests. Subsequent context deactivation notifications were handled.
+* Calls logged four layout warnings at 08:11:39–08:11:57: requested height
+  593 px versus 553 px available. Layout remains too tall in that view even
+  with output scale 0.8.
+* Recurring charger-manager read/enable/property errors (-22) continued in
+  the wider log window. At review time the charger reported Charging, the
+  battery Full and USB online; this does not resolve the driver's errors.
+  One SIPA send/overflow event at 08:09:22 occurred between the calls, with
+  no subsequent ModemManager disconnect in the checked window.
+* The user session's xdg-document-portal was failed because FUSE was missing
+  at 02:08:13 boot startup. This predates the two calls and is separate from
+  the active PipeWire/WirePlumber services. Root login session dependency
+  warnings during evidence collection are not evidence of the user's audio
+  session failing.
+
+Private evidence: `work/voice-20261001/recent-two-calls-window.txt`, the
+filtered `recent-two-calls-relevant.txt`, full kernel/system logs and final
+health checks. The review made no audio, modem or kernel changes. Receiver
+startup timeout and CGEV parsing are tracked as follow-up fixes.
+
 ## 56. Installer diagnostics, SD capacity preflight and USB IPv4 (2026-10-02)
 
 The generic "the card does not hold the image..." error hid failures earlier

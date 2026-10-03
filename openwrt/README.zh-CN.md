@@ -65,10 +65,10 @@ E5 另外需要的东西在 `overlay/` 里：
 
 ## 构建
 
-当前维护的 SD 卡安装会把更新写入另一个系统分区，再试启动并确认。
-常规更新在两份根文件系统间轮换；只有旧分区装不下新镜像时才另建更大的分区。
-多系统计划共用一个内核，每个安装分别拥有自己的 A/B 分区和配置，方案见
-[`MULTIBOOT.md`](MULTIBOOT.md)，尚未实现。
+当前维护的 SD 卡安装会先检查完整布局，再把更新写入已注册的非活动根分区并试启动。
+当前布局可让 OpenWrt 与 Debian A/B 并存（`e5boot` 32 MiB，Debian 每个槽 4 GiB）；
+常规更新在根分区之间轮换，试启动失败会回滚。注册表和系统选择方式见
+[`MULTIBOOT.md`](MULTIBOOT.md)。
 
 自行安装 ttyd 时保留 `interface '@lan'`：本项目会按 netifd 的 LAN 主地址绑定，
 LAN 地址变化后自动重新绑定，不会选中桥上旧的救援地址。当前设备可通过
@@ -204,5 +204,5 @@ SSID、密码和信道，以及默认启动项。重装会保留 OpenWrt 的配�
   wlroots、weston、cage、cog、gtk 和 Mesa 的 panfrost，但没有 Phosh）。屏幕上运行的
   是信息屏：cage + cog 跑在 panfrost 上，状态页面可用触摸和键盘操作。它放在单独的
   仓库 `e5-infoscreen` 里，装在这棵系统树之上。
-* **蓝牙。** 没有启动 `btattach`，BT 核心保持关闭（从内核 `0026` 起不会影响 Wi-Fi）。
-* **音频、带声音的通话。** 和 Debian 一样，通话音频尚未解决；音频模块不加载。
+* **完整桌面。** 面板运行独立的信息屏，而不是 Phosh；OpenWrt 仍提供 LuCI、SSH 和电话
+  应用，可通过网络使用。

@@ -73,11 +73,11 @@ and the scripts the two systems share come from `rootfs/overlay/opt/e5`
 
 ## Build
 
-The maintained SD-card install updates the inactive root partition, then boots
-it as a trial. Routine updates alternate between two roots; an image that no
-inactive root can hold gets a larger partition. These are rollback roots for
-one system. The proposed multiple-system layout, with a shared kernel and an
-A/B pair per installation, is in [`MULTIBOOT.md`](MULTIBOOT.md).
+The maintained SD-card install checks the complete layout before writing, then
+updates the inactive registered root and boots it as a trial. The current layout
+can hold OpenWrt beside a Debian A/B pair (`e5boot` 32 MiB plus 4 GiB per Debian
+slot); routine updates alternate between the roots and failed trials roll back.
+The registry and selection details are in [`MULTIBOOT.md`](MULTIBOOT.md).
 
 On the host (Docker, arm64 -- native on Apple silicon):
 
@@ -207,7 +207,7 @@ The boot image must be one with the current `boot/init` (native13 or later).
 
 ## Status
 
-Verified on the device (2026-09-27, from a fresh install with `--try`):
+Verified on the device (2026-10-03, including the mainline 6.18 release bundle):
 
 | | |
 |---|---|
@@ -217,7 +217,7 @@ Verified on the device (2026-09-27, from a fresh install with `--try`):
 | WAN | `proto modemmanager`: IPv4 with the default route on `sipa_eth0`, NAT for the LAN; IPv6 on the device and, with the bearer's /64, on every LAN client (SLAAC, no NAT) |
 | hotspot | hostapd, 5 GHz ch149 / 80 MHz, WPA2-PSK with Debian's SSID and key; a phone joins and gets its lease |
 | management | telnet (USB port only), SSH, LuCI; `e5-os`, `e5-next-boot`, `e5-at` |
-| standalone | installed from Debian with `--try`: booted from `openwrt.ext4` (loop, 287 MB used), the configuration and traffic records of `/openwrt` kept, modem, WAN, hotspot and info screen up with the image's own firmware, vendor subset, modules and fonts; an update from inside it staged and swapped in at the next boot |
+| standalone | installed from Debian with `--try`: booted from `openwrt.ext4` (loop), kept the configuration and traffic records of `/openwrt`, and brought up modem, WAN, hotspot, Bluetooth, audio, info screen and Phone app; an update staged inside it swaps at the next boot |
 
 Not verified yet: LuCI's ModemManager pages, SMS from OpenWrt, `--switch` as
 the default for many boots.
@@ -229,7 +229,5 @@ the default for many boots.
   not Phosh).  The panel runs an info screen instead -- cage + cog on
   panfrost, status pages driven by touch and the keypad -- kept in its own
   repository, `e5-infoscreen`, and installed on top of this tree.
-* **Bluetooth.**  `btattach` is not started; the BT core stays off (which,
-  since kernel `0026`, cannot disturb Wi-Fi).
-* **Audio, calls with sound.**  As on Debian, call audio is open; the audio
-  modules are not loaded.
+* **A full desktop.** The panel runs the separate info screen rather than Phosh.
+  OpenWrt still provides LuCI, SSH and the Phone app over the network.

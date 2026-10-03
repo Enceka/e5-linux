@@ -13,6 +13,10 @@ initramfs——它建立 USB gadget，再切换到完整的 Linux 根文件系�
 本项目的补丁），由 `kernel/build-linux.sh` 在设备自带的 `e5_rongyue_defconfig` 基础上
 重新构建为通用 Linux 内核。
 
+当前版本另有独立的主线内核：来自 [`linux-lts-e5`](https://github.com/Enceka/linux-lts-e5)
+的 `e5-6.18` 分支，版本为 `6.18.54-e5-00069-g20f1a47fc2cb`。使用
+`E5_RELEASE=1` 和 `E5_MAINLINE=1` 构建时，Debian 镜像与 OpenWrt 刷入包使用该内核。
+
 > **警告。** 本项目会写入 `boot_b` 以及 `misc` 中的 32 字节，并依赖 bootloader 回退到
 > slot a。该机制是 mu300-linux 针对这一 bootloader 系列记录的行为，但**尚未**在本机型上
 > 验证。可能导致设备变砖或数据丢失。本项目与 Unisoc、荣悦均无关，也未获其认可。
@@ -65,15 +69,24 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 | 在 Linux 内重新设定 slot（`e5-boot-ok`） | ✅ 已验证，`misc` 逐字节比对 |
 | Linux 下触摸屏 | ✅ **可用**——`tlsc6x_touch` 位于 `event1`，udev 标记为 `ID_INPUT_TOUCHSCREEN=1`，phoc 接收其事件 |
 | Wi-Fi | ✅ **已在设备上验证**——WCN 芯片上的 `sprd_wlan_combo` + `wcn_bsp`，开箱即可扫描 2.4 GHz 与 5 GHz AP（需要 initramfs overlay 中的固件以及厂商的 *user* 构建变体）；docs/FINDINGS.md 第 8.5–8.6 节 |
-| 蓝牙 | ✅ 内核按厂商 HAL 的方式配置 marlin3 核心（经 `request_firmware` 发送 pskey/RF/启用，关闭 tty 前发送核心禁用）——出厂地址 `FC:B5:85:D0:85:9B`，可扫描、可连接；内核补丁 `0018`、`0021`，FINDINGS §33.3、§35。⏳ 音频 profile 未测试 |
+| 蓝牙 | ✅ 内核按厂商 HAL 的方式配置 marlin3 核心，设备可以扫描、配对并重新连接耳机；OpenWrt 的 A2DP 输出和 BlueZ SDP 服务发现已验证。蜂窝通话默认继续使用设备音频，蓝牙通话麦克风路由仍是独立工作 |
 | 会话时长 | ✅ 已修复：约 295 秒的静默重启来自 PMIC 看门狗；加载负责喂狗的 sprd_pmic_wdt.ko 后，会话可持续运行 10 分钟以上——docs/FINDINGS.md 第 9 节 |
-| 基带、数据 | ✅ **原生**：`sipc_wwan` 把 AT 通道注册为 WWAN 端口（内核 `0022`、`0023`），ModemManager 的 `unisoc` 插件驱动它（打过补丁的 modemmanager，见 `rootfs/deb-patches/`），NetworkManager 的 `Mobile` 连接在 `sipa_eth0` 上建立数据（IPv4 + IPv6）；5G SA、Phosh 显示信号、Chatty 读取短信；CP 仍由 chroot 中的 Android `modem_control` 启动——FINDINGS §36、§37；短信收发、VoLTE 电话拨打和接听均正常（Chatty、Calls）。⏳ 通话音频：双方目前都听不到声音 |
+| 基带、数据和通话 | ✅ **原生**：`sipc_wwan` 与 ModemManager 的 `unisoc` 插件提供数据和短信，NetworkManager 同时支持 IPv4 + IPv6。VoLTE 电话可正常拨打和接听；OpenWrt 电话应用通过共享 hostless 语音链路通话，听筒、扬声器和麦克风均已在超过 30 秒的通话中验证 |
 | 基带备用方案 | [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) 仍然安装但不启用：`systemctl start unisoc-cpd` 会从 ModemManager 手中收回基带（运行时页面位于 `http://192.168.9.1:7887`） |
 | UFI-TOOLS（Linux 移植版） | ✅ `http://<设备>:2333`，修改前登录口令为 `admin` |
 | 热点 | ✅ NetworkManager 的 `Hotspot` 连接（Phosh 的开关和设置里的 Wi-Fi 面板已打补丁可识别它；UFI-TOOLS、`nmcli` 也可控制），5 GHz 149 信道 / 80 MHz（使用打过补丁的 network-manager，见 `rootfs/deb-patches/`），SSID `E5-Linux`，作为 `br0` 的端口与 USB 端口同网；IPv4 经 NAT 走承载，承载的公网 IPv6 /64 通过 SLAAC 分配给所有局域网客户端（带状态防火墙）——FINDINGS §35 |
-| 音频 | ✅ 扬声器与麦克风均已实际使用验证（Amberol、GNOME 录音机、设置中的声音测试）：扬声器经 ALSA（UCM `HiFi`/`Speaker`，S16 交错格式）与 PipeWire 播放，麦克风为 “Internal Microphone” 音源（DSP 录音，单声道 S16）；`e5-audio.service` 从 `l_agdsp_a` 启动 AGDSP；内核补丁 `0010`–`0014`、`0017`、`0019`、`0020`，FINDINGS §24.8、§33、§34。⏳ 听筒尚未实听 |
+| 音频 | ✅ 扬声器、麦克风和听筒均已验证。普通播放使用 ALSA/PipeWire；蜂窝通话使用 hostless CP 语音链路，默认听筒，可显式切换扬声器；连接蓝牙耳机后 A2DP 输出切换到耳机，断开后回到扬声器 |
 | 空闲负载 | ✅ 空闲时负载均值约为 0（此前因厂商内核线程处于 `D` 状态及同步控制台输出而读数在 6 以上）——内核补丁 `0015`，FINDINGS §29 |
-| OpenWrt | ✅ OpenWrt 25.12 作为根镜像中的第二个系统（`/openwrt`，`e5-os openwrt [--once]`）：带 unisoc 插件的 ModemManager 作 WAN（IPv4 NAT，承载的 IPv6 /64 分给 LAN），`br-lan` = USB + 热点（hostapd），LuCI、SSH；无图形界面、无蓝牙——[`openwrt/README.zh-CN.md`](openwrt/README.zh-CN.md)，FINDINGS §39 |
+| OpenWrt | ✅ OpenWrt 25.12 可作为根镜像或 SD 卡 A/B 多系统中的第二个系统：ModemManager WAN、IPv4 NAT + IPv6 LAN、USB 与热点网桥、LuCI/SSH、蓝牙 A2DP、信息屏和电话应用均可用。面板仍是信息屏，不是完整桌面 |
+
+## 当前已验证版本（2026-10-03）
+
+本次验证的软件组合为主线 Linux `6.18.54-e5-00069-g20f1a47fc2cb`、OpenWrt
+`25.12.5`、信息屏核心 `1.5.1` 和电话插件 `1.4`。SD 安装器会预留
+`e5boot`（32 MiB）以及 Debian A/B 两个 4 GiB 分区，写入前检查剩余空间，并显示
+失败阶段和设备返回内容。Debian 和 Android 都可以更新非活动 Debian 槽，默认不会自动
+重启，也不会执行拨号操作。生成的 OpenWrt 主线刷入包位于
+`out/openwrt/e5-openwrt-flash-25.12.5-mainline-20261003-52f03b9.{tar.gz,zip}`。
 
 ## 仓库结构
 

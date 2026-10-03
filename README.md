@@ -14,6 +14,11 @@ branch `linux-staging` (Google android13-5.15 GKI + the Unisoc UMS9621 platform,
 the E5 device support in it, plus this project's patches), rebuilt as a general-purpose Linux kernel by
 `kernel/build-linux.sh` on top of the device's own `e5_rongyue_defconfig`.
 
+The current release also has a separate mainline build: Linux `6.18.54-e5-00069-g20f1a47fc2cb`
+from [`linux-lts-e5`](https://github.com/Enceka/linux-lts-e5), branch `e5-6.18`. The Debian
+image and OpenWrt flash bundle use this kernel when built with `E5_RELEASE=1` and
+`E5_MAINLINE=1`.
+
 > **Warning.** This writes to `boot_b` and to 32 bytes of `misc`. It relies on
 > the bootloader falling back to slot a, which is the mechanism mu300-linux
 > documents for this bootloader family but which has **not** been verified on
@@ -72,15 +77,25 @@ channels that survive a failed boot.
 | Re-arm from inside Linux (`e5-boot-ok`) | ✅ verified, `misc` byte-compared |
 | Touch panel under Linux | ✅ **works** — `tlsc6x_touch` on `event1`, udev tags it `ID_INPUT_TOUCHSCREEN=1`, and phoc takes its events |
 | Wi-Fi | ✅ **verified on the device** — `sprd_wlan_combo` + `wcn_bsp` on the WCN chip, scans 2.4 and 5 GHz APs out of the box (needs the firmware in the initramfs overlay and the vendor's *user* build variant); docs/FINDINGS.md sections 8.5-8.6 |
-| Bluetooth | ✅ the kernel configures the marlin3 core the way the vendor HAL does (pskey/RF/enable from `request_firmware`, core disable before the tty closes) — factory address `FC:B5:85:D0:85:9B`, scans and connects; kernel `0018`, `0021`, FINDINGS §33.3, §35. ⏳ audio profiles untested |
+| Bluetooth | ✅ the kernel configures the marlin3 core the way the vendor HAL does; the device scans, pairs and reconnects to headsets. OpenWrt A2DP output and BlueZ SDP discovery are verified. Cellular calls keep the device audio route by default; Bluetooth call microphone routing is separate work |
 | Session lifetime | ✅ fixed: the ~295 s silent reset was the PMIC watchdog; staging sprd_pmic_wdt.ko (which feeds it) gives sessions that run 10+ min -- docs/FINDINGS.md section 9 |
-| Modem, data | ✅ **native**: `sipc_wwan` puts the AT channel on a WWAN port (kernel `0022`, `0023`), ModemManager's `unisoc` plugin drives it (patched modemmanager, `rootfs/deb-patches/`), NetworkManager's `Mobile` connection brings the data up on `sipa_eth0` (IPv4 + IPv6); 5G SA, signal in Phosh, SMS in Chatty; the Android `modem_control` still boots the CP from a chroot — FINDINGS §36, §37; SMS and VoLTE calls both ways (Chatty, Calls). ⏳ call audio: neither side hears anything yet |
+| Modem, data and calls | ✅ **native**: `sipc_wwan` puts the AT channel on a WWAN port and ModemManager's `unisoc` plugin drives it; NetworkManager brings up IPv4 + IPv6 data. SMS and VoLTE calls work. The OpenWrt Phone app starts calls through the shared hostless voice route; receiver, speaker and microphone were verified in calls lasting over 30 seconds |
 | Modem fallback | [`unisoc-cpd`](https://github.com/Enceka/unisoc-cpd) stays installed, not enabled: `systemctl start unisoc-cpd` takes the modem back from ModemManager (and serves its page on `http://192.168.9.1:7887`) |
 | UFI-TOOLS (Linux port) | ✅ `http://<device>:2333`, login `admin` until changed |
 | Hotspot | ✅ NetworkManager's `Hotspot` connection (Phosh's switch and Settings' Wi-Fi panel, patched to recognise it; UFI-TOOLS, `nmcli`) on 5 GHz ch149 / 80 MHz (patched network-manager, `rootfs/deb-patches/`), SSID `E5-Linux`, a port of `br0` with the USB port; IPv4 NAT to the bearer, and the bearer's public IPv6 /64 by SLAAC for every LAN client (stateful firewall) — FINDINGS §35 |
-| Audio | ✅ speaker and microphone, both confirmed in use (Amberol, GNOME Sound Recorder, the Settings sound test): speaker through ALSA (UCM `HiFi`/`Speaker`, S16 interleaved) and PipeWire, mic as the "Internal Microphone" source (DSP capture, mono S16); `e5-audio.service` boots the AGDSP off `l_agdsp_a`; kernel `0010`-`0014`, `0017`, `0019`, `0020`, FINDINGS §24.8, §33, §34. ⏳ earpiece not yet heard |
+| Audio | ✅ speaker, microphone and receiver are verified. Normal playback uses ALSA/PipeWire; cellular calls use the hostless CP voice route and default to the receiver, with an explicit speaker switch. Bluetooth A2DP follows the connected headset and falls back to the speaker |
 | Idle load | ✅ load average ~0 at idle (it read 6+ from vendor threads in `D` and synchronous console output) — kernel `0015`, FINDINGS §29 |
-| OpenWrt | ✅ OpenWrt 25.12 as a second system in the root image (`/openwrt`, `e5-os openwrt [--once]`): ModemManager with the unisoc plugin as WAN (IPv4 NAT, the bearer's IPv6 /64 on the LAN), `br-lan` = USB + hotspot (hostapd), LuCI, SSH; no GUI, no BT — [`openwrt/README.md`](openwrt/README.md), FINDINGS §39 |
+| OpenWrt | ✅ OpenWrt 25.12 as a second system in the root image or on the SD A/B layout: ModemManager WAN, IPv4 NAT + IPv6 LAN, USB + hotspot bridge, LuCI/SSH, Bluetooth A2DP, the info screen and the Phone app. The panel remains an info screen rather than a full desktop |
+
+## Current verified release (2026-10-03)
+
+The tested software set is mainline Linux `6.18.54-e5-00069-g20f1a47fc2cb`,
+OpenWrt `25.12.5`, info screen core `1.5.1` and Phone plugin `1.4`.
+The SD installer reserves `e5boot` (32 MiB) plus a Debian A/B pair (4 GiB each),
+checks free space before writing, and reports the failing stage and device output.
+Debian and Android can update the inactive Debian slot without an automatic reboot
+or any phone call action. The generated OpenWrt mainline bundle is in
+`out/openwrt/e5-openwrt-flash-25.12.5-mainline-20261003-52f03b9.{tar.gz,zip}`.
 
 ## Repository layout
 

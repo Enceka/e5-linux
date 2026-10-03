@@ -18,6 +18,9 @@ UFI-TOOLS/
 # upstream/ builds it.
 /linux-lts-e5/
 
+# Separate source repositories checked out by GitHub Actions.
+/ci/
+
 # build trees / outputs
 out_linux/
 out_modules/

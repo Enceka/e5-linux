@@ -97,6 +97,10 @@ Debian and Android can update the inactive Debian slot without an automatic rebo
 or any phone call action. The generated OpenWrt mainline bundle is in
 `out/openwrt/e5-openwrt-flash-25.12.5-mainline-20261003-52f03b9.{tar.gz,zip}`.
 
+GitHub Actions can now compile and publish the mainline OpenWrt flash bundles
+from a manual run or a `v*` tag, with compile time fixed to UTC+8. Bootstrap
+configuration, source selection and release validation: [`docs/RELEASE.md`](docs/RELEASE.md).
+
 ## Repository layout
 
 | Path | Contents |

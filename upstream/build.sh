@@ -15,10 +15,14 @@ if [ -z "${E5_IN_CONTAINER:-}" ]; then
     HERE="$(cd "$(dirname "$0")" && pwd)"
     K="${E5_KERNEL_TREE:-$HERE/../linux-lts-e5}"
     K="$(cd "$K" && pwd)"
-    exec docker run --rm -e E5_IN_CONTAINER=1 -e E5_RELEASE="${E5_RELEASE:-}" -v "$K":/src/linux -v e5-mainline-out:/out -v "$HERE":/work \
+    exec docker run --rm -e E5_IN_CONTAINER=1 -e E5_RELEASE="${E5_RELEASE:-}" \
+        -e TZ=CST-8 -e KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-}" \
+        -v "$K":/src/linux -v e5-mainline-out:/out -v "$HERE":/work \
         e5-mainline-build bash /work/build.sh "$@"
 fi
 
+# An empty variable overrides kbuild's default, so unset it for local builds.
+[ -n "${KBUILD_BUILD_TIMESTAMP:-}" ] || unset KBUILD_BUILD_TIMESTAMP
 cd /src/linux
 KV=$(make -s kernelversion)
 O=/out/$KV

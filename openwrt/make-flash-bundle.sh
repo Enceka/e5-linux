@@ -40,10 +40,21 @@ OUT="$TOP/out/openwrt"
 WORK="$TOP/work/openwrt"
 IMG="$OUT/e5-openwrt-$VER-generic.ext4.gz"
 KERNEL=${E5_KERNEL:-$TOP/work/Image-bt2}
+STOCK_BOOT=${E5_STOCK_BOOT:-$TOP/dumps/boot_b.img}
+MISC_HEAD=${E5_MISC_HEAD:-$TOP/dumps/misc-head.bin}
+BUSYBOX=${E5_BUSYBOX:-$TOP/work/busybox/ext/usr/bin/busybox}
 GIT=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
-# Capture the build start once. The filename uses local time to the second;
-# VERSION records the same instant with its UTC offset, including across midnight.
-read -r STAMP BUILD_TIME < <(date '+%Y%m%d-%H%M%S %Y-%m-%dT%H:%M:%S%z')
+# CI sets the epoch before compiling; local builds capture the package start.
+# POSIX TZ uses the opposite sign: CST-8 is fixed UTC+8, without daylight saving.
+E5_BUILD_EPOCH=${E5_BUILD_EPOCH:-$(date +%s)}
+export E5_BUILD_EPOCH
+read -r STAMP BUILD_TIME < <(python3 - "$E5_BUILD_EPOCH" <<'PY'
+from datetime import datetime, timedelta, timezone
+import sys
+t = datetime.fromtimestamp(int(sys.argv[1]), timezone(timedelta(hours=8)))
+print(t.strftime('%Y%m%d-%H%M%S'), t.isoformat(timespec='seconds'))
+PY
+)
 NAME=e5-openwrt-flash-$VER-$STAMP-$GIT
 MAINLINE=${E5_MAINLINE:-}
 KOUT=$TOP/upstream/out-release
@@ -59,7 +70,8 @@ if [ -n "$MAINLINE" ]; then
         bash "$HERE/image-add-modules.sh" "$E5_IMAGE_FROM" "$KOUT/root-modules.tar" "$IMG"
     else
         # the image always again: it has to carry this kernel's root modules
-        E5_ROOT_MODULES=$KOUT/root-modules.tar E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
+        E5_ROOT_MODULES=$KOUT/root-modules.tar E5_ROOT_MODULES_ONLY=1 \
+            E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
     fi
 elif [ ! -f "$IMG" ] || [ -n "${E5_REBUILD:-}" ]; then
     E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
@@ -90,14 +102,14 @@ BOOT="$TOP/work/boot-linux-slotb-bundle"
 if [ -n "$MAINLINE" ]; then
     # (the kernel's command line is its own, CONFIG_CMDLINE_FORCE: upstream/make-boot.sh)
     BOOT="$TOP/work/boot-linux-slotb-bundle-mainline"
-    python3 "$TOP/boot/build-boot-image.py" --stock-boot "$TOP/dumps/boot_b.img" \
-        --misc-head "$TOP/dumps/misc-head.bin" --kernel "$KERNEL" --modules "$KOUT/modules" \
+    python3 "$TOP/boot/build-boot-image.py" --stock-boot "$STOCK_BOOT" \
+        --misc-head "$MISC_HEAD" --kernel "$KERNEL" --modules "$KOUT/modules" \
         --module-order "$TOP/upstream/module-order.txt" --cmdline "" \
-        --busybox "$TOP/work/busybox/ext/usr/bin/busybox" --out "$BOOT.img" | tail -1
+        --busybox "$BUSYBOX" --out "$BOOT.img" | tail -1
 else
-    python3 "$TOP/boot/build-boot-image.py" --stock-boot "$TOP/dumps/boot_b.img" \
-        --misc-head "$TOP/dumps/misc-head.bin" --kernel "$KERNEL" --modules "$TOP/out_modules" \
-        --busybox "$TOP/work/busybox/ext/usr/bin/busybox" --out "$BOOT.img" | tail -1
+    python3 "$TOP/boot/build-boot-image.py" --stock-boot "$STOCK_BOOT" \
+        --misc-head "$MISC_HEAD" --kernel "$KERNEL" --modules "$TOP/out_modules" \
+        --busybox "$BUSYBOX" --out "$BOOT.img" | tail -1
 fi
 [ "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['overlay_files'])" "$BOOT.json")" = 0 ] ||
     { echo "the boot image has an overlay" >&2; exit 1; }
@@ -137,7 +149,8 @@ printf "e5-openwrt-flash %s (OpenWrt %s, e5-linux %s, kernel %s)\n" \
     printf "%s  %s\n" "$({ shasum -a 256 "$f" 2>/dev/null || sha256sum "$f"; } | cut -d' ' -f1)" "$f"
 done > SHA256SUMS)
 
-tar -C "$S" -czf "$OUT/$NAME.tar.gz.part" "$NAME"
+# macOS tar otherwise adds AppleDouble files that are absent from the ZIP.
+COPYFILE_DISABLE=1 tar -C "$S" -czf "$OUT/$NAME.tar.gz.part" "$NAME"
 mv "$OUT/$NAME.tar.gz.part" "$OUT/$NAME.tar.gz"
 # and a .zip for Windows (its Explorer opens it without anything installed)
 rm -f "$OUT/$NAME.zip"

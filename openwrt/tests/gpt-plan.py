@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Test read-only allocation plans against synthetic GPT disks in OpenWrt."""
 import hashlib
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -54,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='e5-gpt-plan-') as directory:
         disk(image, size, parts, entries)
         before = metadata(image)
         result = subprocess.run(['docker', 'run', '--rm', '-v', f'{root}:/test',
-                                 '-v', f'{TOOL}:/gpt:ro', 'e5-openwrt-base:25.12.5',
+                                 '-v', f'{TOOL}:/gpt:ro', os.environ.get('E5_TEST_IMAGE', 'e5-openwrt-base:25.12.5'),
                                  'ucode', '/gpt', 'plan', '/test/' + image.name,
                                  'e5boot:65536', 'debian-a:8388608', 'debian-b:8388608'],
                                 text=True, capture_output=True)

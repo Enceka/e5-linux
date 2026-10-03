@@ -88,6 +88,9 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 重启，也不会执行拨号操作。生成的 OpenWrt 主线刷入包位于
 `out/openwrt/e5-openwrt-flash-25.12.5-mainline-20261003-52f03b9.{tar.gz,zip}`。
 
+GitHub Actions 可通过手动运行或 `v*` tag 编译并发布主线 OpenWrt 一键刷入包，编译时间
+固定为 UTC+8。首次输入配置、源码选择和发布校验见 [`docs/RELEASE.md`](docs/RELEASE.md)。
+
 ## 仓库结构
 
 | 路径 | 内容 |

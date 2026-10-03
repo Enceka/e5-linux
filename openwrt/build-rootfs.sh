@@ -60,6 +60,7 @@
 #
 # E5_ROOT_MODULES=<tar> adds another kernel's root modules (lib/modules/<release>/...: upstream/root-modules.sh,
 # for the mainline kernel) next to the 5.15 ones; the image then runs on either kernel.
+# E5_ROOT_MODULES_ONLY=1 uses only that archive, without a local 5.15 build.
 #
 # E5_IMAGE_MB sets the image's size (default 1024).  Needs Docker with arm64
 # (native on Apple silicon).
@@ -128,9 +129,24 @@ docker run --rm --platform linux/arm64 -v "$HERE/src":/src:ro -v "$WORK":/out "$
 # directory form); an empty directory each otherwise
 SA="$WORK/standalone"
 rm -rf "$SA" && mkdir -p "$SA/firmware" "$SA/android" "$SA/modem" "$SA/fonts" "$SA/audio"
+# Another kernel's root modules, unpacked before the standalone staging pass.
+RM="$WORK/root-modules"
+rm -rf "$RM" && mkdir -p "$RM"
+if [ -n "${E5_ROOT_MODULES:-}" ]; then
+    tar -xf "$E5_ROOT_MODULES" -C "$RM"
+    echo "root modules: $(ls "$RM/lib/modules" 2>/dev/null | tr '\n' ' ')($(find "$RM" -name '*.ko' | wc -l | tr -d ' ') modules)"
+fi
 # the vendor audio modules (e5-audio-dsp loads them), in every form: GPL, of
 # this kernel build, nothing of a device's
-find "$KBUILD/sound/soc/sprd" "$KBUILD/drivers/unisoc_platform/sprd_audio" -name '*.ko' -exec cp {} "$SA/audio/" \; 2>/dev/null
+if [ "${E5_ROOT_MODULES_ONLY:-0}" = 1 ]; then
+    set -- "$RM"/lib/modules/*
+    [ $# = 1 ] && [ -d "$1/audio" ] && [ -f "$1/modem/sipc_wwan.ko" ] || {
+        echo "E5_ROOT_MODULES_ONLY needs exactly one release with audio and sipc_wwan modules" >&2; exit 1; }
+    ROOT_REL=$(basename "$1")
+    cp "$1/audio/"*.ko "$SA/audio/"
+else
+    find "$KBUILD/sound/soc/sprd" "$KBUILD/drivers/unisoc_platform/sprd_audio" -name '*.ko' -exec cp {} "$SA/audio/" \; 2>/dev/null
+fi
 n=$(ls "$SA/audio" | grep -c '\.ko$' || true)
 [ "$n" = 24 ] || { echo "expected the 24 audio modules in $KBUILD, found $n (kernel/build-linux.sh)" >&2; exit 1; }
 strings "$SA/audio/snd-soc-sprd-card.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1 > "$SA/audio/release"
@@ -150,12 +166,19 @@ if [ -n "$STANDALONE" ]; then
         cp -a "$FIRMWARE/." "$SA/firmware/"
         cp -a "$ANDROID/." "$SA/android/"
     fi
-    for f in drivers/net/wwan/wwan.ko drivers/unisoc_platform/modem/sipc/sipc_wwan.ko; do
-        [ -f "$KBUILD/$f" ] || { echo "no $KBUILD/$f -- build the kernel first (kernel/build-linux.sh)" >&2; exit 1; }
-        cp "$KBUILD/$f" "$SA/modem/"
-    done
-    REL=$(strings "$SA/modem/wwan.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1)
-    [ -n "$REL" ] || { echo "no vermagic in wwan.ko" >&2; exit 1; }
+    if [ "${E5_ROOT_MODULES_ONLY:-0}" = 1 ]; then
+        # The 6.18 config builds WWAN into the kernel; sipc_wwan is its module.
+        cp "$RM/lib/modules/$ROOT_REL/modem/"*.ko "$SA/modem/"
+        REL=$ROOT_REL
+        [ "$(cat "$SA/audio/release")" = "$REL" ] || { echo "audio module release mismatch" >&2; exit 1; }
+    else
+        for f in drivers/net/wwan/wwan.ko drivers/unisoc_platform/modem/sipc/sipc_wwan.ko; do
+            [ -f "$KBUILD/$f" ] || { echo "no $KBUILD/$f -- build the kernel first (kernel/build-linux.sh)" >&2; exit 1; }
+            cp "$KBUILD/$f" "$SA/modem/"
+        done
+        REL=$(strings "$SA/modem/wwan.ko" | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1)
+        [ -n "$REL" ] || { echo "no vermagic in wwan.ko" >&2; exit 1; }
+    fi
     echo "$REL" > "$SA/modem/release"
     echo "standalone: firmware $(du -sh "$SA/firmware" | cut -f1), vendor subset $(du -sh "$SA/android" | cut -f1), modules for $REL"
     # Noto Sans CJK from Debian's package, once
@@ -168,14 +191,6 @@ if [ -n "$STANDALONE" ]; then
                x/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc /out/'
     fi
     cp "$WORK/fonts/"NotoSansCJK-*.ttc "$SA/fonts/"
-fi
-
-# another kernel's root modules (E5_ROOT_MODULES), unpacked here; an empty directory otherwise
-RM="$WORK/root-modules"
-rm -rf "$RM" && mkdir -p "$RM"
-if [ -n "${E5_ROOT_MODULES:-}" ]; then
-    tar -xf "$E5_ROOT_MODULES" -C "$RM"
-    echo "root modules: $(ls "$RM/lib/modules" 2>/dev/null | tr '\n' ' ')($(find "$RM" -name '*.ko' | wc -l | tr -d ' ') modules)"
 fi
 
 # (the standalone tree is only the image's source)
@@ -234,7 +249,7 @@ docker run --rm --platform linux/arm64 \
     -v "$WORK/e5-modemd":/in/e5-modemd:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" -v "$TP":/in/transplant:ro \
-    -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" \
+    -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" -e E5_BUILD_EPOCH="${E5_BUILD_EPOCH:-}" \
     e5-openwrt-base:$VER /bin/sh -euc '
 mkdir -p /var/lock /var/run /tmp
 apk update >/dev/null
@@ -391,7 +406,8 @@ if [ -n "$STANDALONE" ]; then
 fi
 mkdir -p $R/etc/e5 && printf "%s\n" "$VERSION" > $R/etc/e5/image-version
 # when the image was built (seconds since 1970, UTC): 高级 -> 系统 shows it
-date -u +%s > $R/etc/e5/build-time
+if [ -n "$E5_BUILD_EPOCH" ]; then printf "%s\n" "$E5_BUILD_EPOCH" > $R/etc/e5/build-time
+else date -u +%s > $R/etc/e5/build-time; fi
 cd $R && tar -czf /out/$NAME .
 ls -la /out/$NAME
 '

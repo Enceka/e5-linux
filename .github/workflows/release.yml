@@ -1,0 +1,215 @@
+name: Build and publish OpenWrt
+run-name: OpenWrt ${{ inputs.openwrt_version || '25.12.5' }} · ${{ github.ref_name }}
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: OpenWrt release
+        default: '25.12.5'
+        required: true
+      kernel_ref:
+        description: linux-lts-e5 branch, tag or commit
+        default: e5-6.18
+        required: true
+      infoscreen_ref:
+        description: infoscreen branch, tag or commit
+        default: main
+        required: true
+      plugins_ref:
+        description: infoscreen-plugins branch, tag or commit
+        default: main
+        required: true
+      publish:
+        description: Publish a GitHub Release after validation
+        type: boolean
+        default: true
+      prerelease:
+        description: Mark the release as a prerelease
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flash-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TZ: CST-8
+  E5_WRT_VER: ${{ inputs.openwrt_version || '25.12.5' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    outputs:
+      tag: ${{ steps.start.outputs.release_tag }}
+      title: ${{ steps.verify.outputs.release_title }}
+      source: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check bootstrap configuration
+        env:
+          INPUTS_URL: ${{ vars.E5_CI_INPUTS_URL }}
+          INPUTS_SHA256: ${{ vars.E5_CI_INPUTS_SHA256 }}
+        run: |
+          [[ "$INPUTS_URL" == https://* ]] || { echo '::error::Set E5_CI_INPUTS_URL to the HTTPS bootstrap archive URL (docs/RELEASE.md).'; exit 1; }
+          [[ "$INPUTS_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo '::error::Set E5_CI_INPUTS_SHA256 to its SHA-256 (docs/RELEASE.md).'; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Enceka/linux-lts-e5
+          ref: ${{ inputs.kernel_ref || vars.E5_KERNEL_REF || 'e5-6.18' }}
+          path: linux-lts-e5
+          fetch-depth: 128
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Enceka/infoscreen
+          ref: ${{ inputs.infoscreen_ref || vars.E5_INFOSCREEN_REF || 'main' }}
+          path: ci/infoscreen
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Enceka/infoscreen-plugins
+          ref: ${{ inputs.plugins_ref || vars.E5_PLUGINS_REF || 'main' }}
+          path: ci/infoscreen-plugins
+          persist-credentials: false
+      - name: Record sources and UTC+8 compile start
+        id: start
+        env:
+          E5_CI_INPUTS_SHA256: ${{ vars.E5_CI_INPUTS_SHA256 }}
+          E5_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 tools/ci-release.py prepare
+      - name: Record e5-linux commit
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lz4 e2fsprogs binutils python3
+      - name: Restore and verify bootstrap inputs
+        env:
+          INPUTS_URL: ${{ vars.E5_CI_INPUTS_URL }}
+          INPUTS_SHA256: ${{ vars.E5_CI_INPUTS_SHA256 }}
+        run: |
+          curl --fail --location --retry 5 --proto '=https' --proto-redir '=https' \
+            --output "$RUNNER_TEMP/ci-inputs.tar.gz" "$INPUTS_URL"
+          python3 tools/ci-inputs.py restore "$RUNNER_TEMP/ci-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
+      - name: Check installer and audio logic
+        run: |
+          bash -n openwrt/make-flash-bundle.sh openwrt/build-rootfs.sh upstream/build.sh
+          # The GPT and bounded-write tests need a disposable OpenWrt userspace.
+          mkdir -p work/openwrt
+          base="https://downloads.openwrt.org/releases/$E5_WRT_VER/targets/armsr/armv8"
+          file="openwrt-$E5_WRT_VER-armsr-armv8-rootfs.tar.gz"
+          curl -fsSL --retry 5 "$base/$file" -o "work/openwrt/$file"
+          curl -fsSL --retry 5 "$base/sha256sums" -o work/openwrt/sha256sums
+          checksum=$(awk -v file="$file" '$2 == "*" file || $2 == file { print $1 }' work/openwrt/sha256sums)
+          [ -n "$checksum" ] || { echo '::error::No checksum for OpenWrt rootfs'; exit 1; }
+          printf '%s  %s\n' "$checksum" "work/openwrt/$file" | sha256sum --check
+          docker import --platform linux/arm64 "work/openwrt/$file" "e5-openwrt-base:$E5_WRT_VER"
+          python3 openwrt/tests/flash-diagnostics.py
+          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 openwrt/tests/gpt-plan.py
+          python3 openwrt/tests/voice-audio.py
+          python3 rootfs/tests/sd-registry.py
+          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 rootfs/tests/sd-write.py
+          python3 rootfs/tests/voice-state.py
+          python3 tools/tests/ci-release.py
+          python3 ci/infoscreen-plugins/tools/check.py
+      - name: Build ARM64 toolchain container
+        run: docker build -t e5-mainline-build upstream/
+      - name: Compile the release kernel
+        env:
+          E5_RELEASE: '1'
+        run: bash upstream/build.sh
+      - name: Restore patched OpenWrt packages
+        id: packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: out/openwrt/*.apk
+          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('openwrt/build-modemmanager.sh', 'openwrt/build-bluez.sh', 'openwrt/patches/**', 'rootfs/deb-patches/modemmanager-*.patch', 'rootfs/deb-patches/bluez-*.patch') }}
+      - name: Compile patched ModemManager and BlueZ
+        if: steps.packages.outputs.cache-hit != 'true'
+        run: |
+          bash openwrt/build-modemmanager.sh
+          bash openwrt/build-bluez.sh
+          # This volume belongs to this ephemeral runner. Free it before image assembly.
+          docker volume rm e5-openwrt-src
+      - name: Assemble the generic mainline flash bundles
+        env:
+          E5_MAINLINE: '1'
+          E5_TOOLS_BUILD_IMAGE: e5-mainline-build
+        run: |
+          export E5_INFOSCREEN="$GITHUB_WORKSPACE/ci/infoscreen"
+          export E5_INFOSCREEN_PLUGINS="$GITHUB_WORKSPACE/ci/infoscreen-plugins"
+          bash openwrt/make-flash-bundle.sh 2>&1 | tee out/release/bundle-build.log
+      - name: Validate release archives and sources
+        id: verify
+        run: python3 tools/ci-release.py verify
+      - name: Upload validated release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flash-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            out/release/*.tar.gz
+            out/release/*.zip
+            out/release/SHA256SUMS
+            out/release/build.json
+            out/release/release-notes.md
+          compression-level: 0
+          if-no-files-found: error
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            out/release/*.log
+            out/release/build.json
+            upstream/out-release/config
+          if-no-files-found: ignore
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: flash-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release
+      - name: Publish validated files through a draft release
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          AUTO_TAG: ${{ needs.build.outputs.tag }}
+          TITLE: ${{ needs.build.outputs.title }}
+          SOURCE: ${{ needs.build.outputs.source }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          PRERELEASE: ${{ inputs.prerelease || false }}
+        run: |
+          sha256sum --check SHA256SUMS
+          tag="$AUTO_TAG"
+          if [ "$EVENT" = push ]; then tag="$REF_NAME"; fi
+          # Refuse to replace a published release; failed uploads may leave a draft.
+          if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
+            [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true ] || { echo '::error::Release already published; use a new tag or a manual build.'; exit 1; }
+          else
+            gh release create "$tag" --target "$SOURCE" --title "$TITLE" --notes-file release-notes.md --draft
+          fi
+          gh release upload "$tag" ./*.tar.gz ./*.zip SHA256SUMS build.json --clobber
+          args=(--draft=false --title "$TITLE" --notes-file release-notes.md)
+          if [ "$PRERELEASE" = true ]; then args+=(--prerelease --latest=false); else args+=(--prerelease=false --latest); fi
+          gh release edit "$tag" "${args[@]}"
+          gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

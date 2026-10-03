@@ -3,8 +3,10 @@
 import functools
 import gzip
 import http.server
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 
@@ -37,10 +39,14 @@ with tempfile.TemporaryDirectory(prefix='e5-sd-write-') as directory:
     def check(name, success, text='', output='/test/disk'):
         disk = root / 'disk'
         disk.write_bytes(b'P' * MIB + b'_' * (4 * MIB) + b'N' * MIB)
-        (root / 'test.sh').write_text('set -eu\nT=/test/tmp\n' + writer +
-            f'\nwrite_slot_image {output} 2048 4 {url}/{name}\n')
-        result = subprocess.run(['docker', 'run', '--rm', '-v', f'{root}:/test',
-                                 'e5-openwrt-base:25.12.5', 'sh', '/test/test.sh'],
+        # A fresh file avoids stale script sizes on Docker Desktop bind mounts.
+        with tempfile.NamedTemporaryFile(mode='w', dir=root, suffix='.sh', delete=False) as script_file:
+            script_file.write('set -eu\nT=/test/tmp\n' + writer +
+                              f'\nwrite_slot_image {output} 2048 4 {url}/{name}\n')
+            script_name = Path(script_file.name).name
+        host_args = ['--add-host=host.docker.internal:host-gateway'] if sys.platform == 'linux' else []
+        result = subprocess.run(['docker', 'run', '--rm', *host_args, '-v', f'{root}:/test',
+                                 os.environ.get('E5_TEST_IMAGE', 'e5-openwrt-base:25.12.5'), 'sh', '/test/' + script_name],
                                 capture_output=True, text=True, timeout=30)
         assert (result.returncode == 0) == success, (name, result.stdout, result.stderr)
         assert text in result.stdout + result.stderr, (name, result.stderr)

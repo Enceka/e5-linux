@@ -141,8 +141,9 @@ APN 和热点（`--ssid`，默认 `E5-Linux`）写到 userdata 上的
 openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<版本>-<时间戳>-<git>.{tar.gz,zip}
 ```
 
-时间戳采用构建开始时的主机本地时间，格式为 `YYYYMMDD-HHMMSS`，精确到秒。
+时间戳采用构建开始时的 UTC+8 时间，格式为 `YYYYMMDD-HHMMSS`，精确到秒。
 包内的 `files/VERSION` 记录同一时间，并附 UTC 时区偏移。
+自动打包发布工作流和首次输入配置见 [`../docs/RELEASE.md`](../docs/RELEASE.md)。
 
 一个压缩包，解压后在装有 adb 的 macOS 或 Linux 上运行 `./flash.sh`：从 Android 给已解锁
 bootloader、装了 Magisk 的 E5 安装 OpenWrt；之后可通过 USB 网络更新（`--update`，保留设置），

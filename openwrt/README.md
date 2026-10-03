@@ -155,8 +155,10 @@ device booting it.  Debian can go afterwards: remove
 openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<version>-<timestamp>-<git>.{tar.gz,zip}
 ```
 
-The timestamp is the build start in the host's local time, `YYYYMMDD-HHMMSS`.
+The timestamp is the build start in fixed UTC+8, `YYYYMMDD-HHMMSS`.
 `files/VERSION` records the same time to the second with its UTC offset.
+The build-and-release workflow and bootstrap setup are described in
+[`../docs/RELEASE.md`](../docs/RELEASE.md).
 
 One archive, unpacked and run as `./flash.sh` on macOS or Linux with adb:
 it installs OpenWrt on an E5 with an unlocked bootloader and Magisk, from

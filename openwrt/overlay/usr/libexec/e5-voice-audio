@@ -18,7 +18,7 @@ import threading
 import time
 
 RUN = Path('/run/e5-voice-audio')
-LIVE = {'dialing', 'ringing-out', 'ringing-in', 'active', 'held', 'waiting'}
+LIVE = {'dialing', 'ringing-out', 'active', 'held'}
 CALL_PATH = '/org/freedesktop/ModemManager1/Call/'
 
 
@@ -38,7 +38,7 @@ def calls():
             continue
         call = mm_json('-o', path).get('call', {}).get('properties', {})
         result.append({'id': path[len(CALL_PATH):], 'state': call.get('state'),
-                       'reason': call.get('state-reason')})
+                       'reason': call.get('state-reason'), 'number': call.get('number'), 'direction': call.get('direction')})
     return result
 
 
@@ -108,6 +108,62 @@ def suspend_media(on):
         logging.warning('cannot %s media sink: %s', 'suspend' if on else 'resume', result.stderr.strip())
 
 
+
+def alert_settings():
+    r = subprocess.run(['uci', '-q', 'show', 'e5-plugin-phone'], capture_output=True, text=True, timeout=3)
+    values = {}
+    for line in r.stdout.splitlines():
+        if '=' in line:
+            key, value = line.split('=', 1)
+            values[key.rsplit('.', 1)[-1]] = value.strip("'")
+    return {'sound': values.get('ring_sound', '1') == '1',
+            'vibrate': values.get('ring_vibrate', '1') == '1',
+            'tone': 'beep' if values.get('ring_tone') == 'beep' else 'call'}
+
+
+class RingAlert:
+    def __init__(self, spawn=None, clock=None):
+        self.spawn = spawn or (lambda argv: subprocess.Popen(argv, start_new_session=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        self.clock = clock or time.monotonic
+        self.sound = self.vibration = None
+        self.next = 0
+        self.call_ids = set()
+
+    @staticmethod
+    def cancel(process):
+        if process is not None and process.poll() is None:
+            try: os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError: pass
+
+    def stop(self):
+        self.cancel(self.sound); self.cancel(self.vibration)
+        self.sound = self.vibration = None
+        self.next = 0
+        self.call_ids = set()
+
+    def update(self, observed, settings, voice_active):
+        ids = {c['id'] for c in observed if c['state'] in {'ringing-in', 'waiting'}}
+        if not ids:
+            self.stop()
+            return
+        if not self.call_ids: logging.info('incoming call alert started')
+        self.call_ids = ids
+        if not settings.get('sound') or voice_active:
+            self.cancel(self.sound); self.sound = None
+        if not settings.get('vibrate'):
+            self.cancel(self.vibration); self.vibration = None
+        now = self.clock()
+        if now < self.next: return
+        # Only the ringing notification is repeated, never a call operation.
+        self.next = now + 2.5
+        if settings.get('sound') and not voice_active and (self.sound is None or self.sound.poll() is not None):
+            tone = 'beep' if settings.get('tone') == 'beep' else 'call'
+            self.sound = self.spawn(['paplay', '/usr/share/e5/' + tone + '.wav'])
+        if settings.get('vibrate') and (self.vibration is None or self.vibration.poll() is not None):
+            self.vibration = self.spawn(['e5-vibrate', '250', '150', '250'])
+
+
 def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='e5-voice-audio: %(message)s')
     # Opening PCM before the firmware has booted can reset the audio domain.
@@ -118,6 +174,7 @@ def main():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     controller = Controller(module.VoiceHardware(), suspend_media)
+    ringer = RingAlert()
     stop = threading.Event()
     messages = queue.Queue()
     pipe_fd = None
@@ -155,11 +212,12 @@ def main():
                         controller.hardware.network(p0, p1)
                 settings = json.loads((RUN / 'settings.json').read_text())
                 observed = calls()
+                ringer.update(observed, alert_settings(), controller.active or any(c['state'] in LIVE for c in observed))
                 was_active = controller.active
                 state = controller.update(observed, settings)
                 if was_active and not controller.active:
                     write_json(RUN / 'settings.json', last_settings)
-                write_json(RUN / 'status.json', {**state, 'updated': time.time()})
+                write_json(RUN / 'status.json', {**state, 'updated': time.time(), 'calls': observed})
             except Exception as error:
                 # A temporary D-Bus query failure must not tear down an active
                 # audio route, and there is never a timer that hangs up calls.
@@ -167,6 +225,7 @@ def main():
                 write_json(RUN / 'status.json', {**controller.status(), 'error': str(error), 'updated': time.time()})
             stop.wait(.5)
     finally:
+        ringer.stop()
         controller.stop()
         write_json(RUN / 'status.json', {**controller.status(), 'available': False, 'updated': time.time()})
 

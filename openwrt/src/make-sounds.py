@@ -21,3 +21,5 @@ def tone(path, parts, level):
 out = sys.argv[1]
 os.makedirs(out, exist_ok=True)
 tone(os.path.join(out, 'beep.wav'), [(880, 0.18), (0, 0.06), (1320, 0.22)], 0.35)
+
+tone(os.path.join(out, 'call.wav'), [(784, 0.16), (1047, 0.16), (1319, 0.22), (0, 0.1), (1047, 0.3)], 0.3)

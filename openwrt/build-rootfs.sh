@@ -76,6 +76,8 @@ BUSYBOX=${E5_BUSYBOX:-$TOP/work/busybox/ext/usr/bin/busybox}
 # empty leaves it out)
 INFOSCREEN=${E5_INFOSCREEN-$TOP/../e5-infoscreen}
 [ -n "$INFOSCREEN" ] && [ -f "$INFOSCREEN/packages.txt" ] && [ -d "$INFOSCREEN/root" ] || INFOSCREEN=""
+SCREEN_PLUGINS=${E5_INFOSCREEN_PLUGINS-$TOP/../infoscreen-plugins}
+[ -n "$SCREEN_PLUGINS" ] && [ -d "$SCREEN_PLUGINS/plugins/phone" ] || SCREEN_PLUGINS=""
 NAME=e5-openwrt-$VER-rootfs.tar.gz
 STANDALONE=${E5_STANDALONE:-}
 DEVICE_FILES=${E5_DEVICE_FILES:-1}
@@ -227,6 +229,7 @@ docker run --rm --platform linux/arm64 \
     -v "$HERE/overlay":/in/overlay:ro -v "$TOP/rootfs/overlay/opt/e5":/in/opt-e5:ro \
     -v "$OUT":/in/apk:ro -v "$BUSYBOX":/in/busybox:ro -v "$WORK/logdw":/in/logdw:ro \
     -v "$WORK/e5-vibrate":/in/e5-vibrate:ro -v "${INFOSCREEN:-$WORK/no-infoscreen}":/in/infoscreen:ro \
+    -v "${SCREEN_PLUGINS:-$WORK/no-infoscreen}":/in/infoscreen-plugins:ro \
     -v "$WORK/e5-ctl-raw":/in/e5-ctl-raw:ro -v "$TOP/rootfs/overlay/usr/share/alsa":/in/alsa:ro \
     -v "$WORK/e5-modemd":/in/e5-modemd:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
@@ -312,6 +315,13 @@ if [ -d /in/infoscreen/root ]; then
     cp -a /in/infoscreen/root/. $R/
     find $R -name .DS_Store -exec rm -f {} +
     screen=e5-infoscreen
+fi
+# Phone is a separately maintained store application, preinstalled for this
+# image. Core updates do not replace it; plugin updates use the app store.
+if [ -n "$screen" ] && [ -f /in/infoscreen-plugins/plugins/phone/manifest.json ]; then
+    mkdir -p $R/etc/e5-infoscreen/plugins
+    cp -a /in/infoscreen-plugins/plugins/phone $R/etc/e5-infoscreen/plugins/
+    chown -R 0:0 $R/etc/e5-infoscreen/plugins/phone
 fi
 for f in vendor-start.sh android-run node-perms.sh regdb-load.sh gadget-guard.sh usb-watch.sh e5-next-boot e5-os e5-sd-registry e5-at e5-audio-dsp e5-call-audio.py; do
     cp /in/opt-e5/$f $R/opt/e5/$f; chmod 755 $R/opt/e5/$f

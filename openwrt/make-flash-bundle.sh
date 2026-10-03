@@ -1,11 +1,11 @@
 #!/bin/bash
 # Build the flash package for other people's E5s:
-# out/openwrt/e5-openwrt-flash-<version>-<date>-<git>.tar.gz, unpacked and run as
+# out/openwrt/e5-openwrt-flash-<version>-<timestamp>-<git>.tar.gz, unpacked and run as
 # ./flash.sh (openwrt/bundle/README.md is its manual).
 #
 #   openwrt/make-flash-bundle.sh
 #   E5_MAINLINE=1 openwrt/make-flash-bundle.sh    the mainline 6.18 kernel instead of 5.15:
-#       e5-openwrt-flash-<version>-mainline-<date>-<git>; the kernel of E5_RELEASE=1 upstream/build.sh
+#       e5-openwrt-flash-<version>-mainline-<timestamp>-<git>; the kernel of E5_RELEASE=1 upstream/build.sh
 #       (upstream/out-release: no e5.openwrt=, so it is no trial), the boot modules of
 #       upstream/module-order.txt, and an image rebuilt with upstream/root-modules.txt in it
 #   E5_IMAGE_FROM=<openwrt.ext4.gz> (with E5_MAINLINE=1)   no image rebuilt (build-rootfs.sh needs docker):
@@ -41,12 +41,14 @@ WORK="$TOP/work/openwrt"
 IMG="$OUT/e5-openwrt-$VER-generic.ext4.gz"
 KERNEL=${E5_KERNEL:-$TOP/work/Image-bt2}
 GIT=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
-DATE=$(date +%Y%m%d)
-NAME=e5-openwrt-flash-$VER-$DATE-$GIT
+# Capture the build start once. The filename uses local time to the second;
+# VERSION records the same instant with its UTC offset, including across midnight.
+read -r STAMP BUILD_TIME < <(date '+%Y%m%d-%H%M%S %Y-%m-%dT%H:%M:%S%z')
+NAME=e5-openwrt-flash-$VER-$STAMP-$GIT
 MAINLINE=${E5_MAINLINE:-}
 KOUT=$TOP/upstream/out-release
 if [ -n "$MAINLINE" ]; then
-    NAME=e5-openwrt-flash-$VER-mainline-$DATE-$GIT
+    NAME=e5-openwrt-flash-$VER-mainline-$STAMP-$GIT
     KERNEL=$KOUT/Image.lk
     [ -f "$KERNEL" ] || { echo "no $KERNEL: E5_RELEASE=1 upstream/build.sh" >&2; exit 1; }
     # (grep -c, not grep -q: see the kernel check below)
@@ -130,7 +132,7 @@ cp "$TOP/tools/e5-telnet.py" "$TOP/tools/sprd-bt-config.py" "$P/scripts/tools/"
 cp -R "$TOP/tools/vbc-profile" "$P/scripts/tools/"
 find "$P" \( -name .DS_Store -o -name __pycache__ \) -prune -exec rm -rf {} +
 printf "e5-openwrt-flash %s (OpenWrt %s, e5-linux %s, kernel %s)\n" \
-    "$(date +%Y-%m-%d)" "$VER" "$GIT" "$rel" > "$P/files/VERSION"
+    "$BUILD_TIME" "$VER" "$GIT" "$rel" > "$P/files/VERSION"
 (cd "$P" && find files scripts flash.py flash.sh flash.cmd -type f | sort | while read -r f; do
     printf "%s  %s\n" "$({ shasum -a 256 "$f" 2>/dev/null || sha256sum "$f"; } | cut -d' ' -f1)" "$f"
 done > SHA256SUMS)

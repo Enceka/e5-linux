@@ -118,7 +118,7 @@ The flash package's kernel is the trial's with one difference: its command line 
 `boot/init` starts the installed `openwrt.ext4`, OpenWrt can be the default boot, and `e5-next-boot linux` and
 the info screen's "默认启动" accept it. `E5_RELEASE=1 upstream/build.sh` builds it into `out-release/`, which the
 trial scripts never read. `E5_MAINLINE=1 openwrt/make-flash-bundle.sh` then makes
-`out/openwrt/e5-openwrt-flash-<version>-mainline-<date>-<git>.{tar.gz,zip}`: the boot image with `module-order.txt`'s
+`out/openwrt/e5-openwrt-flash-<version>-mainline-<YYYYMMDD-HHMMSS>-<git>.{tar.gz,zip}`: the boot image with `module-order.txt`'s
 modules, and the generic OpenWrt image rebuilt with `root-modules.txt` in it (`build-rootfs.sh E5_ROOT_MODULES`,
 next to the 5.15 modules, so the same image runs on either kernel). The package refuses a kernel with
 `e5.openwrt=` in it and root modules of another build. It installs and updates like the 5.15 one (`flash.py`,

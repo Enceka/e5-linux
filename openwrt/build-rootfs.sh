@@ -249,6 +249,8 @@ apk add wpad-basic-mbedtls wifi-scripts iwinfo iw ip-full bash mount-utils luci-
 # the bluetooth modules), run by /etc/init.d/e5-pulseaudio, not by its own
 # init script (which forbids loading the modules a connecting device needs)
 apk add pulseaudio-daemon-avahi pulseaudio-tools >/dev/null
+# Reuse the tested Debian hostless FE_ST_VOICE backend for cellular audio.
+apk add python3 >/dev/null
 # attended sysupgrade flashes whole-disk images: that would overwrite the eMMC
 # (removed before the translations below, whose package for it would hold it)
 apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>&1 || true
@@ -311,7 +313,7 @@ if [ -d /in/infoscreen/root ]; then
     find $R -name .DS_Store -exec rm -f {} +
     screen=e5-infoscreen
 fi
-for f in vendor-start.sh android-run node-perms.sh regdb-load.sh gadget-guard.sh usb-watch.sh e5-next-boot e5-os e5-sd-registry e5-at e5-audio-dsp; do
+for f in vendor-start.sh android-run node-perms.sh regdb-load.sh gadget-guard.sh usb-watch.sh e5-next-boot e5-os e5-sd-registry e5-at e5-audio-dsp e5-call-audio.py; do
     cp /in/opt-e5/$f $R/opt/e5/$f; chmod 755 $R/opt/e5/$f
 done
 cp /in/logdw $R/opt/e5/bin/logdw && chmod 755 $R/opt/e5/bin/logdw
@@ -355,7 +357,7 @@ rm -f $R/etc/rc.d/*pulseaudio
 # (the cage package'"'"'s own kiosk service: cog on http://localhost/, which is LuCI,
 # shown at every boot before the info screen'"'"'s session takes the panel)
 rm -f $R/etc/rc.d/*cage
-for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio e5-bt bluetoothd dbus modemmanager e5-usb-watch $screen; do
+for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio e5-voice-audio e5-bt bluetoothd dbus modemmanager e5-usb-watch $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done

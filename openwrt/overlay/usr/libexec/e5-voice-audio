@@ -1,0 +1,175 @@
+#!/usr/bin/python3
+"""Attach the tested E5 hostless audio backend to ModemManager call state.
+
+This process never starts, accepts, deletes, or hangs up a call. It only holds
+FE_ST_VOICE during existing calls and restores media routing when they end.
+"""
+import importlib.util
+import json
+import logging
+import os
+from pathlib import Path
+import queue
+import signal
+import struct
+import subprocess
+import sys
+import threading
+import time
+
+RUN = Path('/run/e5-voice-audio')
+LIVE = {'dialing', 'ringing-out', 'ringing-in', 'active', 'held', 'waiting'}
+CALL_PATH = '/org/freedesktop/ModemManager1/Call/'
+
+
+def mm_json(*args):
+    result = subprocess.run(['mmcli', '-J', '--timeout=3', *args], capture_output=True,
+                            text=True, timeout=5, check=True)
+    return json.loads(result.stdout)
+
+
+def calls():
+    reply = mm_json('-m', 'any', '--voice-list-calls')
+    paths = reply.get('modem.voice.call', reply.get('modem.voice.calls',
+                  reply.get('modem', {}).get('voice', {}).get('calls', [])))
+    result = []
+    for path in paths:
+        if not isinstance(path, str) or not path.startswith(CALL_PATH) or not path[len(CALL_PATH):].isdigit():
+            continue
+        call = mm_json('-o', path).get('call', {}).get('properties', {})
+        result.append({'id': path[len(CALL_PATH):], 'state': call.get('state'),
+                       'reason': call.get('state-reason')})
+    return result
+
+
+def write_json(path, value):
+    RUN.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(value) + '\n')
+    os.replace(tmp, path)
+
+
+class Controller:
+    def __init__(self, hardware, suspend):
+        self.hardware, self.suspend = hardware, suspend
+        self.active = False
+        self.error = None
+        self.previous = {}
+        self.muted = False
+
+    def update(self, observed, settings):
+        now = {c['id']: c['state'] for c in observed}
+        for call in observed:
+            if self.previous.get(call['id']) != call['state']:
+                logging.info('call=%s state=%s reason=%s', call['id'], call['state'], call.get('reason'))
+        self.previous = now
+        needed = any(c['state'] in LIVE for c in observed)
+        try:
+            if needed and not self.active:
+                self.suspend(True)
+                try:
+                    self.hardware.start()
+                except Exception:
+                    self.suspend(False)
+                    raise
+                self.active = True
+                self.muted = False
+            if needed and self.active:
+                self.hardware.set_speaker(bool(settings.get('speaker', False)))
+                mute = bool(settings.get('muted', False))
+                if mute != self.muted:
+                    self.hardware.mute(mute)
+                    self.muted = mute
+            if not needed and self.active:
+                self.stop()
+            self.error = None
+        except Exception as error:
+            self.error = str(error)
+            logging.exception('voice audio operation failed')
+        return self.status()
+
+    def stop(self):
+        try:
+            self.hardware.stop()
+        finally:
+            self.active = False
+            self.muted = False
+            self.suspend(False)
+
+    def status(self):
+        return {'available': True, 'active': self.active, 'speaker': self.hardware.speaker,
+                'muted': self.muted, 'error': self.error, 'pcm': 'hw:0,5'}
+
+
+def suspend_media(on):
+    result = subprocess.run(['pactl', 'suspend-sink', 'speaker', '1' if on else '0'],
+                            capture_output=True, text=True, timeout=5)
+    if result.returncode:
+        logging.warning('cannot %s media sink: %s', 'suspend' if on else 'resume', result.stderr.strip())
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='e5-voice-audio: %(message)s')
+    # Opening PCM before the firmware has booted can reset the audio domain.
+    # e5-audio writes this boot-local marker only after DSP setup succeeds.
+    while not Path('/run/e5-audio.ready').exists():
+        time.sleep(1)
+    spec = importlib.util.spec_from_file_location('e5_voice_hardware', '/opt/e5/e5-call-audio.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    controller = Controller(module.VoiceHardware(), suspend_media)
+    stop = threading.Event()
+    messages = queue.Queue()
+    pipe_fd = None
+
+    def notification_reader():
+        nonlocal pipe_fd
+        try:
+            pipe_fd = os.open('/dev/audio_pipe_voice', os.O_RDWR)
+            logging.info('DSP voice notification channel opened')
+            while not stop.is_set():
+                data = os.read(pipe_fd, 20)
+                if len(data) != 20:
+                    raise RuntimeError('short DSP voice notification')
+                messages.put(struct.unpack('<HH4I', data))
+        except Exception as error:
+            if not stop.is_set():
+                logging.error('DSP notification listener: %s', error)
+
+    def shutdown(*args):
+        stop.set()
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    threading.Thread(target=notification_reader, daemon=True).start()
+    last_settings = {'speaker': False, 'muted': False}
+    write_json(RUN / 'settings.json', last_settings)
+    logging.info('ready; audio only, no modem call-control commands')
+    try:
+        while not stop.is_set():
+            try:
+                while not messages.empty():
+                    command, channel, p0, p1, p2, p3 = messages.get_nowait()
+                    logging.info('DSP cmd=%#x channel=%d params=%#x,%#x,%#x,%#x', command, channel, p0,p1,p2,p3)
+                    if command == 0 and channel == 2:
+                        controller.hardware.network(p0, p1)
+                settings = json.loads((RUN / 'settings.json').read_text())
+                observed = calls()
+                was_active = controller.active
+                state = controller.update(observed, settings)
+                if was_active and not controller.active:
+                    write_json(RUN / 'settings.json', last_settings)
+                write_json(RUN / 'status.json', {**state, 'updated': time.time()})
+            except Exception as error:
+                # A temporary D-Bus query failure must not tear down an active
+                # audio route, and there is never a timer that hangs up calls.
+                logging.error('state read: %s', error)
+                write_json(RUN / 'status.json', {**controller.status(), 'error': str(error), 'updated': time.time()})
+            stop.wait(.5)
+    finally:
+        controller.stop()
+        write_json(RUN / 'status.json', {**controller.status(), 'available': False, 'updated': time.time()})
+
+
+if __name__ == '__main__':
+    main()

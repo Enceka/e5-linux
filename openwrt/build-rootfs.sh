@@ -115,8 +115,8 @@ have=$(shasum -a 256 "$WORK/$TARBALL" 2>/dev/null || sha256sum "$WORK/$TARBALL")
 [ -n "$want" ] && [ "${have%% *}" = "$want" ] || { echo "checksum mismatch for $TARBALL" >&2; exit 1; }
 
 # logdw, e5-vibrate, e5-ctl-raw and e5-modemd, static: OpenWrt has no compiler of its own
-docker run --rm --platform linux/arm64 -v "$HERE/src":/src:ro -v "$WORK":/out alpine:3.22 \
-    sh -euc 'apk add -q gcc musl-dev linux-headers >/dev/null &&
+docker run --rm --platform linux/arm64 -v "$HERE/src":/src:ro -v "$WORK":/out "${E5_TOOLS_BUILD_IMAGE:-alpine:3.22}" \
+    sh -euc 'if ! command -v gcc >/dev/null; then apk add -q gcc musl-dev linux-headers >/dev/null; fi
         gcc -static -Os -s -o /out/logdw /src/logdw.c &&
         gcc -static -Os -s -Wall -o /out/e5-vibrate /src/e5-vibrate.c &&
         gcc -static -Os -s -Wall -o /out/e5-ctl-raw /src/e5-ctl-raw.c &&

@@ -17,8 +17,9 @@ import sys
 
 INPUT_KEYMAP_BY_INDEX = 0x01
 KEY_NAMES = {28: 'ENTER', 96: 'KP_ENTER', 353: 'SELECT', 158: 'BACK', 103: 'UP',
-             108: 'DOWN', 105: 'LEFT', 106: 'RIGHT', 523: 'PHONE', 139: 'MENU',
-             169: 'NEXT', 55: 'KPASTERISK'}
+             108: 'DOWN', 105: 'LEFT', 106: 'RIGHT', 523: 'NUMERIC_POUND', 139: 'MENU',
+             169: 'PHONE', 407: 'NEXT', 445: 'PICKUP_PHONE', 446: 'HANGUP_PHONE',
+             116: 'POWER', 55: 'KPASTERISK'}
 
 
 class KeymapEntry(ctypes.Structure):

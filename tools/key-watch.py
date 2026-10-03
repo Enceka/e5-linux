@@ -14,8 +14,9 @@ import sys
 import time
 
 NAMES = {28: 'ENTER', 96: 'KP_ENTER', 353: 'SELECT', 158: 'BACK', 103: 'UP',
-         108: 'DOWN', 105: 'LEFT', 106: 'RIGHT', 523: 'PHONE', 139: 'MENU',
-         169: 'NEXT', 55: 'KPASTERISK', 2: '1', 3: '2', 4: '3', 5: '4', 6: '5',
+         108: 'DOWN', 105: 'LEFT', 106: 'RIGHT', 523: 'NUMERIC_POUND', 139: 'MENU',
+         169: 'PHONE', 407: 'NEXT', 445: 'PICKUP_PHONE', 446: 'HANGUP_PHONE',
+         55: 'KPASTERISK', 2: '1', 3: '2', 4: '3', 5: '4', 6: '5',
          7: '6', 8: '7', 9: '8', 10: '9', 11: '0', 1: 'ESC', 14: 'BACKSPACE',
          116: 'POWER', 115: 'VOLUMEUP', 114: 'VOLUMEDOWN'}
 EVENT = struct.calcsize('<qqHHi')

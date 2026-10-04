@@ -208,8 +208,46 @@ f2fs_last_cp() {
     log "stage=data-last-cp ver=$(printf %x "$best") flags=0x$(printf %x "$bestfl") $([ $((bestfl & 1)) = 1 ] && echo clean-unmount || echo dirty)"
 }
 
+# A fresh SD install keeps the hardware files on the card, not in userdata.
+# Read only the firmware before loading WCN; system/trial selection is still
+# performed later by the registry. Firmware is identical across this device's
+# registered roots. ro,noload prevents replaying a journal during this probe.
+early_card_firmware() {
+    local skip=$1 n=0 d name part found=
+    mkdir -p /tmp/e5-early-fw
+    while [ "$n" -lt 10 ]; do
+        mdev -s
+        for d in /sys/class/block/mmcblk*; do
+            [ -d "$d" ] || continue
+            name=${d##*/}
+            case "$name" in *p[0-9]*|*boot*) continue ;; esac
+            [ "$name" = "$skip" ] && continue
+            for part in /dev/${name}p*; do
+                [ -b "$part" ] || continue
+                mount -t ext4 -o ro,noload,noatime "$part" /tmp/e5-early-fw 2>/dev/null || continue
+                if [ -f /tmp/e5-early-fw/etc/e5/sd-root ] &&
+                   [ -x /tmp/e5-early-fw/sbin/init ] &&
+                   [ -s /tmp/e5-early-fw/lib/firmware/wcnmodem.bin ]; then
+                    mkdir -p /lib/firmware
+                    if cp -a /tmp/e5-early-fw/lib/firmware/. /lib/firmware/; then
+                        found=$part
+                    fi
+                fi
+                umount /tmp/e5-early-fw
+                if [ -n "$found" ]; then
+                    log "stage=device-firmware-early sd=$found firmware=$(ls /lib/firmware | wc -l)"
+                    return 0
+                fi
+            done
+        done
+        n=$((n + 1))
+        sleep 1
+    done
+    return 1
+}
+
 early_device_firmware() {
-    local n=0 dev=
+    local n=0 dev= emmc=
     [ -f /lib/firmware/wcnmodem.bin ] && return 0
     while [ -z "$dev" ] && [ "$n" -lt 10 ]; do
         for u in /sys/class/block/mmcblk*p*/uevent; do
@@ -217,7 +255,9 @@ early_device_firmware() {
         done
         [ -n "$dev" ] || { n=$((n + 1)); mdev -s; sleep 1; }
     done
-    [ -n "$dev" ] || { log "stage=device-firmware-early no userdata"; return 0; }
+    emmc=${dev#/dev/}; emmc=${emmc%%p*}
+    early_card_firmware "$emmc" && return 0
+    [ -n "$dev" ] || { log "stage=device-firmware-early no userdata or SD firmware"; return 0; }
     [ -b "$dev" ] || mdev -s
     f2fs_last_cp "$dev"
     mkdir -p /data /tmp/devfiles

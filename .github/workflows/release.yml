@@ -121,10 +121,15 @@ jobs:
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 openwrt/tests/gpt-plan.py
           python3 openwrt/tests/voice-audio.py
           python3 rootfs/tests/sd-registry.py
+          python3 rootfs/tests/early-sd-firmware.py
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 rootfs/tests/sd-write.py
           python3 rootfs/tests/voice-state.py
           python3 tools/tests/ci-release.py
           python3 ci/infoscreen-plugins/tools/check.py
+          if [ -f ci/infoscreen/tests/network-checks.sh ]; then
+            E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" bash ci/infoscreen/tests/network-checks.sh
+            python3 ci/infoscreen/tests/usb-reset.py
+          fi
       - name: Build ARM64 toolchain container
         run: docker build -t e5-mainline-build upstream/
       - name: Compile the release kernel

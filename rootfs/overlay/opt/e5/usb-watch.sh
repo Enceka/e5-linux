@@ -49,6 +49,12 @@ state() { cat "$UDC/state" 2>/dev/null; }
 
 missed=0 attempts=0
 while :; do
+	# A manual reset owns soft_connect until its short recovery sequence ends.
+	if [ -d /tmp/run/e5-usb-reset/lock ]; then
+		missed=0 attempts=0
+		sleep 2
+		continue
+	fi
 	if vbus && host_port; then
 		st=$(state)
 		if [ "$st" = configured ]; then

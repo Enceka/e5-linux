@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the actual early firmware function against fake disks and mounts."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,14 +25,18 @@ with tempfile.TemporaryDirectory(prefix='e5-early-fw-') as directory:
     command('sleep','exit 0\n')
     command('mount','echo "$*" >> "$TEST_LOG"\n[ "${5##*/}" = mmcblk1p1 ] || exit 1\ncp -R "$TEST_CARD/." "$6/"\n')
     command('umount','rm -rf "$1"; mkdir -p "$1"\n')
-    actual=function.replace('/sys/class/block',str(root/'sys')).replace('/dev/',str(root/'dev')+'/')
-    actual=actual.replace('/tmp/e5-early-fw',str(root/'mounted')).replace('[ -b "$part" ]','[ -f "$part" ]')
+    # Replace the original paths once. On Linux the temporary directory itself
+    # starts with /tmp/e5-early-fw, so chained replace() corrupts inserted paths.
+    paths={'/sys/class/block':str(root/'sys'),'/dev/':str(root/'dev')+'/',
+           '/tmp/e5-early-fw':str(root/'mounted')}
+    actual=re.sub('|'.join(re.escape(p) for p in paths),lambda m:paths[m.group()],function)
+    actual=actual.replace('[ -b "$part" ]','[ -f "$part" ]')
     actual=actual.replace('mkdir -p /lib/firmware','mkdir -p '+str(root/'firmware'))
     actual=actual.replace(' /lib/firmware/;', ' '+str(root/'firmware')+'/;').replace('ls /lib/firmware','ls '+str(root/'firmware'))
     script=root/'test.sh';script.write_text('set -eu\nlog() { echo "$*"; }\n'+actual+'\nearly_card_firmware mmcblk0\n')
     env={**os.environ,'PATH':str(root/'bin')+':'+os.environ['PATH'],'TEST_LOG':str(root/'mounts'),'TEST_CARD':str(root/'card')}
     result=subprocess.run(['sh',str(script)],env=env,capture_output=True,text=True)
-    assert result.returncode==0,result.stderr
+    assert result.returncode==0,(result.stdout,result.stderr)
     assert (root/'firmware/wcnmodem.bin').read_text()=='this-device-firmware'
     log=(root/'mounts').read_text();assert 'ro,noload,noatime' in log and 'mmcblk0p1' not in log
     (root/'card/lib/firmware/wcnmodem.bin').unlink()

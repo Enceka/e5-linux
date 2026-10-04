@@ -51,6 +51,8 @@ jobs:
       title: ${{ steps.verify.outputs.release_title }}
       source: ${{ steps.source.outputs.commit }}
     steps:
+      # Pipeline errors must survive tee, otherwise validation reports a later
+      # missing archive instead of the original build failure.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
@@ -131,7 +133,7 @@ jobs:
         run: bash upstream/build.sh
       - name: Restore patched OpenWrt packages
         id: packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: out/openwrt/*.apk
           key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('openwrt/build-modemmanager.sh', 'openwrt/build-bluez.sh', 'openwrt/patches/**', 'rootfs/deb-patches/modemmanager-*.patch', 'rootfs/deb-patches/bluez-*.patch') }}
@@ -142,11 +144,18 @@ jobs:
           bash openwrt/build-bluez.sh
           # This volume belongs to this ephemeral runner. Free it before image assembly.
           docker volume rm e5-openwrt-src
+      - name: Save patched packages before image assembly
+        if: steps.packages.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: out/openwrt/*.apk
+          key: ${{ steps.packages.outputs.cache-primary-key }}
       - name: Assemble the generic mainline flash bundles
         env:
           E5_MAINLINE: '1'
           E5_TOOLS_BUILD_IMAGE: e5-mainline-build
         run: |
+          set -o pipefail
           export E5_INFOSCREEN="$GITHUB_WORKSPACE/ci/infoscreen"
           export E5_INFOSCREEN_PLUGINS="$GITHUB_WORKSPACE/ci/infoscreen-plugins"
           bash openwrt/make-flash-bundle.sh 2>&1 | tee out/release/bundle-build.log

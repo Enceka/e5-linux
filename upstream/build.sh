@@ -17,6 +17,7 @@ if [ -z "${E5_IN_CONTAINER:-}" ]; then
     K="$(cd "$K" && pwd)"
     exec docker run --rm -e E5_IN_CONTAINER=1 -e E5_RELEASE="${E5_RELEASE:-}" \
         -e TZ=CST-8 -e KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-}" \
+        -e E5_OUTPUT_UID="$(id -u)" -e E5_OUTPUT_GID="$(id -g)" \
         -v "$K":/src/linux -v e5-mainline-out:/out -v "$HERE":/work \
         e5-mainline-build bash /work/build.sh "$@"
 fi
@@ -73,5 +74,10 @@ rm -rf "$O/mod" $DEST/modules && mkdir -p $DEST/modules
 make -s O="$O" ARCH=arm64 INSTALL_MOD_PATH="$O/mod" INSTALL_MOD_STRIP=1 modules_install
 find "$O/mod/lib/modules" -name '*.ko' -exec cp {} $DEST/modules/ \;
 tar -C "$O/mod" -cf $DEST/modules.tar lib/modules
+# Docker creates these files as root on Linux bind mounts. The host must be
+# able to add root-modules.tar and package the outputs after this container exits.
+if [ -n "${E5_OUTPUT_UID:-}" ] && [ -n "${E5_OUTPUT_GID:-}" ]; then
+    chown -R "$E5_OUTPUT_UID:$E5_OUTPUT_GID" "$DEST"
+fi
 echo "== modules: $(ls $DEST/modules | wc -l)"
 echo "== $(cat $DEST/kernel.release): $(ls -la $DEST/Image.lk | awk '{print $5}') bytes"

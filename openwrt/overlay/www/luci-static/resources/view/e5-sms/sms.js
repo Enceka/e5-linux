@@ -64,8 +64,12 @@ function segments(text) {
 	return count <= 160 ? 1 : Math.ceil(count / 152);
 }
 
+function safeText(value) {
+	return document.createTextNode(String(value == null ? '' : value));
+}
+
 function notify(ok, text) {
-	ui.addNotification(null, E('p', text), ok ? 'info' : 'danger');
+	ui.addNotification(null, E('p', {}, safeText(text)), ok ? 'info' : 'danger');
 }
 
 return view.extend({
@@ -185,18 +189,18 @@ return view.extend({
 		var msgs = (r && r.messages) || [];
 		if (this.filter !== undefined && this.filter !== '') msgs = msgs.filter(L.bind(function(m) { return String(m.card) === this.filter; }, this));
 		var nodes = [];
-		if (r && r.error) nodes.push(E('p', { 'class': 'e5-sms-error' }, r.error));
+		if (r && r.error) nodes.push(E('p', { 'class': 'e5-sms-error' }, safeText(r.error)));
 		Object.keys(r && r.slots || {}).forEach(function(card) {
 			var state = r.slots[card];
-			if (!state.ok) nodes.push(E('p', { 'class': 'e5-sms-error' }, 'SIM' + (+card + 1) + '：' + state.error));
+			if (!state.ok) nodes.push(E('p', { 'class': 'e5-sms-error' }, safeText('SIM' + (+card + 1) + '：' + state.error)));
 		});
 		if (!msgs.length) nodes.push(E('p', { 'class': 'e5-sms-hint' }, '这张卡暂无短信'));
 		return E('div', { 'class': 'e5-sms-inbox' }, nodes.concat(msgs.map(L.bind(function(m) {
 			return E('article', { 'class': 'e5-sms-message', 'data-card': m.card }, [
-				E('div', { 'class': 'e5-sms-message-head' }, [E('strong', {}, (m.direction === 'out' ? '发往 ' : '') + (m.number || '未知号码')),
-					E('span', { 'class': 'e5-sms-badge sim' + (m.card + 1) }, m.sim || '来源未知'),
+				E('div', { 'class': 'e5-sms-message-head' }, [E('strong', {}, safeText((m.direction === 'out' ? '发往 ' : '') + (m.number || '未知号码'))),
+					E('span', { 'class': 'e5-sms-badge sim' + (m.card + 1) }, safeText(m.sim || '来源未知')),
 					E('time', {}, mmTime(m.time))]),
-				E('p', { 'class': 'e5-sms-text' }, m.text || ''),
+				E('p', { 'class': 'e5-sms-text' }, safeText(m.text || '')),
 				E('div', { 'class': 'e5-sms-message-foot' }, [E('span', { 'class': 'e5-sms-hint' }, m.state === 'receiving' ? '长短信接收中…' : m.unread ? '未读' : ''),
 					m.direction === 'in' ? E('button', { 'class': 'btn cbi-button', 'click': L.bind(this.handleReply, this, m) }, '回复') : '',
 					E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': L.bind(this.handleDelete, this, m) }, '删除')])
@@ -215,9 +219,9 @@ return view.extend({
 			return E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td', 'style': 'white-space:nowrap' }, new Date(e.time * 1000).toLocaleString()),
 				E('td', { 'class': 'td' }, e.sim || '—'),
-				E('td', { 'class': 'td' }, (e.test ? '（测试）' : '') + (e.from || '')),
+				E('td', { 'class': 'td' }, safeText((e.test ? '（测试）' : '') + (e.from || ''))),
 				E('td', { 'class': 'td', 'style': 'word-break:break-word' },
-					e.ok ? '成功 HTTP ' + e.code : '失败：' + (e.error || ('HTTP ' + e.code)))
+					safeText(e.ok ? '成功 HTTP ' + e.code : '失败：' + (e.error || ('HTTP ' + e.code))))
 			]);
 		})));
 	},

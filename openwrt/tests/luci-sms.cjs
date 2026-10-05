@@ -43,6 +43,7 @@ const base=process.env.E5_LUCI_URL;if(!base)throw new Error('Set E5_LUCI_URL to 
  await one.locator('input').fill('https://fixture.invalid/sim1');
  await mode.selectOption('shared');await mode.selectOption('per_sim');assert.equal(await one.locator('input').inputValue(),'https://fixture.invalid/sim1');
  const articles=page.locator('.e5-sms-message');assert.equal(await articles.count(),2);
+ assert((await articles.nth(1).textContent()).includes('<script>safe</script>'));assert.equal(await articles.locator('script').count(),0);
  await articles.nth(1).getByRole('button',{name:'回复'}).click();assert.equal(await page.locator('#e5-sms-card').inputValue(),'1');
  await page.locator('#e5-sms-number').fill('10010');await page.locator('#e5-sms-text').fill('fixture');
  await page.getByRole('button',{name:'发送',exact:true}).click();

@@ -281,7 +281,11 @@ class Events:
             latest = max(latest, int(sequence))
             first = int(sequence) if first is None else min(first, int(sequence))
             if int(sequence) > self.sequence:
-                cards.add(int(card))
+                # CNMI configured through the primary command port can send
+                # either SIM's CMTI to that port's URC ring. The ring is a
+                # transport hint, not reliable message-origin identity.
+                # Resolve origin by explicitly reading both storages now.
+                cards.update((0, 1))
         if latest < self.sequence or (self.sequence and first is not None and first > self.sequence + 1):
             cards = {0, 1}
         self.sequence = latest

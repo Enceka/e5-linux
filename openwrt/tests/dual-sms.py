@@ -74,6 +74,12 @@ class Inbox(unittest.TestCase):
     def fresh(self):
         return {'version':1,'next_id':receiver.MIN_ID,'initialized':[],'messages':[],'slots':{}}
 
+    def test_secondary_notification_on_primary_ring_wakes_both_cards(self):
+        events=receiver.Events();events.path='fixture';events.fd=55;events.sequence=1
+        with patch.object(receiver.glob,'glob',return_value=['fixture']),patch.object(receiver.select,'poll'),patch.object(receiver.os,'lseek'),patch.object(receiver.os,'read',return_value=b'1 0 SM 3\n2 0 SM 1\n'):
+            self.assertEqual(events.wait(2),{0,1})
+            self.assertEqual(events.sequence,2)
+
     def test_old_messages_silent_then_each_card_alerts_once(self):
         data=self.fresh();old=sms_pdu.assemble([incoming('old')])
         for card in [0,1]:

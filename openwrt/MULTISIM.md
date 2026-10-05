@@ -22,9 +22,13 @@ older messages. This verifies the CP's dual-standby SMS reception in this test.
 
 The new `sipc_wwan` exposes `/sys/bus/platform/devices/*/sms_events`: a
 sequence-numbered snapshot of the latest 64 `+CMTI` storage arrivals, each
-with its originating SIM. `poll(POLLPRI)` wakes `e5-sms-receive`; no secondary
+with its URC channel hint. `poll(POLLPRI)` wakes `e5-sms-receive`; no secondary
 URCs are mixed into ModemManager's primary reply stream. The secondary radio
 needs `CNMI=2,1,0,0,0`, configured without changing its RF or data selection.
+The E5 CP can route both SIMs' CMTI to the primary URC ring when CNMI is
+configured through its command port. An event therefore triggers an immediate
+scan of **both** storages; the returned PDU's card-addressed storage establishes
+its origin. The snapshot's channel hint is not treated as message provenance.
 A bounded scan recovers missed events and supports older kernels.
 
 `e5-sms-receive` reads both SIM storages through `e5-at` and ModemManager,
@@ -48,8 +52,12 @@ sets the selected card's SMSC, encodes GSM7 or UTF-16 (including multipart),
 records sent messages with origin SIM, and restores the primary context.
 It never calls SPSWDATA, SetPrimarySimSlot, e5-sim or WAN restart. Partial
 submission reports how many parts succeeded and does not retry automatically.
-Hardware sending and the corrected driver's active notification are under test;
-unit tests cover both paths without sending real SMS.
+The user confirmed sends from SIM1 and SIM2 with correct originating numbers
+on 2026-10-05. The data SIM remained SIM1 and WAN stayed up. Replies to both
+cards produced driver events (including SIM2 on the primary URC channel) and
+source-labelled notifications. The receiver now resolves either channel hint
+against both storages immediately. Unit tests cover both paths without sending
+real SMS, plus UTF-16 SMSC replies and the LuCI string-valued card argument.
 
 ## Remaining voice integration
 

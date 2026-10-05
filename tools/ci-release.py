@@ -72,13 +72,16 @@ def prepare():
 
 def audit_root(info):
     expected = {}
-    for source, relative, prefix in [('infoscreen', 'root', ''), ('plugins', 'plugins/phone', 'etc/e5-infoscreen/plugins/phone/')]:
-        root = TOP / 'ci' / ('infoscreen' if source == 'infoscreen' else 'infoscreen-plugins')
+    for source, root, relative, prefix in [
+        ('e5-linux', TOP, 'openwrt/overlay', ''),
+        ('infoscreen', TOP / 'ci/infoscreen', 'root', ''),
+        ('plugins', TOP / 'ci/infoscreen-plugins', 'plugins/phone', 'etc/e5-infoscreen/plugins/phone/'),
+    ]:
         files = subprocess.check_output(['git', '-C', str(root), 'ls-files', relative], text=True).splitlines()
         for item in files:
             tail = Path(item).relative_to(relative).as_posix()
-            # rc/config may be changed while packages are assembled; check all UI/backend files.
-            if source == 'infoscreen' and not tail.startswith(('usr/', 'www/')):
+            # rc/config may change during assembly; verify runtime backend/UI files.
+            if source != 'plugins' and not tail.startswith(('usr/', 'www/')):
                 continue
             expected[prefix + tail] = file_digest(root / item)
     found, versions, modules = {}, {}, set()

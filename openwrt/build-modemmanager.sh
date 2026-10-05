@@ -39,7 +39,8 @@ set -euo pipefail
 # 4: both cards up from +CFUN: 0, and +SPSWDATA before every dial (SIM card switch)
 # 5: the work modes (+SPTESTMODEM) in that power-up, no stop on the other card's errors,
 #    and the SIM slots (both cards listed; a switch through e5-sim)
-E5REV=5
+# 6: rebuild legacy cached APKs and require a source/checksum manifest.
+E5REV=6
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
@@ -137,3 +138,4 @@ rm -f /out/modemmanager*.apk
 find bin/packages -name "modemmanager*-r$((rel + 900 + E5REV)).apk" -exec cp {} /out/ \;
 ls -la /out/modemmanager*.apk
 '
+python3 "$TOP/tools/openwrt-package-state.py" write "$VER"

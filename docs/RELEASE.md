@@ -53,6 +53,9 @@ python3 tools/ci-inputs.py create
 构建使用 GitHub 原生 `ubuntu-24.04-arm` runner，编译主线发行内核、打过补丁的
 ModemManager/BlueZ 和通用 OpenWrt 镜像。主线镜像只装入本次内核的音频/WWAN 模块，
 不要求再构建 5.15。补丁 APK 按 OpenWrt 版本和补丁内容缓存；首次构建耗时较长。
+ModemManager 构建结束后会生成 `out/openwrt/e5-modemmanager-build.json`，记录构建脚本、
+源码补丁和 APK 的 SHA-256。镜像组装前会核对这些信息；没有记录、源码发生变化或 APK
+被替换时直接停止，并提示重编译，避免新镜像混入旧的单卡插件。CI 缓存包含这份记录。
 运行环境见 [GitHub runner 文档](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
 
 每个 Release 提供：

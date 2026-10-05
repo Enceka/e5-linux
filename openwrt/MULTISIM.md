@@ -1,5 +1,13 @@
 # E5 dual-SIM telephony work
 
+2026-10-05: two China Unicom cards are independently detected (operator codes
+46001 and 46006). A legacy locally cached ModemManager APK lacked the SIM-slot
+implementation even though the image sources contained it. Rebuilding and
+updating the daemon exposes two SIM object paths, with slot 1 still selected
+for data. `build-rootfs.sh` now requires the APK/source checksum record created
+by `build-modemmanager.sh`; an old unverified APK stops packaging. This slot
+enumeration fix does not implement the dual-standby telephony transport below.
+
 The CP already starts both SIM radio stacks. Linux currently publishes one AT
 port and one ModemManager modem at a time. `sipc_wwan` merges the selected
 SIM URCs and reads/discards the other URC ring to avoid filling the CP buffer.

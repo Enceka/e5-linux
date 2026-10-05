@@ -87,6 +87,7 @@ FIRMWARE=${E5_FIRMWARE:-$TOP/rootfs/overlay/lib/firmware}
 ANDROID=${E5_ANDROID_SUBSET:-$TOP/work/android-subset}
 KBUILD=${E5_KBUILD:-$TOP/out_linux}
 mkdir -p "$WORK" "$OUT"
+python3 "$TOP/tools/openwrt-package-state.py" check "$VER"
 
 # the Argon theme: not in OpenWrt's feeds; its release's packages (arch all)
 ARGON_URL=https://github.com/jerrykuku/luci-theme-argon/releases/download/v2.4.7

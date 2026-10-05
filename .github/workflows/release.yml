@@ -125,6 +125,7 @@ jobs:
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 rootfs/tests/sd-write.py
           python3 rootfs/tests/voice-state.py
           python3 tools/tests/ci-release.py
+          python3 tools/tests/openwrt-package-state.py
           python3 ci/infoscreen-plugins/tools/check.py
           if [ -f ci/infoscreen/tests/network-checks.sh ]; then
             E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" bash ci/infoscreen/tests/network-checks.sh
@@ -140,8 +141,10 @@ jobs:
         id: packages
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: out/openwrt/*.apk
-          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('openwrt/build-modemmanager.sh', 'openwrt/build-bluez.sh', 'openwrt/patches/**', 'rootfs/deb-patches/modemmanager-*.patch', 'rootfs/deb-patches/bluez-*.patch') }}
+          path: |
+            out/openwrt/*.apk
+            out/openwrt/e5-modemmanager-build.json
+          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('tools/openwrt-package-state.py', 'openwrt/build-modemmanager.sh', 'openwrt/build-bluez.sh', 'openwrt/patches/**', 'rootfs/deb-patches/modemmanager-*.patch', 'rootfs/deb-patches/bluez-*.patch') }}
       - name: Compile patched ModemManager and BlueZ
         if: steps.packages.outputs.cache-hit != 'true'
         run: |
@@ -153,7 +156,9 @@ jobs:
         if: steps.packages.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: out/openwrt/*.apk
+          path: |
+            out/openwrt/*.apk
+            out/openwrt/e5-modemmanager-build.json
           key: ${{ steps.packages.outputs.cache-primary-key }}
       - name: Assemble the generic mainline flash bundles
         env:

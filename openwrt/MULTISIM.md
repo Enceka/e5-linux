@@ -104,7 +104,9 @@ the snapshot acquisition epoch and dial completion epoch; older snapshots
 cannot end that call, and an unindexed new dial gets a short state-acquisition
 grace period. Replies containing CLCC records that fail decoding are errors,
 never empty lists. The user confirmed SIM2 outgoing downlink after this fix;
-SIM2 incoming/upstream and sustained duration are still under validation.
+The user also confirmed the SIM2 incoming alert. Incoming-call answer/audio,
+upstream audio and a sustained 30-second test have not been verified; the user
+explicitly deferred upstream testing for now.
 
 Keep the existing per-card band restrictions: untested RF settings previously
 triggered CP assertions. Actual calls are always operated manually by the user.

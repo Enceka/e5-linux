@@ -2,28 +2,23 @@
 
 > 中文文档：[`README.zh-CN.md`](README.zh-CN.md)
 
-A Linux bring-up for the Rongyue E5 5G handset/hotspot (`ums9158_1h10`,
-Unisoc UMS9621 / qogirn6lite, Android 13), built the way
-[mu300-linux](https://github.com/dikeckaan/mu300-linux) does it for the ZTE F50 /
-MU300: a custom kernel from the device's own GPL kernel tree plus an initramfs
-that brings up a USB gadget and switches into a full Linux root filesystem,
-installed **next to Android** on slot b, without rewriting the partition table.
+Debian 13/Phosh and OpenWrt 25.12.5 on the Rongyue E5 5G handset/hotspot
+(`ums9158_1h10`, Unisoc UMS9621, Android 13). Linux uses `boot_b`; Android
+stays on slot A. SD multiboot is the recommended installation layout. The
+installer checks available space and allocates only SD partitions; Android's
+eMMC partition table stays intact. Existing userdata loop-image installations
+remain supported.
 
-The kernel source is [`kernel_sprd_ums9158`](https://github.com/Enceka/kernel_sprd_ums9158),
-branch `linux-staging` (Google android13-5.15 GKI + the Unisoc UMS9621 platform, with
-the E5 device support in it, plus this project's patches), rebuilt as a general-purpose Linux kernel by
-`kernel/build-linux.sh` on top of the device's own `e5_rongyue_defconfig`.
+The current mainline build is Linux `6.18.54-e5-00072-g020b970e351e` from
+[`linux-lts-e5`](https://github.com/Enceka/linux-lts-e5), branch `e5-6.18`.
+Build the release kernel with `E5_RELEASE=1 upstream/build.sh` and the OpenWrt
+bundle with `E5_MAINLINE=1 openwrt/make-flash-bundle.sh`. The older vendor 5.15
+build remains in [`kernel_sprd_ums9158`](https://github.com/Enceka/kernel_sprd_ums9158)
+as a reference; its manual build procedure is retained below.
 
-The current release also has a separate mainline build: Linux `6.18.54-e5-00069-g20f1a47fc2cb`
-from [`linux-lts-e5`](https://github.com/Enceka/linux-lts-e5), branch `e5-6.18`. The Debian
-image and OpenWrt flash bundle use this kernel when built with `E5_RELEASE=1` and
-`E5_MAINLINE=1`.
-
-> **Warning.** This writes to `boot_b` and to 32 bytes of `misc`. It relies on
-> the bootloader falling back to slot a, which is the mechanism mu300-linux
-> documents for this bootloader family but which has **not** been verified on
-> this exact device. You can brick or lose data. Nothing here is endorsed by
-> Unisoc or by Rongyue.
+> **Installation.** Flashing writes `boot_b` and the 32-byte boot-control block
+> in `misc`. Android slot A rollback has been verified on the E5. SD installation
+> changes the removable card's GPT; check installer selections before writing.
 >
 > **Battery.** Charging works, but only because `aw32257_charger.ko` is loaded.
 > The driver does not share a name with the hardware it drives, and while it is
@@ -49,9 +44,9 @@ Three things are materially different on the E5, and each one changed the design
 | where the ramdisk comes from | `boot` | `boot` (LK falls back to `init_boot` only if `boot`'s is empty) |
 | kernel | 5.4.254 from ZTE GPL source | 5.15.211 GKI + Unisoc platform from the E5 tree |
 
-Because there is no free space, the root filesystem lives in a loop file inside
-Android's `/data` (`/data/e5linux/rootfs.ext4`) rather than in a partition of
-its own. That keeps the "never touch the GPT" property the project inherited.
+The early implementation used `/data/e5linux/rootfs.ext4` as a loop image.
+Current installers prefer SD roots and a shared `e5boot` registry, supporting
+Debian/OpenWrt selections and separate A/B slots without changing eMMC GPT.
 
 Read [`docs/FINDINGS.md`](docs/FINDINGS.md) for the measurements behind every
 one of these claims — the bootloader log that shows which ramdisk LK picks, the
@@ -67,8 +62,8 @@ channels that survive a failed boot.
 | Ramdisk in boot.img (LK's generic ramdisk path) | ✅ verified in the stock LK log |
 | `boot_b` trial + one-shot slot arming in `misc` | ✅ **boots** |
 | Rollback to Android when Linux never reaches userspace | ✅ verified — the device lands back on slot a |
-| Initramfs: 67 dependency-ordered modules, USB ECM + ACM console | ✅ |
-| **Linux boots on the device** | ✅ **67/67 modules load, nothing left deferred** |
+| Initramfs: dependency-ordered modules and USB rescue networking | ✅ current mainline boot image loads 45 staged modules |
+| **Linux boots on the device** | ✅ Debian and OpenWrt on the mainline kernel |
 | USB gadget network (NCM) | ✅ usb0 and the hotspot are one LAN, `br0` 192.168.9.1/24 (dnsmasq DHCP; the USB host always gets 192.168.9.2, with no default route); the initramfs rescue mode keeps 192.168.77.1 |
 | Battery charging under Linux | ✅ **verified — `battery/status = Charging`** |
 | DRM/KMS display (480x320 DSI panel, now `card1` -- panfrost takes `card0`) | ✅ phoc modesets it (active plane `320x480`, `allocated by = phoc.orig`) |
@@ -87,19 +82,37 @@ channels that survive a failed boot.
 | Idle load | ✅ load average ~0 at idle (it read 6+ from vendor threads in `D` and synchronous console output) — kernel `0015`, FINDINGS §29 |
 | OpenWrt | ✅ OpenWrt 25.12 as a second system in the root image or on the SD A/B layout: ModemManager WAN, IPv4 NAT + IPv6 LAN, USB + hotspot bridge, LuCI/SSH, Bluetooth A2DP, the info screen and the Phone app. The panel remains an info screen rather than a full desktop |
 
-## Current verified release (2026-10-03)
+## Current tested versions and usage (2026-10-05)
 
-The tested software set is mainline Linux `6.18.54-e5-00069-g20f1a47fc2cb`,
-OpenWrt `25.12.5`, info screen core `1.5.1` and Phone plugin `1.4`.
-The SD installer reserves `e5boot` (32 MiB) plus a Debian A/B pair (4 GiB each),
-checks free space before writing, and reports the failing stage and device output.
-Debian and Android can update the inactive Debian slot without an automatic reboot
-or any phone call action. The generated OpenWrt mainline bundle is in
-`out/openwrt/e5-openwrt-flash-25.12.5-mainline-20261003-52f03b9.{tar.gz,zip}`.
+Mainline kernel `6.18.54-e5-00072-g020b970e351e`, OpenWrt `25.12.5`,
+ModemManager `1.24.0-r917`, info screen core `1.6.7`, Phone plugin `1.5`.
 
-GitHub Actions can now compile and publish the mainline OpenWrt flash bundles
-from a manual run or a `v*` tag, with compile time fixed to UTC+8. Bootstrap
-configuration, source selection and release validation: [`docs/RELEASE.md`](docs/RELEASE.md).
+- **Dual-SIM SMS:** both cards receive and send without changing the data SIM.
+  Lists and alerts show the source card. LuCI provides merged/card-filtered
+  inboxes and shared or separate forwarding profiles; updating keeps the inbox.
+- **Dual-SIM calls (OpenWrt):** choose SIM1/SIM2 in **Info screen → Apps → Phone**.
+  Native ModemManager call objects retain their source slot. SIM2 outgoing
+  downlink and incoming alerts are tested. SIM2 uplink, answered incoming audio
+  and a sustained 30-second call remain unverified; one voice frontend is shared.
+  Details and API extensions: [MULTISIM.md](openwrt/MULTISIM.md).
+- **Installation/update:** the SD installer reserves `e5boot` (32 MiB) and a
+  Debian A/B pair of **4 GiB each**. It checks space before writing and reports
+  concrete errors. Debian and rooted Android can update the inactive Debian slot.
+- **Connection recovery:** info screen USB settings provide reset and one-click
+  diagnostics for USB/hotspot connection problems.
+- **Android → Linux:** install the [Magisk module](magisk/README.md), then use its
+  manual Action to enter the selected installed Linux system. Module safety
+  checks are tested; Android hardware activation has not yet been tested.
+
+Flash bundles are in `out/openwrt/`; verified release files and checksums are in
+`out/release/`. Download a complete bundle from [Releases](https://github.com/Enceka/e5-linux/releases),
+unpack and follow its README. The generic image contains no recipient firmware
+or Android vendor runtime: the installer extracts them from that recipient's device.
+
+The [release workflow](docs/RELEASE.md) builds and publishes the mainline OpenWrt
+bundle and Magisk ZIP. Compile time is UTC+8 to the second. It validates source
+files, matching kernel modules, image metadata and archive hashes. Debian release
+packaging remains a separate build path.
 
 ## Repository layout
 

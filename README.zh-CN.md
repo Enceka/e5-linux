@@ -2,24 +2,20 @@
 
 > English: [`README.md`](README.md)
 
-本项目为荣悦 E5 5G 手机/随身热点（`ums9158_1h10`，Unisoc UMS9621 / qogirn6lite，
-Android 13）移植 Linux，做法与 [mu300-linux](https://github.com/dikeckaan/mu300-linux)
-为中兴 F50 / MU300 所做的一致：以设备自身的 GPL 内核源码构建定制内核，配合一个
-initramfs——它建立 USB gadget，再切换到完整的 Linux 根文件系统。系统安装在 slot b，
-与 Android **并存**，不改写分区表。
+本项目在荣悦 E5 5G 手机／随身热点（`ums9158_1h10`，Unisoc UMS9621，
+Android 13）上运行 Debian 13／Phosh 和 OpenWrt 25.12.5。Linux 使用 `boot_b`，
+Android 保留在 A 槽。推荐安装到 SD 卡：安装器先检查空间，仅分配 SD 分区，
+不改 Android eMMC 的分区表；旧的 userdata 根镜像安装仍可使用。
 
-内核源码为 [`kernel_sprd_ums9158`](https://github.com/Enceka/kernel_sprd_ums9158) 的
-`linux-staging` 分支（Google android13-5.15 GKI + Unisoc UMS9621 平台，含 E5 设备支持及
-本项目的补丁），由 `kernel/build-linux.sh` 在设备自带的 `e5_rongyue_defconfig` 基础上
-重新构建为通用 Linux 内核。
+当前主线内核为 [`linux-lts-e5`](https://github.com/Enceka/linux-lts-e5) 的 `e5-6.18`
+分支，版本 `6.18.54-e5-00072-g020b970e351e`。发行内核使用
+`E5_RELEASE=1 upstream/build.sh`，OpenWrt 主线包使用
+`E5_MAINLINE=1 openwrt/make-flash-bundle.sh`。旧的 5.15 厂商内核仓库
+[`kernel_sprd_ums9158`](https://github.com/Enceka/kernel_sprd_ums9158) 和下方手动构建
+步骤保留作参考。
 
-当前版本另有独立的主线内核：来自 [`linux-lts-e5`](https://github.com/Enceka/linux-lts-e5)
-的 `e5-6.18` 分支，版本为 `6.18.54-e5-00069-g20f1a47fc2cb`。使用
-`E5_RELEASE=1` 和 `E5_MAINLINE=1` 构建时，Debian 镜像与 OpenWrt 刷入包使用该内核。
-
-> **警告。** 本项目会写入 `boot_b` 以及 `misc` 中的 32 字节，并依赖 bootloader 回退到
-> slot a。该机制是 mu300-linux 针对这一 bootloader 系列记录的行为，但**尚未**在本机型上
-> 验证。可能导致设备变砖或数据丢失。本项目与 Unisoc、荣悦均无关，也未获其认可。
+> **安装。** 刷入会写 `boot_b` 和 `misc` 的 32 字节启动控制块，E5 的 Android A 槽
+> 回退机制已验证。SD 安装会修改可移除卡的 GPT，请核对安装器选择的目标。
 >
 > **电池。** 充电可以工作，但前提是加载了 `aw32257_charger.ko`。该驱动的名称与其所驱动
 > 的硬件不一致；缺少它时，充电器还会使 USB 完全不可用——`fw_devlink` 在 USB 控制器的
@@ -42,9 +38,9 @@ E5 有三处实质性差异，每一处都改变了设计：
 | ramdisk 的来源 | `boot` | `boot`（仅当 `boot` 的 ramdisk 为空时 LK 才回退到 `init_boot`） |
 | 内核 | 中兴 GPL 源码的 5.4.254 | E5 源码树中的 5.15.211 GKI + Unisoc 平台 |
 
-由于没有空闲空间，根文件系统以 loop 文件的形式存放在 Android 的 `/data` 中
-（`/data/e5linux/rootfs.ext4`），而不是独立分区。这保留了项目沿袭下来的“绝不改动 GPT”
-原则。
+早期实现把根文件系统放在 `/data/e5linux/rootfs.ext4` 中。当前安装器优先使用
+SD 根分区与共享 `e5boot` 注册表，支持 Debian／OpenWrt 选择和各自的 A/B 槽，
+保留 eMMC 分区表。
 
 上述每一项结论的实测依据见 [`docs/FINDINGS.md`](docs/FINDINGS.md)：显示 LK 选用哪个
 ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT 的精确计算，以及
@@ -59,8 +55,8 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 | ramdisk 位于 boot.img（LK 的 generic ramdisk 路径） | ✅ 已在原厂 LK 日志中确认 |
 | `boot_b` 试启动 + 在 `misc` 中一次性设定 slot | ✅ **可启动** |
 | Linux 未进入用户空间时回退到 Android | ✅ 已验证——设备回到 slot a |
-| initramfs：67 个按依赖排序的模块，USB ECM + ACM 控制台 | ✅ |
-| **Linux 在设备上启动** | ✅ **67/67 个模块加载，无遗留 deferred** |
+| initramfs：按依赖加载模块和 USB 救援网络 | ✅ 当前主线启动镜像装载 45 个模块 |
+| **Linux 在设备上启动** | ✅ Debian、OpenWrt 均可使用主线内核 |
 | USB gadget 网络（NCM） | ✅ usb0 与热点为同一局域网，`br0` 192.168.9.1/24（dnsmasq DHCP；USB 主机固定获得 192.168.9.2，不下发默认路由）；initramfs 救援模式仍使用 192.168.77.1 |
 | Linux 下电池充电 | ✅ **已验证——`battery/status = Charging`** |
 | DRM/KMS 显示（480x320 DSI 屏，现为 `card1`——`card0` 由 panfrost 占用） | ✅ phoc 完成 modeset（活动 plane `320x480`，`allocated by = phoc.orig`） |
@@ -79,17 +75,33 @@ ramdisk 的 bootloader 日志、`misc` 中的实时 `bootloader_control`、GPT �
 | 空闲负载 | ✅ 空闲时负载均值约为 0（此前因厂商内核线程处于 `D` 状态及同步控制台输出而读数在 6 以上）——内核补丁 `0015`，FINDINGS §29 |
 | OpenWrt | ✅ OpenWrt 25.12 可作为根镜像或 SD 卡 A/B 多系统中的第二个系统：ModemManager WAN、IPv4 NAT + IPv6 LAN、USB 与热点网桥、LuCI/SSH、蓝牙 A2DP、信息屏和电话应用均可用。面板仍是信息屏，不是完整桌面 |
 
-## 当前已验证版本（2026-10-03）
+## 当前版本与用法（2026-10-05）
 
-本次验证的软件组合为主线 Linux `6.18.54-e5-00069-g20f1a47fc2cb`、OpenWrt
-`25.12.5`、信息屏核心 `1.5.1` 和电话插件 `1.4`。SD 安装器会预留
-`e5boot`（32 MiB）以及 Debian A/B 两个 4 GiB 分区，写入前检查剩余空间，并显示
-失败阶段和设备返回内容。Debian 和 Android 都可以更新非活动 Debian 槽，默认不会自动
-重启，也不会执行拨号操作。生成的 OpenWrt 主线刷入包位于
-`out/openwrt/e5-openwrt-flash-25.12.5-mainline-20261003-52f03b9.{tar.gz,zip}`。
+主线内核 `6.18.54-e5-00072-g020b970e351e`，OpenWrt `25.12.5`，
+ModemManager `1.24.0-r917`，信息屏核心 `1.6.7`，电话插件 `1.5`。
 
-GitHub Actions 可通过手动运行或 `v*` tag 编译并发布主线 OpenWrt 一键刷入包，编译时间
-固定为 UTC+8。首次输入配置、源码选择和发布校验见 [`docs/RELEASE.md`](docs/RELEASE.md)。
+- **双卡短信：** 两张卡均可收发，不切换上网卡；列表、详情和提醒显示来源卡。
+  LuCI 支持双卡合并／筛选收件箱、共用或分别设置转发，更新镜像保留收件箱。
+- **双卡电话（OpenWrt）：** 在“信息屏 → 应用 → 电话”选择 SIM1／SIM2。
+  通话由原生 ModemManager 对象管理，来源卡固定，独立于上网卡。
+  SIM2 拨出下行和来电提醒已验证；SIM2 上行、来电接听音频和持续 30 秒通话
+  仍未验证。设备共用一条语音前端。实现与接口见 [MULTISIM.md](openwrt/MULTISIM.md)。
+- **安装与更新：** SD 安装器预留 `e5boot`（32 MiB）和 Debian A/B **各 4 GiB**；
+  写入前检查空余空间，失败时显示具体原因。Debian 与已 root Android 均可更新
+  非活动 Debian 槽。
+- **连接修复：** 信息屏 USB 设置提供重置 USB 连接和一键诊断，便于排查 USB／热点。
+- **Android 切回 Linux：** 安装 [Magisk 模块](magisk/README.md)，启用后手动点击
+  “操作”，进入当前选择的已安装 Linux。模块校验与写入边界测试已通过，Android
+  实机激活仍未测试。
+
+刷入包位于 `out/openwrt/`，校验后的交付文件位于 `out/release/`。
+可从 [Releases](https://github.com/Enceka/e5-linux/releases) 下载完整包，解压后按包内
+README 操作。通用镜像不含接收设备的固件和 Android vendor 运行库，安装器从目标
+设备提取这些文件。
+
+[发布工作流](docs/RELEASE.md) 打包并发布主线 OpenWrt 和 Magisk ZIP，编译时间为
+UTC+8、精确到秒；检查源码、模块版本、镜像元数据和归档哈希。Debian 发布包仍走
+独立构建路径。
 
 ## 仓库结构
 

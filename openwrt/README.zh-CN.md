@@ -2,211 +2,73 @@
 
 > English: [`README.md`](README.md)
 
-OpenWrt 25.12 作为 E5 上的第二个 Linux，与本仓库构建的 Debian 镜像并存，做法与
-[mu300-linux](https://github.com/dikeckaan/mu300-linux) 在中兴 F50 / MU300 上
-让 OpenWrt 与 Ubuntu 并存一致：同一个内核和 initramfs（slot b 的 boot 镜像），
-OpenWrt 自己的用户空间，外加 E5 的硬件支持。定位是路由器：5G 模组作 WAN，USB 口
-和热点同在一个 LAN，带 LuCI 和 SSH。屏幕上没有图形界面（见文末）。
+当前使用 **OpenWrt 25.12.5 + E5 主线 6.18.y 内核**。Android 保留在 A 槽，Linux
+使用 B 槽。设备面板运行信息屏及其应用，电话拨号盘／通讯录就在信息屏里；LuCI
+是独立的路由器网页管理界面。
 
-## 结构
+## 安装与更新
 
-* **没有自己的内核，也没有固件镜像。** E5 从 `boot_b` 启动厂商内核；initramfs
-  （`boot/init`）挂载 userdata，启动其中 `e5linux/boot-os` 指定的系统
-  （`e5linux/boot-os-next` 只管一次启动；两者都由 `e5-os` 写入）。OpenWrt 有两种形式：
-  * **独立安装**：自己的根镜像 `/data/e5linux/openwrt.ext4`，不需要 Debian。旁边没有
-    Debian 镜像（`/data/e5linux/rootfs.ext4`）时启动的就是它；有的话由 `e5-os` 选择。
-  * **装在 Debian 镜像里**：Debian 根镜像内的一个目录 `/openwrt`。
-* **硬件文件。** Wi-Fi/BT 固件、这个内核要的 Debian 签名 `regulatory.db`、启动基带用的
-  Android vendor 子集（`/opt/e5/android`）以及内核的 modem 模块，都是从本机提取的。
-  独立镜像自带这些文件，另带信息屏用的 Noto Sans CJK 字体。目录形式则在启动时从
-  `/mnt/e5-disk`（initramfs 把 Debian 镜像留挂在这里）把 Debian 根里的那份 bind 进来，
-  不另存一份。initramfs 只把 Debian 的 overlay（systemd 单元、NetworkManager 配置）
-  拷进 Debian。
-* **userdata** 在运行的系统里位于 `/mnt/e5-data`（initramfs 把挂载移到这里），根镜像和
-  `e5linux/boot-os` 都在其中。
-* **模组和 Debian 一样由 ModemManager 管**：用 OpenWrt 自己的软件包，加上 unisoc
-  插件重新编译（`rootfs/deb-patches/modemmanager-0*.patch`，同一套补丁），再用
-  OpenWrt 为它提供的 netifd 协议：`wan` 是 `proto modemmanager`，模组为
-  `unisoc-sipc`。`mmcli`（短信、小区信息、`--command`）和 Debian 上是同一个程序。
-* **其余都用 OpenWrt 的**：netifd（`br-lan` = USB + 热点）、防火墙（fw4）、
-  dnsmasq、odhcpd、hostapd（wpad）、LuCI、dropbear。
+从 [Releases](https://github.com/Enceka/e5-linux/releases) 下载完整主线刷入包，解压后
+Windows 运行 `flash.cmd`，macOS／Linux 运行 `./flash.sh`，按包内说明和安装器操作。
+首次安装从已 root 的 Android 开始，提取目标设备自身固件和 vendor 文件；通用镜像
+不携带这些文件，也不包含用户设备身份。
 
-OpenWrt 对仓库其他部分的要求：内核选项 `CONFIG_BRIDGE_VLAN_FILTERING`（netifd 的
-网桥要用），ModemManager 补丁 `06`（模组尚未定义的上下文也能写入初始 EPS 承载），
-以及上面提到的 `boot/init` 改动。原因见 `docs/FINDINGS.md` 第 39 节。
+推荐 SD 安装：写入前检查空间，仅分配可移除卡，保留 Android eMMC 分区表。
+共享 `e5boot` 注册表管理所选系统和各系统槽位，旧 userdata 独立镜像与目录安装
+仍可使用。
 
-E5 另外需要的东西在 `overlay/` 里：
-
-| | |
-|---|---|
-| `lib/preinit/05_e5_debian_root` | 把 Debian 根里的固件和 vendor 子集 bind 进来（目录形式） |
-| `etc/init.d/e5-hw` | USB gadget 守护、无线电管制数据库 |
-| `etc/init.d/e5-vendor` | 基带：在 vendor chroot 里运行 `modem_control`、`cp_diskserver`、`refnotify` |
-| `etc/init.d/e5-sipc-wwan` | CP 起来后提供模组的 AT 端口，对应 `/etc/config/e5-sim` 指定的 SIM 卡 |
-| `usr/sbin/e5-sim`、`etc/config/e5-sim` | 上网用的 SIM 卡：`e5-sim` 列出两张卡和各自的锁频，`e5-sim 0\|1` 切换（AT 端口换到另一张卡、重启 ModemManager、按卡设置 APN、拉起 wan；ModemManager 的 SIM 卡槽和信息屏也走这里）——FINDINGS 47 |
-| `etc/init.d/e5-modemd`、`usr/sbin/e5-modemd` | 替 `modem_control` 应答 CP 的 assert（几秒内复位，而不是 300 秒）；`e5-modemd blocked` 可主动复位 CP |
-| `etc/init.d/e5-telnetd` | 救援用 telnet，只对 USB 口开放 |
-| `etc/init.d/e5-boot-ok` | 启动成功后重新武装 slot b（`e5-next-boot`） |
-| `etc/hotplug.d/wwan/26-e5-sipa-eth`、`lib/udev/rules.d/78-mm-e5-sipc.rules` | 没有 udev 时的 ModemManager 衔接：AT 端口出现后再交出数据口，不探测 tty |
-| `etc/hotplug.d/iface/10-e5-usb0` | 把 `usb0` 加进 `br-lan`，netifd 不碰它：NCM gadget 绝不能 down |
-| `etc/uci-defaults/90-e5`、`91-e5-wireless`、`92-e5-default-boot` | 首次启动：LAN、WAN、DHCP、把承载的 IPv6 /64 放到 LAN、热点；从 Android 安装时把 Linux 设为默认启动 |
-| `etc/init.d/e5-bt`、`etc/config/e5-bluetooth`、`usr/libexec/e5-bt-connect`、`etc/uci-defaults/94-e5-bluetooth` | 蓝牙：`btattach` 把 WCN 芯片的蓝牙核心挂成 hci0（厂商初始化由内核完成），bluetoothd 用我们打过补丁的 BlueZ（`build-bluez.sh`：SDP MTU），适配器名为“E5”且始终可配对；`e5-bt-connect MAC` 按这颗芯片需要的顺序配对、信任并连接耳机 |
-| `etc/init.d/e5-pulseaudio`、`etc/pulse/system.pa` | 扬声器和蓝牙音频（A2DP）用的 PulseAudio，由 `e5-audio` 在 DSP 起来后启动；耳机连上后成为输出，断开后回到扬声器 |
-| `etc/init.d/e5-audio`、`usr/libexec/e5-volume`、`etc/config/e5-audio` | 扬声器：开机时启动声卡和音频 DSP（`e5-audio-dsp start`：用 insmod 加载 24 个厂商音频模块、写入 AGDSP 镜像、用 `e5-ctl-raw` 设置 profile select、用 amixer 应用 UCM 路由），然后恢复保存的音量——作用于扬声器数字增益的 16 级音量，15 级等于 Android 播放媒体时的增益；`e5-volume play beep` 播放提示音 |
-| `etc/init.d/e5-luci`、`usr/libexec/e5-luci-revision` | LuCI 的“蜂窝网络”页把模组修订版本按行拆成单独的行（Platform Version、Project Version、BASE Version、HW Version、Build），不再挤成一行；构建时和每次启动时都会应用 |
-| `etc/uci-defaults/93-e5-luci` | 首次启动：LuCI 设为中文和 Argon 主题（都已预装；Argon 用其发布页的软件包，版本和校验值固定在 `build-rootfs.sh` 里） |
-| `etc/init.d/e5-apn-auto`、`usr/libexec/e5-apn-auto` | 没有指定 APN 时（`network.wan.apn_auto=1`），每次启动按 SIM 卡运营商（MCC+MNC）自动设置 APN |
-| `etc/init.d/e5-sms-notify`、`usr/libexec/e5-sms-notify` | 新短信时震动（`e5-vibrate`，设置在 `/etc/config/e5-notify`），并记为未读（`/tmp/run/e5-sms/unread`，`e5-sms-notify read` 清除） |
-| `etc/init.d/e5-charge`、`usr/libexec/e5-charge` | 充电控制：到上限停止充电，降到下限重新充电，可临时充满一次（`/etc/config/e5-charge`，通过 charger-manager 的 `stop_charge`） |
-| `usr/libexec/e5-sysupgrade` | 替换 `sysupgrade`：刷固件镜像会覆盖 eMMC |
-
-两个系统共用的脚本来自 `rootfs/overlay/opt/e5`（`vendor-start.sh`、
-`e5-next-boot`、`e5-os` 等）。
-
-## 构建
-
-当前维护的 SD 卡安装会先检查完整布局，再把更新写入已注册的非活动根分区并试启动。
-当前布局可让 OpenWrt 与 Debian A/B 并存（`e5boot` 32 MiB，Debian 每个槽 4 GiB）；
-常规更新在根分区之间轮换，试启动失败会回滚。注册表和系统选择方式见
-[`MULTIBOOT.md`](MULTIBOOT.md)。
-
-自行安装 ttyd 时保留 `interface '@lan'`：本项目会按 netifd 的 LAN 主地址绑定，
-LAN 地址变化后自动重新绑定，不会选中桥上旧的救援地址。当前设备可通过
-`http://192.168.9.1:7681` 访问；ttyd 不预装。
-
-在主机上（Docker，arm64，Apple silicon 上原生运行）：
+已运行 OpenWrt、通过 USB 连接电脑时：
 
 ```sh
-openwrt/build-modemmanager.sh   # 带 unisoc 插件的 ModemManager -> out/openwrt/*.apk
-openwrt/build-bluez.sh          # 打上 rootfs/deb-patches/bluez-0*.patch 的 BlueZ -> out/openwrt/*.apk
-openwrt/build-rootfs.sh         # -> out/openwrt/e5-openwrt-25.12.5-rootfs.tar.gz（目录形式）
-E5_STANDALONE=1 openwrt/build-rootfs.sh   # -> out/openwrt/e5-openwrt-25.12.5.ext4.gz（独立安装）
+./flash.sh --update
 ```
 
-`build-modemmanager.sh` 从 OpenWrt 源码树的发布 tag 构建，用发布时的 feeds 和配置，
-因此编出的包与一同安装的仓库包相匹配。第一次运行会编译 OpenWrt 的主机工具和工具链
-（保存在 Docker 卷 `e5-openwrt-src`），之后只重编 ModemManager。
+更新保留配置、通讯录、转发设置和持久短信收件箱。内核和根目录模块必须来自同一次
+构建。失败时先看完整错误，安装器会显示失败阶段和设备返回内容。
 
-`build-rootfs.sh` 取 OpenWrt 的 `armsr/armv8` 根文件系统，安装软件包（hostapd、iw、
-bash、LuCI 的 ModemManager 协议、`out/openwrt/` 里的 ModemManager），加入
-`overlay/`、共用脚本、一个完整的静态 busybox（补上 OpenWrt 版省掉的 applet），
-`logdw`（`src/logdw.c`，来自 mu300-linux），以及 `e5-vibrate`（`src/e5-vibrate.c`，
-驱动 PMIC 的震动马达）。如果信息屏仓库就在本仓库旁边（`../e5-infoscreen`，或用
-`E5_INFOSCREEN=<目录>` 指定；`E5_INFOSCREEN=` 留空则不包含），它的软件包和文件也会
-一并装进系统树。
+## 日常使用
 
-`E5_STANDALONE=1` 会补上目录形式从 Debian 根里取的东西：固件
-（`rootfs/overlay/lib/firmware`，由 `rootfs/pull-wcn-firmware.sh`、
-`pull-audio-firmware.sh` 提取）、vendor 子集（`work/android-subset`，由
-`rootfs/extract-android-vendor.sh` 提取）、内核构建产物里的 `wwan.ko` 和 `sipc_wwan.ko`
-（`out_linux`，须与 boot 镜像的内核是同一次构建），以及取自 Debian `fonts-noto-cjk` 的
-Noto Sans CJK；然后把系统树打包成 1 GiB 的 ext4 镜像（`E5_IMAGE_MB` 可改；带信息屏约用
-330 MB）。固件和 vendor 子集是这台设备自己的文件，不在仓库里：请为自己的设备构建镜像。
+- USB 管理局域网：设备 **192.168.9.1**，电脑通常是 **192.168.9.2**；USB 与热点
+  共用 `br-lan`。移动网络通过 ModemManager 提供 IPv4／IPv6。
+- **信息屏 → 应用 → 电话：** 同一页面包含拨号盘和通讯录。电话插件 1.5 支持
+  本次拨号选卡、来电来源卡；铃声、震动和亮屏可在插件设置中调整。
+- **LuCI → 服务 → 短信：** 双卡合并／分别查看收件箱，显示来源卡，发送时选卡，
+  转发可共用配置或按卡分别设置。收发短信不切换上网卡。
+- **信息屏 → 设置 → USB：** 重置 USB 连接、一键检查连接，便于排查 USB／热点。
+- 在信息屏启动设置切回 Android，或执行 `e5-next-boot android` 后重启。
+  [Magisk 模块](../magisk/README.md) 提供从 Android 手动切回已安装 Linux 的“操作”
+  按钮，保留 SD 当前系统选择。
 
-## 安装
+## 双卡验证范围
 
-### 独立安装
+当前组合：内核 `6.18.54-e5-00072-g020b970e351e`，ModemManager
+`1.24.0-r917`，信息屏核心 `1.6.7`，电话插件 `1.5`。
 
-boot 镜像须支持 OpenWrt 独立镜像（2026-09-27 之后的 `boot/init`，native18 或更新）。
-在设备上运行的 Linux（Debian，或任一形式的 OpenWrt）中，通过 USB LAN：
+双卡短信接收、发送和来源标记已验证；SIM2 拨出听筒下行和来电提醒已验证。
+SIM2 麦克风上行、来电接听音频、持续 30 秒通话仍未验证。设备共用一条语音前端，
+已有通话时再次拨号会返回忙，不会自动挂断现有通话。
+实现、测试记录和原生选卡接口见 [MULTISIM.md](MULTISIM.md)。
+
+## 构建与发布
+
+在主仓库根目录执行：
 
 ```sh
-openwrt/install-standalone.sh            # 安装 /data/e5linux/openwrt.ext4
-openwrt/install-standalone.sh --try      # 安装，并启动一次 OpenWrt
-openwrt/install-standalone.sh --switch   # 安装，并把 OpenWrt 设为默认
+docker build -t e5-mainline-build upstream/
+E5_RELEASE=1 upstream/build.sh
+openwrt/build-modemmanager.sh
+openwrt/build-bluez.sh
+E5_MAINLINE=1 E5_TOOLS_BUILD_IMAGE=e5-mainline-build openwrt/make-flash-bundle.sh
 ```
 
-设备从主机下载镜像，运行 `device-install-image.sh`：解包到已装镜像旁边，并保留已有
-OpenWrt 的配置（正在运行的那个，否则是已装的镜像，再否则是 `/openwrt`）：`/etc/config`、
-密码、SSH 密钥、流量记录。用 `apk` 另装的软件包不会带过去。在还没有 OpenWrt 的 Debian 上
-安装时，会像 `install.sh` 一样取 Debian 的 APN 和热点设置。在独立 OpenWrt 自身里更新时，
-新镜像先存为 `openwrt.ext4.new`，下次启动时由 initramfs 换上，旧镜像保留为
-`openwrt.ext4.old`。
+需要已有启动模板、BusyBox 和信息屏构建输入，准备方法见
+[RELEASE.md](../docs/RELEASE.md)。`build-rootfs.sh` 会拒绝旧的或未经校验的
+ModemManager APK；软件包构建运行通话身份与路由测试，不访问真实基带。
+通用包输出到 `out/openwrt/`，发布校验检查后端／界面源码、模块版本和 ZIP／TAR 内容。
 
-从已 root（Magisk）的 Android 通过 adb 安装，适用于从没跑过 Linux 的设备：
+GitHub Actions 编译并发布主线刷入包和 Magisk ZIP，编译时间为 UTC+8、精确到秒。
+启动后由 ModemManager、vendor CP 运行库和音频服务接管硬件，网络待注册完成后可用。
 
-```sh
-openwrt/install-standalone.sh --adb --apn <APN> --wifi-key <密码>
-boot/flash-trial.sh work/boot-linux-slotb-<名称>.img
-```
-
-APN 和热点（`--ssid`，默认 `E5-Linux`）写到 userdata 上的
-`e5linux/openwrt-install.conf`，供首次启动使用；不给密码时热点保持关闭。OpenWrt 起来后
-运行 `e5-next-boot linux`，设备就会一直启动它。之后可以删掉 Debian：删除
-`/mnt/e5-data/e5linux/rootfs.ext4`，OpenWrt 就成了唯一的系统。
-
-### 给别人用的一键刷入包
-
-```sh
-openwrt/make-flash-bundle.sh   # -> out/openwrt/e5-openwrt-flash-<版本>-<时间戳>-<git>.{tar.gz,zip}
-```
-
-时间戳采用构建开始时的 UTC+8 时间，格式为 `YYYYMMDD-HHMMSS`，精确到秒。
-包内的 `files/VERSION` 记录同一时间，并附 UTC 时区偏移。
-自动打包发布工作流和首次输入配置见 [`../docs/RELEASE.md`](../docs/RELEASE.md)。
-
-一个压缩包，解压后在装有 adb 的 macOS 或 Linux 上运行 `./flash.sh`：从 Android 给已解锁
-bootloader、装了 Magisk 的 E5 安装 OpenWrt；之后可通过 USB 网络更新（`--update`，保留设置），
-或从 Android 再次启动它（`--boot-openwrt`）。说明书是 `bundle/README.zh-CN.md`。包里是通用镜像
-（`E5_DEVICE_FILES=0`）和不带 Debian overlay 的 boot 镜像，不含本机的任何文件：本机的固件和
-vendor 文件属于厂商，且带有本机身份信息（pskey 里的蓝牙地址、Android 属性里的序列号），overlay
-里还有本机的 MAC 地址和热点配置。`flash.sh` 用 `rootfs/pull-wcn-firmware.sh`、
-`pull-audio-firmware.sh` 和 `extract-android-vendor.sh` 提取每台设备自己的文件，打包成 userdata
-上的 `e5linux/device-files.tar`，由 boot/init 解到镜像里。没有指定 APN 时按 SIM 卡自动选择
-（`e5-apn-auto`）。
-
-### 装在 Debian 镜像里
-
-E5 运行 Debian，可通过 USB LAN（192.168.9.1）访问：
-
-```sh
-openwrt/install.sh            # 安装 /openwrt
-openwrt/install.sh --try      # 安装，并启动一次 OpenWrt
-openwrt/install.sh --switch   # 安装，并把 OpenWrt 设为默认
-```
-
-设备从主机下载 tarball，运行 `device-install.sh`：解包到 `/openwrt`，并从 Debian
-取来 OpenWrt 需要一致的设置，即 NetworkManager `Mobile` 连接的 APN、`Hotspot` 的
-SSID、密码和信道，以及默认启动项。重装会保留 OpenWrt 的配置。boot 镜像须带有当前的
-`boot/init`（native13 或更新）。
-
-## 使用
-
-* LuCI：`http://192.168.9.1`（中文界面、Argon 主题；可在 系统 → 系统 → 语言和界面 中更改）；SSH：`ssh root@192.168.9.1`；USB 口上可用 telnet。
-  密码与 Debian 镜像一样是 `root`，直到用 `passwd` 修改。
-* 切换系统：`e5-os debian` 或 `e5-os openwrt`，然后 `reboot`
-  （`e5-os openwrt --once` 只启动一次；`e5-os status` 查看状态和已安装的系统）。
-  Debian 上也有同样的命令；信息屏只提供“下次启动 Android”，启动 Debian 留给命令行。
-* 回 Android：`e5-next-boot android`，然后 `reboot`。
-* APN：LuCI -> 网络 -> 接口 -> wan，或
-  `uci set network.wan.apn=...; uci commit network; ifup wan`。
-* 模组：`mmcli -m unisoc-sipc`、`e5-at 'AT+CSQ'`。
-* **切勿**刷 OpenWrt 固件镜像，也不要用它运行 `sysupgrade`：该功能已禁用，因为
-  armsr 镜像是整盘镜像，会覆盖分区表、Android 和引导程序。软件包用 `apk upgrade`
-  更新；镜像（或系统树）在主机上重新构建后再重装。
-
-## 状态
-
-已在设备上验证（2026-09-27，用 `--try` 全新安装）：
-
-| | |
-|---|---|
-| 启动 | 从根镜像内的 `/openwrt` 启动，可一次性（`boot-os-next`）或设为默认；一次性启动之后回到 Debian；启动完成时重新武装 slot b |
-| LAN | `br-lan` 192.168.9.1/24 = `usb0` + `wlan0`；USB 主机固定拿到 192.168.9.2（与 Debian 一样不给默认路由），其他客户端 .10-.200 |
-| 基带 | CP 由 vendor chroot 里的 `modem_control` 启动；ModemManager 的 unisoc 插件驱动 `wwan0at0` + `sipa_eth0`，上下文 1 使用从 Debian 取来的 APN |
-| WAN | `proto modemmanager`：IPv4 默认路由走 `sipa_eth0`，LAN 走 NAT；设备本身有 IPv6，每个 LAN 客户端也从承载的 /64 获得 IPv6（SLAAC，无 NAT） |
-| 热点 | hostapd，5 GHz 149 信道 / 80 MHz，WPA2-PSK，SSID 和密码与 Debian 一致；手机能连上并拿到地址 |
-| 管理 | telnet（仅 USB 口）、SSH、LuCI；`e5-os`、`e5-next-boot`、`e5-at` |
-| 独立安装 | 从 Debian 用 `--try` 安装：从 `openwrt.ext4` 启动（loop，已用 287 MB），保留了 `/openwrt` 的配置和流量记录；模组、WAN、热点和信息屏都用镜像自带的固件、vendor 子集、模块和字体正常运行；在它内部更新，新镜像在下次启动时换上 |
-
-尚未验证：LuCI 的 ModemManager 页面、OpenWrt 下收发短信、`--switch` 设为默认后
-的多次启动。
-
-## 暂不包含
-
-* **屏幕上的图形界面。** 没有手机界面（OpenWrt 的 `video` feed 有 wayland、
-  wlroots、weston、cage、cog、gtk 和 Mesa 的 panfrost，但没有 Phosh）。屏幕上运行的
-  是信息屏：cage + cog 跑在 panfrost 上，状态页面可用触摸和键盘操作。它放在单独的
-  仓库 `e5-infoscreen` 里，装在这棵系统树之上。
-* **完整桌面。** 面板运行独立的信息屏，而不是 Phosh；OpenWrt 仍提供 LuCI、SSH 和电话
-  应用，可通过网络使用。
+硬件服务在 `overlay/`，共享脚本在 `../rootfs/overlay/opt/e5/`，Unisoc MM 补丁在
+`../rootfs/deb-patches/`。旧 5.15／vendor 和 userdata 目录安装保留作兼容路径，
+当前一键包使用主线内核、推荐 SD 安装。

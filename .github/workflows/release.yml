@@ -120,6 +120,9 @@ jobs:
           python3 openwrt/tests/flash-diagnostics.py
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 openwrt/tests/gpt-plan.py
           python3 openwrt/tests/voice-audio.py
+          python3 openwrt/tests/dual-sms.py
+          python3 openwrt/tests/dual-sms-send.py
+          python3 magisk/tests.py
           python3 rootfs/tests/sd-registry.py
           python3 rootfs/tests/early-sd-firmware.py
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 rootfs/tests/sd-write.py
@@ -169,6 +172,8 @@ jobs:
           export E5_INFOSCREEN="$GITHUB_WORKSPACE/ci/infoscreen"
           export E5_INFOSCREEN_PLUGINS="$GITHUB_WORKSPACE/ci/infoscreen-plugins"
           bash openwrt/make-flash-bundle.sh 2>&1 | tee out/release/bundle-build.log
+      - name: Package Android to Linux Magisk module
+        run: bash magisk/build.sh
       - name: Validate release archives and sources
         id: verify
         run: python3 tools/ci-release.py verify

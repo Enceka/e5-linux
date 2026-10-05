@@ -360,3 +360,11 @@ initramfs reporting progress.
 * Scripts, tools and documentation in this repository: MIT (see `LICENSE`).
 * Stock firmware, Android vendor components and bootloaders belong to their
   owners and are not distributed here.
+
+### Return from Android with Magisk
+
+The [E5 Linux switch module](magisk/README.md) adds a manual **Action** in Magisk
+to boot the Linux system already installed on SD or in an image. It preserves
+the SD multiboot selection and validates live boot control before arming slot B.
+Installing the module does not switch systems. Build it with `bash magisk/build.sh`;
+release workflows include the module ZIP and checksum.

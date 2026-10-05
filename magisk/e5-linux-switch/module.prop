@@ -1,0 +1,6 @@
+id=e5_linux_switch
+name=E5 切回 Linux
+version=1.0.0
+versionCode=10000
+author=Enceka
+description=在 Magisk 中点击「操作」，重启进入已安装的 Linux；保留 SD 多系统选择，启动失败回退 Android。

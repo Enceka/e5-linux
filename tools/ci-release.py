@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import struct
 import tarfile
 import time
 import zipfile
@@ -174,8 +175,24 @@ def verify():
             with archive.open(stem + '/' + name) as stream:
                 if digest(stream) != checksum:
                     raise ValueError('ZIP differs from tar: ' + name)
+    modules = list((TOP / 'out/magisk').glob(f'e5-linux-switch-*-{info["timestamp"]}.zip'))
+    if len(modules) != 1:
+        raise ValueError('expected one completed Magisk module for the build timestamp')
+    module_path = modules[0]
+    with zipfile.ZipFile(module_path) as module:
+        expected = {p.name: p.read_bytes() for p in (TOP / 'magisk/e5-linux-switch').iterdir() if p.name != 'bootctl.c'}
+        expected['README.md'] = (TOP / 'magisk/README.md').read_bytes()
+        expected['sd-registry.sh'] = (TOP / 'rootfs/overlay/opt/e5/e5-sd-registry').read_bytes()
+        if set(module.namelist()) != set(expected) | {'e5-bootctl'} or module.testzip() is not None:
+            raise ValueError('Magisk module member or CRC mismatch')
+        for name, content in expected.items():
+            if module.read(name) != content:
+                raise ValueError('Magisk module source mismatch: ' + name)
+        helper = module.read('e5-bootctl')
+        if helper[:5] != b'\x7fELF\x02' or struct.unpack_from('<H', helper, 18)[0] != 183:
+            raise ValueError('Magisk boot control helper is not arm64 ELF')
     info['assets'] = {}
-    for path in (tarpath, zipath):
+    for path in (tarpath, zipath, module_path):
         checksum = file_digest(path)
         info['assets'][path.name] = {'sha256': checksum, 'bytes': path.stat().st_size}
         destination = RELEASE / path.name
@@ -189,6 +206,7 @@ def verify():
         f'信息屏 {info["infoscreen_version"]} · 电话插件 {info["phone_version"]}\n\n'
         '下载 ZIP 或 TAR.GZ，解压后运行 `flash.cmd`（Windows）或 `./flash.sh`（macOS/Linux）。'
         '已安装 OpenWrt 使用 `--update` 保留设置。刷入说明在包内 README。\n\n'
+        'Magisk ZIP 用于已 root Android 手动切回已安装的 Linux，在模块列表点击「操作」。\n\n'
         '镜像不含设备固件和 Android vendor 运行库；安装器从目标设备提取。'
         'CI 已验证文件和模块一致性，硬件实测仍需在 E5 上进行。\n\n'
         f'源码版本：\n\n{refs}\n\n[构建记录]({info.get("run_url")})\n')

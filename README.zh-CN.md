@@ -317,3 +317,10 @@ bootloader 日志。pstore 控制台中的 `E5-LINUX: stage=…` 行是 initramf
 * 方法、仓库结构及若干脚本源自 [`dikeckaan/mu300-linux`](https://github.com/dikeckaan/mu300-linux)（MIT）。
 * 本仓库中的脚本、工具与文档：MIT（见 `LICENSE`）。
 * 原厂固件、Android 厂商组件与 bootloader 归其各自所有者所有，不在此分发。
+
+### 从 Android 通过 Magisk 切回 Linux
+
+安装 [E5 切回 Linux 模块](magisk/README.md)，在 Magisk 的模块列表点击「操作」，
+即可启动 SD 卡或旧镜像中已安装的 Linux。保留 SD 多系统选择，切槽前校验当前
+启动控制数据；安装模块不会自动切换系统。`bash magisk/build.sh` 可本地打包，
+发布工作流也会提供模块 ZIP 和校验值。

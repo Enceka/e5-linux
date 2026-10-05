@@ -61,7 +61,8 @@ ModemManager 构建结束后会生成 `out/openwrt/e5-modemmanager-build.json`�
 每个 Release 提供：
 
 - ZIP 和 TAR.GZ 一键刷入包。
-- `SHA256SUMS`：两个刷入包的 SHA-256。
+- `e5-linux-switch-*.zip`：Android 切回已安装 Linux 的 [Magisk 模块](../magisk/README.md)。
+- `SHA256SUMS`：刷入包和 Magisk 模块的 SHA-256。
 - `build.json`：UTC+8 时间、软件版本、源码提交和输入归档 SHA-256。
 
 发布前核对源码文件、内核模块版本、包内哈希、启动镜像清单、ZIP CRC、两种归档的

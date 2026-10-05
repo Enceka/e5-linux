@@ -83,6 +83,9 @@ def audit_root(info):
             # rc/config may change during assembly; verify runtime backend/UI files.
             if source != 'plugins' and not tail.startswith(('usr/', 'www/')):
                 continue
+            if source == 'e5-linux' and tail == 'usr/libexec/e5-sysupgrade':
+                # build-rootfs.sh installs this safety guard at /sbin/sysupgrade.
+                tail = 'sbin/sysupgrade'
             expected[prefix + tail] = file_digest(root / item)
     found, versions, modules = {}, {}, set()
     rootfs = TOP / 'work/openwrt' / f'e5-openwrt-{info["openwrt_version"]}-generic-rootfs.tar.gz'

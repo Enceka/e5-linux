@@ -1,0 +1,800 @@
+Description: Unisoc per-call SIM slots and shared ModemManager call tracking
+ Add an optional sim-slot call creation property and a read-only Call.SimSlot.
+ Keep native call objects and state handling; select the call's radio within
+ every AT control command, independently of primary/data SIM selection.
+Author: e5-linux
+Forwarded: no
+
+--- a/libmm-glib/mm-call-properties.c
++++ b/libmm-glib/mm-call-properties.c
+@@ -45,9 +45,11 @@
+ G_DEFINE_TYPE (MMCallProperties, mm_call_properties, G_TYPE_OBJECT)
+ 
+ #define PROPERTY_NUMBER "number"
++#define PROPERTY_SIM_SLOT "sim-slot"
+ 
+ struct _MMCallPropertiesPrivate {
+     gchar *number;
++    guint sim_slot;
+ };
+ 
+ /*****************************************************************************/
+@@ -88,6 +90,21 @@
+     g_return_val_if_fail (MM_IS_CALL_PROPERTIES (self), NULL);
+ 
+     return self->priv->number;
++}
++
++void
++mm_call_properties_set_sim_slot (MMCallProperties *self, guint slot)
++{
++    g_return_if_fail (MM_IS_CALL_PROPERTIES (self));
++    g_return_if_fail (slot <= 2);
++    self->priv->sim_slot = slot;
++}
++
++guint
++mm_call_properties_get_sim_slot (MMCallProperties *self)
++{
++    g_return_val_if_fail (MM_IS_CALL_PROPERTIES (self), 0);
++    return self->priv->sim_slot;
+ }
+ 
+ /*****************************************************************************/
+@@ -114,6 +131,9 @@
+                                PROPERTY_NUMBER,
+                                g_variant_new_string (self->priv->number));
+ 
++    if (self->priv->sim_slot)
++        g_variant_builder_add (&builder, "{sv}", PROPERTY_SIM_SLOT,
++                               g_variant_new_uint32 (self->priv->sim_slot));
+     return g_variant_ref_sink (g_variant_builder_end (&builder));
+ }
+ 
+@@ -126,6 +146,13 @@
+ {
+     if (g_str_equal (key, PROPERTY_NUMBER)) {
+         mm_call_properties_set_number (self, value);
++    } else if (g_str_equal (key, PROPERTY_SIM_SLOT)) {
++        if (!value || (strcmp (value, "1") && strcmp (value, "2"))) {
++            g_set_error_literal (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                                 "sim-slot must be 1 or 2");
++            return FALSE;
++        }
++        mm_call_properties_set_sim_slot (self, value[0] - '0');
+     } else {
+         g_set_error (error,
+                      MM_CORE_ERROR,
+@@ -193,7 +220,16 @@
+         mm_call_properties_set_number (
+             properties,
+             g_variant_get_string (value, NULL));
+-    else {
++    else if (g_str_equal (key, PROPERTY_SIM_SLOT)) {
++        guint slot;
++        if (!g_variant_is_of_type (value, G_VARIANT_TYPE_UINT32) ||
++            (slot = g_variant_get_uint32 (value)) < 1 || slot > 2) {
++            g_set_error_literal (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                                 "sim-slot must be an unsigned slot number 1 or 2");
++            return FALSE;
++        }
++        mm_call_properties_set_sim_slot (properties, slot);
++    } else {
+         /* Set error */
+         g_set_error (error,
+                      MM_CORE_ERROR,
+--- a/libmm-glib/mm-call-properties.h
++++ b/libmm-glib/mm-call-properties.h
+@@ -67,6 +67,8 @@
+ void              mm_call_properties_set_number (MMCallProperties *self,
+                                                  const gchar *text);
+ const gchar      *mm_call_properties_get_number (MMCallProperties *self);
++void              mm_call_properties_set_sim_slot (MMCallProperties *self, guint slot);
++guint             mm_call_properties_get_sim_slot (MMCallProperties *self);
+ 
+ /*****************************************************************************/
+ /* ModemManager/libmm-glib/mmcli specific methods */
+--- a/introspection/org.freedesktop.ModemManager1.Call.xml
++++ b/introspection/org.freedesktop.ModemManager1.Call.xml
+@@ -180,6 +180,10 @@
+         Since: 1.6
+     -->
+     <property name="Number" type="s" access="read" />
++
++    <!-- E5 extension: source slot, 1-based; zero means unknown. Independent
++         of the selected data SIM and fixed for this call's lifetime. -->
++    <property name="SimSlot" type="u" access="read" />
+ 
+     <!--
+         Multiparty:
+--- a/libmm-glib/mm-call.h
++++ b/libmm-glib/mm-call.h
+@@ -77,6 +77,7 @@
+ MMCallStateReason  mm_call_get_state_reason (MMCall *self);
+ 
+ MMCallDirection    mm_call_get_direction    (MMCall *self);
++guint              mm_call_get_sim_slot     (MMCall *self);
+ 
+ gboolean           mm_call_get_multiparty   (MMCall *self);
+ 
+--- a/libmm-glib/mm-call.c
++++ b/libmm-glib/mm-call.c
+@@ -970,3 +970,11 @@
+ 
+     object_class->finalize = finalize;
+ }
++
++/* E5 source-slot extension; zero is unknown on other modem plugins. */
++guint
++mm_call_get_sim_slot (MMCall *self)
++{
++    g_return_val_if_fail (MM_IS_CALL (self), 0);
++    return mm_gdbus_call_get_sim_slot (MM_GDBUS_CALL (self));
++}
+--- a/cli/mmcli-output.h
++++ b/cli/mmcli-output.h
+@@ -302,6 +302,7 @@
+     MMC_F_BEARER_STATS_TOTAL_BYTES_TX,
+     MMC_F_CALL_GENERAL_DBUS_PATH,
+     MMC_F_CALL_PROPERTIES_NUMBER,
++    MMC_F_CALL_PROPERTIES_SIM_SLOT,
+     MMC_F_CALL_PROPERTIES_DIRECTION,
+     MMC_F_CALL_PROPERTIES_MULTIPARTY,
+     MMC_F_CALL_PROPERTIES_STATE,
+--- a/cli/mmcli-output.c
++++ b/cli/mmcli-output.c
+@@ -282,6 +282,7 @@
+     [MMC_F_BEARER_STATS_TOTAL_BYTES_RX]              = { "bearer.stats.total-bytes-rx",                     "total-bytes rx",           MMC_S_BEARER_STATS,               },
+     [MMC_F_BEARER_STATS_TOTAL_BYTES_TX]              = { "bearer.stats.total-bytes-tx",                     "total-bytes tx",           MMC_S_BEARER_STATS,               },
+     [MMC_F_CALL_GENERAL_DBUS_PATH]                   = { "call.dbus-path",                                  "path",                     MMC_S_CALL_GENERAL,               },
++    [MMC_F_CALL_PROPERTIES_SIM_SLOT]                 = { "call.properties.sim-slot",                        "SIM slot",                 MMC_S_CALL_PROPERTIES,            },
+     [MMC_F_CALL_PROPERTIES_NUMBER]                   = { "call.properties.number",                          "number",                   MMC_S_CALL_PROPERTIES,            },
+     [MMC_F_CALL_PROPERTIES_DIRECTION]                = { "call.properties.direction",                       "direction",                MMC_S_CALL_PROPERTIES,            },
+     [MMC_F_CALL_PROPERTIES_MULTIPARTY]               = { "call.properties.multiparty",                      "multiparty",               MMC_S_CALL_PROPERTIES,            },
+--- a/cli/mmcli-call.c
++++ b/cli/mmcli-call.c
+@@ -172,6 +172,7 @@
+     audio_format = mm_call_peek_audio_format (call);
+ 
+     mmcli_output_string (MMC_F_CALL_GENERAL_DBUS_PATH,       mm_call_get_path (call));
++    mmcli_output_string_take (MMC_F_CALL_PROPERTIES_SIM_SLOT, g_strdup_printf ("%u", mm_call_get_sim_slot (call)));
+     mmcli_output_string (MMC_F_CALL_PROPERTIES_NUMBER,       mm_call_get_number (call));
+     mmcli_output_string (MMC_F_CALL_PROPERTIES_DIRECTION,    mm_call_direction_get_string (mm_call_get_direction (call)));
+     mmcli_output_string (MMC_F_CALL_PROPERTIES_MULTIPARTY,   mm_call_get_multiparty (call) ? "yes" : "no");
+--- a/src/mm-modem-helpers.h
++++ b/src/mm-modem-helpers.h
+@@ -97,6 +97,7 @@
+ /* +CLCC response parser */
+ typedef struct {
+     guint            index;
++    guint            sim_slot; /* 1-based source slot, or zero if unknown */
+     MMCallDirection  direction;
+     MMCallState      state;
+     gchar           *number; /* optional */
+--- a/src/mm-iface-modem-voice.c
++++ b/src/mm-iface-modem-voice.c
+@@ -187,6 +187,15 @@
+     /* Create a call object as defined by the interface */
+     g_assert (MM_IFACE_MODEM_VOICE_GET_IFACE (self)->create_call != NULL);
+     call = MM_IFACE_MODEM_VOICE_GET_IFACE (self)->create_call (self, MM_CALL_DIRECTION_OUTGOING, number);
++    if (mm_call_properties_get_sim_slot (properties)) {
++        if (!mm_gdbus_call_get_sim_slot (MM_GDBUS_CALL (call))) {
++            g_set_error_literal (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
++                                 "Per-call SIM selection is not supported by this modem");
++            g_object_unref (call);
++            return NULL;
++        }
++        mm_gdbus_call_set_sim_slot (MM_GDBUS_CALL (call), mm_call_properties_get_sim_slot (properties));
++    }
+     update_audio_settings_in_call (self, call);
+     return call;
+ }
+@@ -214,6 +223,19 @@
+     number    = mm_base_call_get_number    (call);
+     idx       = mm_base_call_get_index     (call);
+ 
++    /* A number or a native CLCC index can be identical on different cards. */
++    if (call_info->sim_slot && mm_gdbus_call_get_sim_slot (MM_GDBUS_CALL (call)) &&
++        call_info->sim_slot != mm_gdbus_call_get_sim_slot (MM_GDBUS_CALL (call)))
++        return FALSE;
++    if (call_info->sim_slot && call_info->index && idx && call_info->index != idx)
++        return FALSE;
++
++    if (call_info->sim_slot && idx && call_info->index == idx &&
++        (call_info->state == MM_CALL_STATE_RINGING_IN || call_info->state == MM_CALL_STATE_WAITING) &&
++        (state == MM_CALL_STATE_ACTIVE || state == MM_CALL_STATE_HELD ||
++         state == MM_CALL_STATE_DIALING || state == MM_CALL_STATE_RINGING_OUT))
++        return FALSE; /* CP reused the index for a new incoming session. */
++
+     /* Match index */
+     if (call_info->index && (call_info->index == idx))
+         match_index = TRUE;
+@@ -224,6 +246,10 @@
+     if ((call_info->direction == direction) &&
+         (call_info->state == state) &&
+         (!call_info->index || !idx || match_index))
++        match_direction_and_state = TRUE;
++
++    if (call_info->sim_slot && !idx && state == MM_CALL_STATE_DIALING &&
++        direction == MM_CALL_DIRECTION_OUTGOING && call_info->direction == direction)
+         match_direction_and_state = TRUE;
+ 
+     /* Match number */
+@@ -367,6 +393,8 @@
+ 
+     mm_obj_dbg (self, "creating new incoming call...");
+     call = create_incoming_call (self, call_info->number);
++    if (call_info->sim_slot)
++        mm_gdbus_call_set_sim_slot (MM_GDBUS_CALL (call), call_info->sim_slot);
+ 
+     /* Set the state */
+     mm_base_call_change_state (call, call_info->state, MM_CALL_STATE_REASON_INCOMING_NEW);
+@@ -416,7 +444,7 @@
+ 
+     /* fully ignore already terminated calls */
+     state = mm_base_call_get_state (call);
+-    if (state == MM_CALL_STATE_TERMINATED)
++    if (state == MM_CALL_STATE_TERMINATED || state == MM_CALL_STATE_UNKNOWN)
+         return;
+ 
+     /* Iterate over the call info list */
+@@ -429,6 +457,10 @@
+             return;
+         }
+     }
++
++    /* An E5 ATD still queued behind an idle poll has not reached the CP yet. */
++    if (g_object_get_data (G_OBJECT (call), "e5-call-starting"))
++        return;
+ 
+     /* not found in list! this call is now terminated */
+     mm_obj_dbg (ctx->self, "call '%s' with direction %s, state %s, number '%s', index %u"
+@@ -512,6 +544,8 @@
+ 
+             mm_obj_dbg (self, "creating new incoming call...");
+             call = create_incoming_call (self, call_info->number);
++    if (call_info->sim_slot)
++        mm_gdbus_call_set_sim_slot (MM_GDBUS_CALL (call), call_info->sim_slot);
+ 
+             /* Set the state and the index */
+             mm_base_call_change_state (call, call_info->state, MM_CALL_STATE_REASON_INCOMING_NEW);
+--- a/src/plugins/simtech/mm-shared-simtech.c
++++ b/src/plugins/simtech/mm-shared-simtech.c
+@@ -846,7 +846,7 @@
+                     GMatchInfo      *info,
+                     MMSharedSimtech *self)
+ {
+-    MMCallInfo        call_info;
++    MMCallInfo        call_info = { 0 };
+     g_autofree gchar *str = NULL;
+ 
+     /* We could have "VOICE" or "DATA". Now consider only "VOICE" */
+--- a/src/mm-broadband-modem.c
++++ b/src/mm-broadband-modem.c
+@@ -8393,7 +8393,7 @@
+                         GMatchInfo       *info,
+                         MMBroadbandModem *self)
+ {
+-    MMCallInfo  call_info;
++    MMCallInfo  call_info = { 0 };
+     gchar      *str;
+ 
+     call_info.index     = 0;
+@@ -8510,7 +8510,7 @@
+                GMatchInfo       *info,
+                MMBroadbandModem *self)
+ {
+-    MMCallInfo call_info;
++    MMCallInfo call_info = { 0 };
+     gboolean   indication_call_list_reload_enabled = FALSE;
+ 
+     g_object_get (self,
+@@ -8539,7 +8539,7 @@
+                GMatchInfo       *info,
+                MMBroadbandModem *self)
+ {
+-    MMCallInfo call_info;
++    MMCallInfo call_info = { 0 };
+     gboolean   indication_call_list_reload_enabled = FALSE;
+ 
+     g_object_get (self,
+@@ -8566,7 +8566,7 @@
+                 GMatchInfo       *info,
+                 MMBroadbandModem *self)
+ {
+-    MMCallInfo  call_info;
++    MMCallInfo  call_info = { 0 };
+     gchar      *str;
+     gboolean    indication_call_list_reload_enabled = FALSE;
+ 
+@@ -8598,7 +8598,7 @@
+                GMatchInfo       *info,
+                MMBroadbandModem *self)
+ {
+-    MMCallInfo call_info;
++    MMCallInfo call_info = { 0 };
+     gboolean   indication_call_list_reload_enabled = FALSE;
+ 
+     g_object_get (self,
+--- a/src/mm-base-call.c
++++ b/src/mm-base-call.c
+@@ -27,6 +27,7 @@
+ #include <libmm-glib.h>
+ 
+ #include "mm-base-call.h"
++#include "mm-call-list.h"
+ #include "mm-broadband-modem.h"
+ #include "mm-iface-modem.h"
+ #include "mm-iface-modem-voice.h"
+@@ -1006,6 +1007,49 @@
+     mm_gdbus_call_emit_dtmf_received (MM_GDBUS_CALL (self), dtmf);
+ }
+ 
++/* Unisoc shares an AT owner but each call retains its own source card.
++ * Keep the selection and basic ATD/ATA in one CP command, so signal polling
++ * cannot change SPACTCARD between selecting the card and the operation. */
++typedef struct { MMBaseCall *self; gboolean active; gboolean any; } CallBusy;
++static void call_other_live (MMBaseCall *call, CallBusy *ctx)
++{
++    MMCallState state = mm_base_call_get_state (call);
++    if (call == ctx->self || state == MM_CALL_STATE_UNKNOWN || state == MM_CALL_STATE_TERMINATED)
++        return;
++    ctx->any = TRUE;
++    if (state == MM_CALL_STATE_ACTIVE || state == MM_CALL_STATE_HELD ||
++        state == MM_CALL_STATE_DIALING || state == MM_CALL_STATE_RINGING_OUT)
++        ctx->active = TRUE;
++}
++static gboolean call_busy (MMBaseCall *self, gboolean accepting)
++{
++    MMCallList *list = NULL;
++    CallBusy ctx = { self, FALSE, FALSE };
++    if (!g_object_get_data (G_OBJECT (self->priv->modem), "e5-dual-sim-voice")) return FALSE;
++    g_object_get (self->priv->modem, MM_IFACE_MODEM_VOICE_CALL_LIST, &list, NULL);
++    if (list) { mm_call_list_foreach (list, (MMCallListForeachFunc)call_other_live, &ctx); g_object_unref (list); }
++    return accepting ? ctx.active : ctx.any;
++}
++
++static gchar *
++call_command_for_card (MMBaseCall *self, const gchar *command)
++{
++    guint slot = mm_gdbus_call_get_sim_slot (MM_GDBUS_CALL (self));
++    if (!slot || !g_object_get_data (G_OBJECT (self->priv->modem), "e5-dual-sim-voice"))
++        return g_strdup (command);
++    if (g_str_has_prefix (command, "AT")) command += 2;
++    return g_strdup_printf ("AT+SPACTCARD=%u;%s", slot - 1, command);
++}
++
++static void
++call_at_command (MMBaseCall *self, const gchar *command, guint timeout,
++                 GAsyncReadyCallback callback, gpointer user_data)
++{
++    gchar *selected = call_command_for_card (self, command);
++    mm_base_modem_at_command (self->priv->modem, selected, timeout, FALSE, callback, user_data);
++    g_free (selected);
++}
++
+ /*****************************************************************************/
+ /* Start the CALL */
+ 
+@@ -1025,6 +1069,7 @@
+     GError *error = NULL;
+     const gchar *response = NULL;
+ 
++    g_object_set_data (G_OBJECT (g_task_get_source_object (task)), "e5-call-starting", NULL);
+     response = mm_base_modem_at_command_finish (modem, res, &error);
+ 
+     /* check response for error */
+@@ -1052,6 +1097,11 @@
+ 
+     task = g_task_new (self, NULL, callback, user_data);
+ 
++    if (call_busy (self, FALSE)) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE,
++                                 "Another call is present; end it before dialing");
++        g_object_unref (task); return;
++    }
+     port = mm_base_modem_peek_best_at_port (MM_BASE_MODEM (self->priv->modem), &error);
+     if (!port) {
+         g_task_return_error (task, error);
+@@ -1060,6 +1110,11 @@
+     }
+ 
+     cmd = g_strdup_printf ("ATD%s;", mm_gdbus_call_get_number (MM_GDBUS_CALL (self)));
++    {
++        gchar *selected = call_command_for_card (self, cmd);
++        g_free (cmd); cmd = selected;
++    }
++    g_object_set_data (G_OBJECT (self), "e5-call-starting", GINT_TO_POINTER (1));
+     mm_base_modem_at_command_full (self->priv->modem,
+                                    port,
+                                    cmd,
+@@ -1113,10 +1168,12 @@
+     GTask *task;
+ 
+     task = g_task_new (self, NULL, callback, user_data);
+-    mm_base_modem_at_command (self->priv->modem,
+-                              "ATA",
+-                              2,
+-                              FALSE,
++    if (call_busy (self, TRUE)) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE,
++                                 "Another call is active; end it before accepting this call");
++        g_object_unref (task); return;
++    }
++    call_at_command (self, "ATA", 2,
+                               (GAsyncReadyCallback)call_accept_ready,
+                               task);
+ }
+@@ -1159,10 +1216,7 @@
+     task = g_task_new (self, NULL, callback, user_data);
+ 
+     cmd = g_strdup_printf ("+CTFR=%s", number);
+-    mm_base_modem_at_command (self->priv->modem,
+-                              cmd,
+-                              20,
+-                              FALSE,
++    call_at_command (self, cmd, 20,
+                               (GAsyncReadyCallback)call_deflect_ready,
+                               task);
+     g_free (cmd);
+@@ -1200,10 +1254,7 @@
+     MMBaseCall *self;
+ 
+     self = g_task_get_source_object (task);
+-    mm_base_modem_at_command (self->priv->modem,
+-                              "+CHUP",
+-                              2,
+-                              FALSE,
++    call_at_command (self, "+CHUP", 2,
+                               (GAsyncReadyCallback)chup_ready,
+                               task);
+ }
+@@ -1245,10 +1296,7 @@
+         gchar *cmd;
+ 
+         cmd = g_strdup_printf ("+CHLD=1%u", self->priv->index);
+-        mm_base_modem_at_command (self->priv->modem,
+-                                  cmd,
+-                                  2,
+-                                  FALSE,
++        call_at_command (self, cmd, 2,
+                                   (GAsyncReadyCallback)chld_hangup_ready,
+                                   task);
+         g_free (cmd);
+@@ -1304,10 +1352,7 @@
+     task = g_task_new (self, NULL, callback, user_data);
+ 
+     cmd = g_strdup_printf ("AT+VTS=%c", dtmf[0]);
+-    mm_base_modem_at_command (self->priv->modem,
+-                              cmd,
+-                              3,
+-                              FALSE,
++    call_at_command (self, cmd, 3,
+                               (GAsyncReadyCallback)call_send_dtmf_ready,
+                               task);
+ 
+--- a/src/plugins/unisoc/mm-broadband-modem-unisoc.c
++++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c
+@@ -50,6 +50,9 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <glib-unix.h>
+ 
+ #define _LIBMM_INSIDE_MM
+ #include <libmm-glib.h>
+@@ -61,6 +64,9 @@
+ #include "mm-modem-helpers.h"
+ #include "mm-iface-modem-signal.h"
+ #include "mm-iface-modem-messaging.h"
++#include "mm-iface-modem-voice.h"
++#include "mm-call-list.h"
++#include "mm-charsets.h"
+ #include "mm-log-object.h"
+ #include "mm-broadband-modem-unisoc.h"
+ #include "mm-broadband-bearer-unisoc.h"
+@@ -87,11 +93,16 @@
+ typedef struct {
+     Cesq     last_cesq;
+     gboolean have_cesq;
++    gboolean voice_loading;
++    guint voice_poll_id;
++    guint voice_event_id;
++    gint voice_fd;
+ } MMBroadbandModemUnisocPrivate;
+ 
+ static void iface_modem_init (MMIfaceModemInterface *iface);
+ static void iface_modem_signal_init (MMIfaceModemSignalInterface *iface);
+ static void iface_modem_messaging_init (MMIfaceModemMessagingInterface *iface);
++static void iface_modem_voice_init (MMIfaceModemVoiceInterface *iface);
+ 
+ static MMIfaceModemMessagingInterface *iface_modem_messaging_parent;
+ 
+@@ -99,7 +110,8 @@
+                         G_ADD_PRIVATE (MMBroadbandModemUnisoc)
+                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
+                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
+-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init))
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_VOICE, iface_modem_voice_init))
+ 
+ static MMBroadbandModemUnisocPrivate *
+ get_private (gpointer self)
+@@ -1360,6 +1372,257 @@
+ 
+ /*****************************************************************************/
+ 
++/* Dual-standby voice. Query both addressed CLCC storages, then hand the full
++ * list to the existing ModemManager call tracker. URC channels are hints:
++ * CNMI/voice setup can route either card's indications onto the primary ring. */
++typedef struct {
++    guint slot;
++    guint own;
++    GList *calls;
++    GError *error;
++} VoiceListContext;
++
++static void voice_list_free (VoiceListContext *ctx)
++{
++    mm_3gpp_call_info_list_free (ctx->calls);
++    g_clear_error (&ctx->error);
++    g_free (ctx);
++}
++static gboolean voice_load_finish (MMIfaceModemVoice *self, GAsyncResult *res,
++                                   GList **list, GError **error)
++{
++    GError *inner = NULL;
++    *list = g_task_propagate_pointer (G_TASK (res), &inner);
++    if (inner) { g_propagate_error (error, inner); return FALSE; }
++    return TRUE;
++}
++static void voice_restore_ready (MMBaseModem *modem, GAsyncResult *res, GTask *task)
++{
++    VoiceListContext *ctx = g_task_get_task_data (task);
++    GError *error = NULL;
++    mm_base_modem_at_command_finish (modem, res, &error);
++    get_private (modem)->voice_loading = FALSE;
++    if (!ctx->error && error) ctx->error = error; else g_clear_error (&error);
++    if (ctx->error) g_task_return_error (task, g_steal_pointer (&ctx->error));
++    else { g_task_return_pointer (task, ctx->calls, (GDestroyNotify)mm_3gpp_call_info_list_free); ctx->calls = NULL; }
++    g_object_unref (task);
++}
++static void voice_query_next (GTask *task);
++typedef struct { guint slot; gboolean live; } SlotLive;
++static void slot_live (MMBaseCall *call, SlotLive *ctx)
++{
++    MMCallState state = mm_base_call_get_state (call);
++    if (mm_gdbus_call_get_sim_slot (MM_GDBUS_CALL (call)) == ctx->slot &&
++        state != MM_CALL_STATE_TERMINATED && state != MM_CALL_STATE_UNKNOWN)
++        ctx->live = TRUE;
++}
++static gboolean has_live_on_slot (MMBaseModem *modem, guint slot)
++{
++    MMCallList *list = NULL;
++    SlotLive ctx = { slot, FALSE };
++    g_object_get (modem, MM_IFACE_MODEM_VOICE_CALL_LIST, &list, NULL);
++    if (list) { mm_call_list_foreach (list, (MMCallListForeachFunc)slot_live, &ctx); g_object_unref (list); }
++    return ctx.live;
++}
++static void voice_query_ready (MMBaseModem *modem, GAsyncResult *res, GTask *task)
++{
++    VoiceListContext *ctx = g_task_get_task_data (task);
++    GError *error = NULL;
++    GList *list = NULL, *item;
++    const gchar *response = mm_base_modem_at_command_finish (modem, res, &error);
++    if (!error) mm_3gpp_parse_clcc_response (response, modem, &list, &error);
++    if (error) {
++        /* Absent/locked card must not hide the other card. A failed query
++         * while that card has a live call must never terminate it by omission. */
++        if (has_live_on_slot (modem, ctx->slot + 1) && !ctx->error) ctx->error = error;
++        else g_clear_error (&error);
++    } else {
++        for (item = list; item; item = item->next) {
++            MMCallInfo *info = item->data;
++            info->sim_slot = ctx->slot + 1;
++            if (info->number && strlen (info->number) > 8 && strlen (info->number) % 4 == 0 &&
++                g_str_has_prefix (info->number, "00")) {
++                gchar *decoded = mm_modem_charset_str_to_utf8 (info->number, -1, MM_MODEM_CHARSET_UCS2, FALSE, NULL);
++                if (decoded) { g_free (info->number); info->number = decoded; }
++            }
++        }
++        ctx->calls = g_list_concat (ctx->calls, list);
++    }
++    ctx->slot++;
++    voice_query_next (task);
++}
++static void voice_query_next (GTask *task)
++{
++    MMBaseModem *modem = g_task_get_source_object (task);
++    VoiceListContext *ctx = g_task_get_task_data (task);
++    gchar *command;
++    if (ctx->slot < 2) {
++        command = g_strdup_printf ("+SPACTCARD=%u;+CLCC", ctx->slot);
++        mm_base_modem_at_command (modem, command, 3, FALSE,
++                                  (GAsyncReadyCallback)voice_query_ready, task);
++    } else {
++        command = g_strdup_printf ("+SPACTCARD=%u;+CFUN?", ctx->own);
++        mm_base_modem_at_command (modem, command, 3, FALSE,
++                                  (GAsyncReadyCallback)voice_restore_ready, task);
++    }
++    g_free (command);
++}
++static void voice_load (MMIfaceModemVoice *self, GAsyncReadyCallback callback, gpointer user_data)
++{
++    VoiceListContext *ctx;
++    GTask *task = g_task_new (self, NULL, callback, user_data);
++    if (get_private (self)->voice_loading) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_IN_PROGRESS, "Call list query in progress");
++        g_object_unref (task); return;
++    }
++    get_private (self)->voice_loading = TRUE;
++    ctx = g_new0 (VoiceListContext, 1); ctx->own = port_card ();
++    g_task_set_task_data (task, ctx, (GDestroyNotify)voice_list_free);
++    voice_query_next (task);
++}
++static MMBaseCall *voice_create_call (MMIfaceModemVoice *self, MMCallDirection direction, const gchar *number)
++{
++    MMBaseCall *call = mm_base_call_new (MM_BASE_MODEM (self), direction, number, TRUE, TRUE, TRUE);
++    mm_gdbus_call_set_sim_slot (MM_GDBUS_CALL (call), port_card () + 1);
++    return call;
++}
++static void voice_reload_ready (MMIfaceModemVoice *self, GAsyncResult *res, gpointer user_data)
++{
++    GError *error = NULL;
++    if (!mm_iface_modem_voice_reload_all_calls_finish (self, res, &error)) {
++        mm_obj_dbg (self, "voice state reload: %s", error->message);
++        g_clear_error (&error);
++    }
++}
++static gboolean voice_poll (MMBroadbandModemUnisoc *self)
++{
++    MMCallList *list = NULL;
++    if (!get_private (self)->voice_loading) {
++        g_object_get (self, MM_IFACE_MODEM_VOICE_CALL_LIST, &list, NULL);
++        if (list) {
++            mm_iface_modem_voice_reload_all_calls (MM_IFACE_MODEM_VOICE (self),
++                                                  (GAsyncReadyCallback)voice_reload_ready, NULL);
++            g_object_unref (list);
++        }
++    }
++    return G_SOURCE_CONTINUE;
++}
++static gboolean voice_event (gint fd, GIOCondition condition, gpointer data)
++{
++    gchar buffer[4096];
++    if (lseek (fd, 0, SEEK_SET) < 0 || read (fd, buffer, sizeof (buffer)) < 0) {
++        MMBroadbandModemUnisocPrivate *priv = get_private (data);
++        priv->voice_event_id = 0;
++        close (fd); priv->voice_fd = -1;
++        return G_SOURCE_REMOVE;
++    }
++    voice_poll (data);
++    return G_SOURCE_CONTINUE;
++}
++static void voice_events_stop (MMBroadbandModemUnisoc *self)
++{
++    MMBroadbandModemUnisocPrivate *priv = get_private (self);
++    if (priv->voice_poll_id) { g_source_remove (priv->voice_poll_id); priv->voice_poll_id = 0; }
++    if (priv->voice_event_id) { g_source_remove (priv->voice_event_id); priv->voice_event_id = 0; }
++    if (priv->voice_fd >= 0) { close (priv->voice_fd); priv->voice_fd = -1; }
++}
++static void voice_events_start (MMBroadbandModemUnisoc *self)
++{
++    MMBroadbandModemUnisocPrivate *priv = get_private (self);
++    GDir *dir;
++    const gchar *entry;
++    voice_events_stop (self);
++    priv->voice_poll_id = g_timeout_add_seconds (3, (GSourceFunc)voice_poll, self);
++    dir = g_dir_open ("/sys/bus/platform/devices", 0, NULL);
++    if (!dir) return;
++    while ((entry = g_dir_read_name (dir))) {
++        gchar *path = g_build_filename ("/sys/bus/platform/devices", entry, "call_events", NULL);
++        gint fd = open (path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
++        g_free (path);
++        if (fd >= 0) {
++            gchar snapshot[4096];
++            read (fd, snapshot, sizeof (snapshot));
++            priv->voice_fd = fd;
++            priv->voice_event_id = g_unix_fd_add (fd, G_IO_PRI | G_IO_ERR, voice_event, self);
++            break;
++        }
++    }
++    g_dir_close (dir);
++    voice_poll (self);
++}
++static gboolean voice_events_finish (MMIfaceModemVoice *self, GAsyncResult *res, GError **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++static void voice_noop (MMIfaceModemVoice *self, GAsyncReadyCallback callback, gpointer user_data)
++{
++    GTask *task = g_task_new (self, NULL, callback, user_data);
++    g_task_return_boolean (task, TRUE); g_object_unref (task);
++}
++static void voice_hint (MMPortSerialAt *port, GMatchInfo *info, MMBroadbandModemUnisoc *self)
++{
++    voice_poll (self);
++}
++static void voice_handlers (MMIfaceModemVoice *self, gboolean enable)
++{
++    MMPortSerialAt *port = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
++    GRegex *patterns[4];
++    guint i;
++    if (!port) return;
++    patterns[0] = mm_voice_ring_regex_get ();
++    patterns[1] = mm_voice_cring_regex_get ();
++    patterns[2] = mm_voice_clip_regex_get ();
++    patterns[3] = mm_voice_ccwa_regex_get ();
++    for (i = 0; i < G_N_ELEMENTS (patterns); i++) {
++        mm_port_serial_at_add_unsolicited_msg_handler (port, patterns[i],
++            enable ? (MMPortSerialAtUnsolicitedMsgFn)voice_hint : NULL,
++            enable ? self : NULL, NULL);
++        g_regex_unref (patterns[i]);
++    }
++}
++static void voice_setup (MMIfaceModemVoice *self, GAsyncReadyCallback callback, gpointer user_data)
++{
++    /* Consume ambiguous indications without creating an unlabelled call.
++     * NO CARRIER is left to the AT final-result parser; the driver records
++     * its event separately and CLCC determines which call actually ended. */
++    voice_handlers (self, TRUE);
++    voice_events_start (MM_BROADBAND_MODEM_UNISOC (self));
++    voice_noop (self, callback, user_data);
++}
++static void voice_cleanup (MMIfaceModemVoice *self, GAsyncReadyCallback callback, gpointer user_data)
++{
++    voice_handlers (self, FALSE);
++    voice_events_stop (MM_BROADBAND_MODEM_UNISOC (self));
++    voice_noop (self, callback, user_data);
++}
++static void iface_modem_voice_init (MMIfaceModemVoiceInterface *iface)
++{
++    iface->create_call = voice_create_call;
++    iface->load_call_list = voice_load;
++    iface->load_call_list_finish = voice_load_finish;
++    iface->setup_unsolicited_events = voice_setup;
++    iface->setup_unsolicited_events_finish = voice_events_finish;
++    iface->cleanup_unsolicited_events = voice_cleanup;
++    iface->cleanup_unsolicited_events_finish = voice_events_finish;
++    iface->setup_in_call_unsolicited_events = voice_noop;
++    iface->setup_in_call_unsolicited_events_finish = voice_events_finish;
++    iface->cleanup_in_call_unsolicited_events = voice_noop;
++    iface->cleanup_in_call_unsolicited_events_finish = voice_events_finish;
++    /* A single explicit call remains addressable. Global supplementary
++     * actions have no slot argument and cannot safely target both radios. */
++    iface->hold_and_accept = NULL; iface->hold_and_accept_finish = NULL;
++    iface->hangup_and_accept = NULL; iface->hangup_and_accept_finish = NULL;
++    iface->hangup_all = NULL; iface->hangup_all_finish = NULL;
++    iface->join_multiparty = NULL; iface->join_multiparty_finish = NULL;
++    iface->leave_multiparty = NULL; iface->leave_multiparty_finish = NULL;
++    iface->transfer = NULL; iface->transfer_finish = NULL;
++}
++static void unisoc_dispose (GObject *object)
++{
++    voice_events_stop (MM_BROADBAND_MODEM_UNISOC (object));
++    G_OBJECT_CLASS (mm_broadband_modem_unisoc_parent_class)->dispose (object);
++}
++
+ /* E5 card-addressed PDU submit through the existing single AT port owner.
+  * Modem.Command's normal authorization applies. The PDU is queued raw
+  * immediately after the prompt, as in mm-base-sms, without SPSWDATA. */
+@@ -1485,6 +1748,9 @@
+ static void
+ mm_broadband_modem_unisoc_init (MMBroadbandModemUnisoc *self)
+ {
++    get_private (self)->voice_fd = -1;
++    g_object_set_data (G_OBJECT (self), "e5-dual-sim-voice", GINT_TO_POINTER (1));
++    g_object_set (self, MM_IFACE_MODEM_VOICE_PERIODIC_CALL_LIST_CHECK_DISABLED, TRUE, NULL);
+ }
+ 
+ static void
+@@ -1536,6 +1802,7 @@
+ {
+     MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
+ 
++    G_OBJECT_CLASS (klass)->dispose = unisoc_dispose;
+     broadband_modem_class->setup_ports = setup_ports;
+     broadband_modem_class->initialization_started = initialization_started;
+     broadband_modem_class->initialization_started_finish = initialization_started_finish;

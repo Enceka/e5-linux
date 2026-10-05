@@ -38,7 +38,9 @@ def calls():
             continue
         call = mm_json('-o', path).get('call', {}).get('properties', {})
         result.append({'id': path[len(CALL_PATH):], 'state': call.get('state'),
-                       'reason': call.get('state-reason'), 'number': call.get('number'), 'direction': call.get('direction')})
+                       'reason': call.get('state-reason'), 'number': call.get('number'), 'direction': call.get('direction'),
+                       'card': int(call['sim-slot'])-1 if str(call.get('sim-slot')) in ('1','2') else None,
+                       'sim': 'SIM'+str(call['sim-slot']) if str(call.get('sim-slot')) in ('1','2') else None})
     return result
 
 
@@ -56,15 +58,21 @@ class Controller:
         self.error = None
         self.previous = {}
         self.muted = False
+        self.card = None
 
     def update(self, observed, settings):
         now = {c['id']: c['state'] for c in observed}
         for call in observed:
             if self.previous.get(call['id']) != call['state']:
-                logging.info('call=%s state=%s reason=%s', call['id'], call['state'], call.get('reason'))
+                logging.info('call=%s sim=%s state=%s reason=%s', call['id'], call.get('sim'), call['state'], call.get('reason'))
         self.previous = now
-        needed = any(c['state'] in LIVE for c in observed)
+        active_calls = [c for c in observed if c['state'] in LIVE]
+        active_calls.sort(key=lambda c: c['state'] != 'active')
+        needed = bool(active_calls)
+        card = active_calls[0].get('card') if needed else None
         try:
+            if needed and self.active and card is not None and self.card is not None and card != self.card:
+                self.stop()
             if needed and not self.active:
                 self.suspend(True)
                 try:
@@ -73,6 +81,7 @@ class Controller:
                     self.suspend(False)
                     raise
                 self.active = True
+                self.card = card
                 self.muted = False
             if needed and self.active:
                 self.hardware.set_speaker(bool(settings.get('speaker', False)))
@@ -93,12 +102,14 @@ class Controller:
             self.hardware.stop()
         finally:
             self.active = False
+            self.card = None
             self.muted = False
             self.suspend(False)
 
     def status(self):
         return {'available': True, 'active': self.active, 'speaker': self.hardware.speaker,
-                'muted': self.muted, 'error': self.error, 'pcm': 'hw:0,5'}
+                'muted': self.muted, 'error': self.error, 'pcm': 'hw:0,5',
+                'card': self.card, 'sim': 'SIM'+str(self.card+1) if self.card is not None else None}
 
 
 def suspend_media(on):

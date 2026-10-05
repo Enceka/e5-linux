@@ -59,16 +59,49 @@ source-labelled notifications. The receiver now resolves either channel hint
 against both storages immediately. Unit tests cover both paths without sending
 real SMS, plus UTF-16 SMSC replies and the LuCI string-valued card argument.
 
-## Remaining voice integration
+## Dual-SIM voice implementation (hardware validation in progress)
 
-The CP starts both SIM radio stacks, but Linux still publishes one AT port
-and one ModemManager modem. `e5-sim` remains the explicit **data SIM** switch.
-Receiving calls on both numbers and selecting the outgoing call SIM require
-retaining the secondary call URCs, identifying each call's card, routing basic
-ATD/ATA/ATH and CLCC to that context, and selecting its audio path. The SMS
-work does not establish this voice support or two simultaneous active calls.
+ModemManager r916 extends native call creation with `sim-slot=1|2` and exposes
+read-only `Call.SimSlot` (0 unknown, 1/2 known). `mmcli -J -o CALL` reports it as
+`call.properties.sim-slot`. Applications still use CreateCall, Call.Start,
+Call.Accept and Call.Hangup. A call's source slot remains independent of the
+selected primary/data SIM; no WAN restart or SPSWDATA is involved.
+
+The Unisoc adapter reads both addressed CLCC lists and gives the combined
+snapshot to the existing MM call tracker. Matching includes source slot so
+identical phone numbers and native CLCC indices on two cards do not collide.
+Inactive created objects and commands waiting in the AT queue are not ended
+by an idle snapshot; reused incoming indices create a fresh call identity.
+An active card whose query fails is retained rather than reported as empty.
+Incoming-call timeout is disabled: explicit modem state establishes its end.
+
+The driver exposes `call_events`, retaining 64 RING/STATE/END/DIAL hints from
+both URC channels and the command reply channel, without phone numbers or raw
+payloads. poll(POLLPRI) triggers an immediate addressed refresh; a three-second
+fallback also discovers calls on older kernels. Channel hints never determine
+message/call origin. Generic ambiguous RING/CLIP/NO CARRIER handlers cannot
+assign a secondary call to the data card or end an unrelated call.
+
+The phone plugin 1.5 adds a keypad-accessible SIM selector, call-source labels,
+source-labelled notifications and a choice between displayed calls. The audio
+watcher receives the same source information and restarts the shared hostless
+frontend when the active radio changes. Notification polls and audio watchers
+never start, answer or end calls.
+
+There is one shared voice frontend. A new dial while another call exists, or
+an accept while another call is active, returns a busy error; it never hangs
+up the other call automatically. Source-free multiparty/global supplementary
+operations are not exposed by this adapter. This implements dual standby and
+per-call selection, not two simultaneously active voice calls.
+
+The feature is deployed on kernel `6.18.54-e5-00072-g020b970e351e`, MM r916 and
+phone 1.5. The local creation-only test confirms an inactive SIM2 object with
+no dial, then removes exactly that object. Unit checks compile the production
+matching/routing functions against an in-memory model; UI tests intercept all
+call requests. User-operated outgoing/incoming audio checks are still pending.
+
 Keep the existing per-card band restrictions: untested RF settings previously
-triggered CP assertions. No calls are placed automatically during testing.
+triggered CP assertions. Actual calls are always operated manually by the user.
 
 Upstream `SetPrimarySimSlot` selects a primary SIM and may recreate the modem;
 its presence alone does not implement per-operation SMS/voice selection:

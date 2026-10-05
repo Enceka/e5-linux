@@ -57,3 +57,10 @@ with patch.object(voice.os,'killpg') as kill:
     ringer.update([],{'sound':False,'vibrate':False},False)
 assert not voice.Controller(Hardware(),suspends.append).update([{'id':'5','state':'ringing-in'}],{})['active']
 print('Incoming ringtone/vibration checks passed')
+
+# Card changes reinitialize the shared frontend even if polling misses the gap.
+hw=Hardware();changes=[];control=voice.Controller(hw,changes.append)
+assert control.update([{'id':'a','state':'active','card':0}],{})['sim']=='SIM1'
+assert control.update([{'id':'b','state':'active','card':1}],{})['sim']=='SIM2'
+assert hw.events==['start','stop','start'] and changes==[True,False,True]
+print('Voice source-card transition checks passed')

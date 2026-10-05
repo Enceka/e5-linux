@@ -15,7 +15,7 @@ var callSend = rpc.declare({ object: 'e5-sms', method: 'send', params: [ 'number
 var callSwitch = rpc.declare({ object: 'e5-sms', method: 'switch_card', params: [ 'card' ] });
 var callSim = rpc.declare({ object: 'e5-sms', method: 'sim' });
 var callDelete = rpc.declare({ object: 'e5-sms', method: 'delete', params: [ 'id' ] });
-var callTest = rpc.declare({ object: 'e5-sms', method: 'forward_test' });
+var callTest = rpc.declare({ object: 'e5-sms', method: 'forward_test', params: [ 'card' ] });
 var callLog = rpc.declare({ object: 'e5-sms', method: 'forward_log', expect: { log: [] } });
 
 var JSON_BODY = '{"from":"{from}","text":"{text}","time":"{time}","sim":"{sim}","device":"{device}"}';
@@ -49,14 +49,19 @@ function mmTime(t) {
 	return t ? String(t).replace('T', ' ').replace(/([+-]\d\d(:?\d\d)?|Z)$/, '') : '';
 }
 
-// the segments a text takes: 70 characters a message (67 each when split),
-// 160 (153) for plain ASCII
+// Counts match the backend's GSM7/UTF-16 encoder and 16-bit multipart header.
 function segments(text) {
-	var n = Array.from(text).length;
-	if (n == 0) return 0;
-	var ascii = /^[\x20-\x7e\n\r]*$/.test(text);
-	var one = ascii ? 160 : 70, part = ascii ? 153 : 67;
-	return n <= one ? 1 : Math.ceil(n / part);
+	if (!text.length) return 0;
+	var basic = '@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&\'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà';
+	var ext = '\f^{}\\[~]|€';
+	var gsm = true, count = 0;
+	Array.from(text).forEach(function(char) {
+		if (basic.indexOf(char) >= 0) count++;
+		else if (ext.indexOf(char) >= 0) count += 2;
+		else gsm = false;
+	});
+	if (!gsm) return text.length <= 70 ? 1 : Math.ceil(text.length / 66);
+	return count <= 160 ? 1 : Math.ceil(count / 152);
 }
 
 function notify(ok, text) {
@@ -71,6 +76,7 @@ return view.extend({
 	reloadList: function() {
 		return callList().then(L.bind(function(r) {
 			if (r && r.sim) this.sim = r.sim;
+			this.list = r;
 			var sim = document.getElementById('e5-sms-sim');
 			if (sim) sim.replaceChildren(this.renderSim(this.sim));
 			var box = document.getElementById('e5-sms-list');
@@ -102,13 +108,14 @@ return view.extend({
 	handleReply: function(msg) {
 		var num = document.getElementById('e5-sms-number');
 		var text = document.getElementById('e5-sms-text');
+		var card = document.getElementById('e5-sms-card');
+		if (card && (msg.card === 0 || msg.card === 1)) card.value = String(msg.card);
 		if (num) num.value = msg.number || '';
 		if (text) { text.focus(); text.dispatchEvent(new Event('input')); }
 		num && num.scrollIntoView({ behavior: 'smooth', block: 'center' });
 	},
 
-	// the other card: ModemManager has only the card in use, so its messages
-	// are listed (and its new ones seen) once it is the card in use
+	// Switching the data SIM remains explicit; reading either inbox never switches.
 	handleSwitch: function(card) {
 		if (!confirm('切换到 SIM' + (card + 1) + '？\n\n数据连接也会切到这张卡，断开几十秒。'))
 			return;
@@ -119,49 +126,25 @@ return view.extend({
 		}, this));
 	},
 
-	// the card to send from: the other one than the card in use is switched to
-	// first, and waited for (ModemManager has the new card's modem registered
-	// some 20-60 s later) -- step by step here, as one rpc call would outlast
-	// LuCI's rpc timeout
-	waitCard: function(card, until) {
-		return callSim().then(L.bind(function(sim) {
-			var up = sim && sim.card == card && /^(registered|connected|connecting)$/.test(sim.state || '');
-			if (up) { this.sim = sim; return true; }
-			if (Date.now() > until) return false;
-			return new Promise(function(res) { window.setTimeout(res, 3000); })
-				.then(L.bind(this.waitCard, this, card, until));
-		}, this));
-	},
-
 	handleSend: function(ev) {
 		var num = document.getElementById('e5-sms-number').value.trim();
 		var text = document.getElementById('e5-sms-text').value;
 		var card = +document.getElementById('e5-sms-card').value;
-		var inUse = this.sim ? this.sim.card : card;
 		if (!/^\+?[0-9 -]{3,24}$/.test(num)) { notify(false, '号码不对'); return; }
 		if (!text.length) { notify(false, '没有内容'); return; }
-		if (card != inUse && !confirm('要先切换到 SIM' + (card + 1) + ' 再发送：数据连接也会切到这张卡，断开几十秒。继续？'))
-			return;
 		var btn = ev.currentTarget;
 		btn.disabled = true;
 		var ready = Promise.resolve(true);
-		if (card != inUse) {
-			btn.textContent = '切换到 SIM' + (card + 1) + '…';
-			ready = callSwitch(card).then(L.bind(function(r) {
-				if (!(r && r.ok)) return false;
-				return this.waitCard(card, Date.now() + 120000);
-			}, this));
-		}
 		return ready.then(L.bind(function(ok) {
-			if (!ok) { notify(false, 'SIM' + (card + 1) + ' 没有在 2 分钟内注册上网络，没有发送'); return; }
+			if (!ok) { notify(false, '短信发送未启动'); return; }
 			btn.textContent = '发送中…';
-			return callSend(num, text).then(L.bind(function(r) {
+			return callSend(num, text, String(card)).then(L.bind(function(r) {
 				if (r && r.ok) {
 					notify(true, '已从 ' + (r.sim || ('SIM' + (card + 1))) + ' 发送到 ' + num);
 					document.getElementById('e5-sms-text').value = '';
 					document.getElementById('e5-sms-text').dispatchEvent(new Event('input'));
 				} else {
-					notify(false, '发送失败：' + ((r && r.error) || '?'));
+					notify(false, '发送失败：' + ((r && r.error) || '?') + (r && r.submitted_parts ? '；已提交 ' + r.submitted_parts + '/' + r.total_parts + ' 段，请勿整条重发' : ''));
 				}
 				return this.reloadList();
 			}, this));
@@ -171,10 +154,10 @@ return view.extend({
 		});
 	},
 
-	handleTest: function(ev) {
+	handleTest: function(card, ev) {
 		var btn = ev.currentTarget;
 		btn.disabled = true;
-		return callTest().then(function(r) {
+		return callTest(card).then(function(r) {
 			if (r && r.ok) notify(true, '测试转发成功（HTTP ' + r.code + '）');
 			else notify(false, '测试转发失败：' + ((r && r.error) || '?') + '　（先保存设置再测试）');
 			return callLog();
@@ -186,41 +169,39 @@ return view.extend({
 
 	renderSim: function(sim) {
 		if (!sim) return '';
-		var other = sim.card ? 0 : 1;
 		return E('div', { 'class': 'e5-sms-sim' }, [
 			E('div', {}, [
-				E('div', { 'class': 'e5-sms-sim-name' }, [ '当前收件卡：', E('strong', {}, sim.name), sim.operator ? ' · ' + sim.operator : '' ]),
-				E('p', { 'class': 'e5-sms-hint' }, '切卡后可查看另一张卡的短信；当前仅提醒正在使用的卡。')
+				E('div', { 'class': 'e5-sms-sim-name' }, [ '移动数据卡：', E('strong', {}, sim.name), sim.operator ? ' · ' + sim.operator : '' ]),
+				E('p', { 'class': 'e5-sms-hint' }, '两张卡的短信合并显示，查看与接收不切换移动数据卡。')
 			]),
-			E('button', { 'class': 'btn cbi-button', 'type': 'button', 'click': L.bind(this.handleSwitch, this, other) }, '切换到 SIM' + (other + 1))
+			E('div', { 'class': 'e5-sms-filters' }, ['', '0', '1'].map(L.bind(function(card) {
+				return E('button', { 'type': 'button', 'class': 'btn cbi-button' + ((this.filter || '') === card ? ' cbi-button-apply' : ''),
+					'click': L.bind(function() { this.filter = card; document.getElementById('e5-sms-sim').replaceChildren(this.renderSim(this.sim)); document.getElementById('e5-sms-list').replaceChildren(this.renderList(this.list)); }, this) }, card === '' ? '全部' : 'SIM' + (+card + 1));
+			}, this)))
 		]);
 	},
 
 	renderList: function(r) {
 		var msgs = (r && r.messages) || [];
-		if (r && r.error && !msgs.length)
-			return E('p', { 'class': 'cbi-section-descr' }, '读不到短信：' + r.error);
-		if (!msgs.length)
-			return E('p', { 'class': 'cbi-section-descr' }, '没有短信');
-		var rows = msgs.map(L.bind(function(m) {
-			return E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td', 'style': 'white-space:nowrap' }, mmTime(m.time)),
-				E('td', { 'class': 'td', 'style': 'white-space:nowrap' }, (m.direction == 'out' ? '发往 ' : '') + (m.number || '')),
-				E('td', { 'class': 'td', 'style': 'white-space:pre-wrap;word-break:break-word' },
-					m.text + (m.state == 'receiving' ? '（接收中…）' : '')),
-				E('td', { 'class': 'td', 'style': 'white-space:nowrap' }, [
-					m.direction == 'in' ? E('button', { 'class': 'btn cbi-button', 'click': L.bind(this.handleReply, this, m) }, '回复') : '',
-					' ',
-					E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': L.bind(this.handleDelete, this, m) }, '删除')
-				])
+		if (this.filter !== undefined && this.filter !== '') msgs = msgs.filter(L.bind(function(m) { return String(m.card) === this.filter; }, this));
+		var nodes = [];
+		if (r && r.error) nodes.push(E('p', { 'class': 'e5-sms-error' }, r.error));
+		Object.keys(r && r.slots || {}).forEach(function(card) {
+			var state = r.slots[card];
+			if (!state.ok) nodes.push(E('p', { 'class': 'e5-sms-error' }, 'SIM' + (+card + 1) + '：' + state.error));
+		});
+		if (!msgs.length) nodes.push(E('p', { 'class': 'e5-sms-hint' }, '这张卡暂无短信'));
+		return E('div', { 'class': 'e5-sms-inbox' }, nodes.concat(msgs.map(L.bind(function(m) {
+			return E('article', { 'class': 'e5-sms-message', 'data-card': m.card }, [
+				E('div', { 'class': 'e5-sms-message-head' }, [E('strong', {}, (m.direction === 'out' ? '发往 ' : '') + (m.number || '未知号码')),
+					E('span', { 'class': 'e5-sms-badge sim' + (m.card + 1) }, m.sim || '来源未知'),
+					E('time', {}, mmTime(m.time))]),
+				E('p', { 'class': 'e5-sms-text' }, m.text || ''),
+				E('div', { 'class': 'e5-sms-message-foot' }, [E('span', { 'class': 'e5-sms-hint' }, m.state === 'receiving' ? '长短信接收中…' : m.unread ? '未读' : ''),
+					m.direction === 'in' ? E('button', { 'class': 'btn cbi-button', 'click': L.bind(this.handleReply, this, m) }, '回复') : '',
+					E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': L.bind(this.handleDelete, this, m) }, '删除')])
 			]);
-		}, this));
-		return E('table', { 'class': 'table' }, [
-			E('tr', { 'class': 'tr table-titles' }, [
-				E('th', { 'class': 'th' }, '时间'), E('th', { 'class': 'th' }, '号码'),
-				E('th', { 'class': 'th' }, '内容'), E('th', { 'class': 'th' }, '')
-			])
-		].concat(rows));
+		}, this))));
 	},
 
 	renderLog: function(log) {
@@ -228,11 +209,12 @@ return view.extend({
 			return E('p', { 'class': 'cbi-section-descr' }, '还没有转发过');
 		return E('table', { 'class': 'table' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
-				E('th', { 'class': 'th' }, '时间'), E('th', { 'class': 'th' }, '来自'), E('th', { 'class': 'th' }, '结果')
+				E('th', { 'class': 'th' }, '时间'), E('th', { 'class': 'th' }, '来源卡'), E('th', { 'class': 'th' }, '来自'), E('th', { 'class': 'th' }, '结果')
 			])
 		].concat(log.slice(0, 20).map(function(e) {
 			return E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td', 'style': 'white-space:nowrap' }, new Date(e.time * 1000).toLocaleString()),
+				E('td', { 'class': 'td' }, e.sim || '—'),
 				E('td', { 'class': 'td' }, (e.test ? '（测试）' : '') + (e.from || '')),
 				E('td', { 'class': 'td', 'style': 'word-break:break-word' },
 					e.ok ? '成功 HTTP ' + e.code : '失败：' + (e.error || ('HTTP ' + e.code)))
@@ -243,15 +225,20 @@ return view.extend({
 	render: function(data) {
 		var list = data[0], log = data[1];
 		this.sim = (list && list.sim) || null;
+		this.list = list; this.filter = '';
 
 		var m = new form.Map('e5-notify');
-		var s = m.section(form.NamedSection, 'forward', 'forward');
-		s.addremove = false;
+		var common = m.section(form.NamedSection, 'forward', 'forward', '转发模式'); common.addremove = false;
+		var mode = common.option(form.ListValue, 'mode', '配置方式');
+		mode.value('shared', '两张卡共用一套'); mode.value('per_sim', '两张卡分别设置'); mode.default = 'shared'; mode.rmempty = false;
+		function profile(section, title, card, separate) {
+		var s = m.section(form.NamedSection, section, 'forward', title); s.addremove = false;
 		var o;
-
 		o = s.option(form.Flag, 'enabled', '启用转发');
+		o.depends('e5-notify.forward.mode', separate ? 'per_sim' : 'shared');
 
 		o = s.option(form.ListValue, '_preset', '套用预设', '选一个会填好下面的网址、方式和正文，把其中的 Key / Token 换成你自己的');
+		o.depends('e5-notify.forward.mode', separate ? 'per_sim' : 'shared');
 		o.value('', '—');
 		Object.keys(PRESETS).forEach(function(k) { o.value(k, PRESETS[k].name); });
 		o.cfgvalue = function() { return ''; };
@@ -270,12 +257,14 @@ return view.extend({
 		};
 
 		o = s.option(form.Value, 'url', '网址');
+		o.depends('e5-notify.forward.mode', separate ? 'per_sim' : 'shared');
 		o.placeholder = 'https://example.com/sms';
 		o.validate = function(section_id, v) {
 			return (v == '' || /^https?:\/\/\S+$/.test(v)) ? true : '要以 http:// 或 https:// 开头';
 		};
 
 		o = s.option(form.ListValue, 'method', '方式');
+		o.depends('e5-notify.forward.mode', separate ? 'per_sim' : 'shared');
 		o.value('POST');
 		o.value('GET');
 		o.default = 'POST';
@@ -285,25 +274,34 @@ return view.extend({
 		o.value('application/x-www-form-urlencoded', '表单 (x-www-form-urlencoded)');
 		o.value('text/plain', '纯文本 (text/plain)');
 		o.default = 'application/json';
-		o.depends('method', 'POST');
+		o.depends({ 'e5-notify.forward.mode': separate ? 'per_sim' : 'shared', method: 'POST' });
 
 		o = s.option(form.TextValue, 'body', '正文模板');
 		o.rows = 5;
 		o.monospace = true;
 		o.default = JSON_BODY;
-		o.depends('method', 'POST');
+		o.depends({ 'e5-notify.forward.mode': separate ? 'per_sim' : 'shared', method: 'POST' });
 
 		o = s.option(form.DynamicList, 'header', '额外的请求头', '例如 Authorization: Bearer xxx');
+		o.depends('e5-notify.forward.mode', separate ? 'per_sim' : 'shared');
 		o.placeholder = 'Name: value';
 
 		o = s.option(form.Value, 'timeout', '超时（秒）');
+		o.depends('e5-notify.forward.mode', separate ? 'per_sim' : 'shared');
 		o.datatype = 'range(1,120)';
 		o.default = '10';
 
 		o = s.option(form.Button, '_test', '测试');
+		o.depends('e5-notify.forward.mode', separate ? 'per_sim' : 'shared');
 		o.inputtitle = '发一条测试消息';
 		o.inputstyle = 'apply';
-		o.onclick = L.bind(this.handleTest, this);
+		o.onclick = L.bind(this.handleTest, this, card);
+		// Keep the other mode's saved targets when its fields are hidden.
+		s.children.forEach(function(option) { option.retain = true; });
+		}
+		profile.call(this, 'forward', '共用转发配置', 0, false);
+		profile.call(this, 'forward_sim1', 'SIM1 转发配置', 0, true);
+		profile.call(this, 'forward_sim2', 'SIM2 转发配置', 1, true);
 
 		var counter = E('span', { 'class': 'e5-sms-hint' }, '0 字');
 		var textarea = E('textarea', {
@@ -336,9 +334,9 @@ return view.extend({
 							E('select', { 'id': 'e5-sms-card', 'class': 'cbi-input-select' }, [0, 1].map(L.bind(function(c) {
 								var cur = this.sim && this.sim.card == c;
 								return E('option', { 'value': c, 'selected': (this.sim ? cur : c == 0) ? '' : null },
-									'SIM' + (c + 1) + (cur ? '（当前' + (this.sim.operator ? '，' + this.sim.operator : '') + '）' : '（需要切换）'));
+									'SIM' + (c + 1) + (cur ? '（当前' + (this.sim.operator ? '，' + this.sim.operator : '') + '）' : ''));
 							}, this))),
-							E('p', { 'class': 'e5-sms-hint' }, '选择另一张卡会切换移动数据，注册完成后发送。')
+							E('p', { 'class': 'e5-sms-hint' }, '仅选择本次发送卡，不切换移动数据。')
 						])
 					]),
 					E('div', { 'class': 'e5-sms-field' }, [
@@ -356,7 +354,7 @@ return view.extend({
 				]),
 				E('div', { 'class': 'cbi-section e5-sms-panel' }, [
 					E('div', { 'class': 'e5-sms-toolbar' }, [ E('h3', {}, '短信转发') ]),
-					E('p', { 'class': 'e5-sms-description' }, '启用后，将新短信转发到指定的通知服务或 webhook。选择预设，填写自己的 Key / Token，保存后可发送测试消息。'),
+					E('p', { 'class': 'e5-sms-description' }, '可让两张卡共用转发配置，也可分别启用并设置不同目标。转发按短信来源卡选择配置，不受当前上网卡影响。保存后可对相应卡发送测试消息。'),
 					E('details', { 'class': 'e5-sms-template-help' }, [
 						E('summary', {}, '模板变量与重试说明'),
 						E('p', {}, '支持 {from}（发件号码）、{text}（内容）、{time}（时间）、{sim}（SIM1/SIM2）和 {device}（设备名）。网址、表单和 JSON 中的变量会自动转义；JSON 模板中的引号需要保留。'),

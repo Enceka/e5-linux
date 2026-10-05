@@ -69,8 +69,11 @@ return {
 			}
 		},
 		forward_test: {
-			call: function() {
-				return run('forward-test');
+			args: { card: 0 },
+			call: function(req) {
+				let card = int(req.args?.card ?? -1);
+				if (card != 0 && card != 1) return {ok:false,error:'bad card'};
+				return run(`forward-test ${card}`);
 			}
 		},
 		forward_log: {

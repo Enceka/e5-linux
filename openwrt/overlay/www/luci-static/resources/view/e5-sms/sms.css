@@ -19,6 +19,18 @@
 .e5-sms-sim-name { line-height: 1.5; }
 .e5-sms-page .e5-sms-hint { display: block; font-size: .85rem; opacity: .7; line-height: 1.6; margin: 5px 0 0; padding: 0; }
 .e5-sms-list { overflow-x: auto; }
+.e5-sms-filters { display:flex; gap:6px; flex-wrap:wrap; }
+.e5-sms-inbox { display:grid; gap:12px; }
+.e5-sms-message { padding:16px; border:1px solid rgba(128,128,128,.18); border-radius:12px; }
+.e5-sms-message .e5-sms-message-head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.e5-sms-message .e5-sms-message-head strong { overflow-wrap:anywhere; }
+.e5-sms-message time { margin-left:auto; font-size:.8rem; opacity:.65; }
+.e5-sms-message .e5-sms-text { white-space:pre-wrap; overflow-wrap:anywhere; margin:14px 0; line-height:1.7; }
+.e5-sms-message .e5-sms-message-foot { display:flex; align-items:center; gap:8px; }
+.e5-sms-message .e5-sms-message-foot .e5-sms-hint { flex:1; }
+.e5-sms-badge { padding:3px 8px; border-radius:20px; font-size:.75rem; font-weight:600; background:#e7f0ff; color:#2758a7; }
+.e5-sms-badge.sim2 { background:#e1f4ee; color:#247252; }
+.e5-sms-error { color:#b43c44; font-size:.9rem; }
 .e5-sms-page .e5-sms-list > p { padding: 12px 0; margin: 0; }
 .e5-sms-field { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 14px; max-width: 780px; margin: 0 0 16px; }
 .e5-sms-field > label { padding-top: 10px; line-height: 1.5; }

@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Send from a chosen SIM through ModemManager, without changing the data SIM."""
+import importlib.machinery
+import importlib.util
+import json
+import logging
+from pathlib import Path
+import re
+import sys
+import time
+
+loader=importlib.machinery.SourceFileLoader('sms_receive',str(Path(__file__).with_name('e5-sms-receive')))
+spec=importlib.util.spec_from_loader(loader.name,loader)
+receiver=importlib.util.module_from_spec(spec);loader.exec_module(receiver)
+from sms_pdu import submit
+
+
+def send(number, file, card):
+    text=Path(file).read_text()
+    pdus=submit(number,text)
+    references=[]
+    own=receiver.current_card()
+    with receiver.modem_locked() as acquired:
+        if not acquired:
+            return {'ok':False,'error':'Modem is busy; try again shortly'}
+        calls=receiver.execute(['mmcli','-m','any','--voice-list-calls'])
+        if re.search(r'\((dialing|ringing-out|ringing-in|active|held|waiting)\)',calls):
+            return {'ok':False,'error':'A voice call is in progress; send after the call'}
+        try:
+            capabilities=receiver.execute(['e5-at','AT+E5SMS=?'])
+            if '+E5SMS: 1' not in capabilities:
+                raise RuntimeError('This ModemManager does not support per-SIM sending; update it first')
+            status=receiver.at(card,'CPIN?')
+            if not re.search(r'\+CPIN:\s*READY',status):
+                raise RuntimeError(f'SIM{card+1} is absent or locked')
+            # Each radio needs its own SMSC initialized after a CP restart.
+            centre=receiver.at(card,'CSCA?')
+            match=re.search(r'\+CSCA:\s*"([+0-9A-Fa-f]{1,128})",\s*(\d+)',centre)
+            if not match:
+                raise RuntimeError(f'SIM{card+1} has no valid SMS service centre')
+            value=match[1]
+            # The MM-owned port may use CSCS=UCS2 even in PDU mode. Validate
+            # the decoded number, then echo the original representation back
+            # in that same charset, as the existing Unisoc SMS setup does.
+            if len(value)>24 or re.search(r'[A-Fa-f]',value):
+                value=bytes.fromhex(value).decode('utf-16-be')
+            if not re.fullmatch(r'\+?[0-9]{3,24}',value):
+                raise RuntimeError(f'SIM{card+1} has an invalid SMS service centre')
+            receiver.at(card,f'CSCA="{match[1]}",{match[2]}')
+            receiver.at(card,'CMGF=0')
+            for pdu in pdus:
+                result=receiver.execute(['e5-at','-t','70',f'AT+E5SMS={card},{pdu}'],timeout=75)
+                match=re.search(r'\+CMGS:\s*(\d+)',result)
+                if not match:
+                    raise RuntimeError('The modem did not confirm submission; do not automatically resend')
+                references.append(int(match[1]))
+            with receiver.locked():
+                data=receiver.load();identifier=data['next_id'];data['next_id']+=1
+                stamp=time.strftime('%Y-%m-%dT%H:%M:%S%z')
+                stamp=stamp[:-2]+':'+stamp[-2:]
+                data['messages'].append({'id':identifier,'card':card,'sim':f'SIM{card+1}',
+                    'identity':'outgoing','number':number,'text':text,'time':stamp,'state':'sent',
+                    'direction':'out','unread':False,'parts':[],'references':references})
+                receiver.save(data)
+            return {'ok':True,'id':identifier,'sim':f'SIM{card+1}','card':card,'parts':len(pdus)}
+        except Exception as error:
+            return {'ok':False,'sim':f'SIM{card+1}','error':str(error),'submitted_parts':len(references),
+                    'total_parts':len(pdus),'retry_safe':False}
+        finally:
+            try:
+                receiver.at(own,'CFUN?')
+            except Exception as error:
+                logging.warning('Could not restore AT context after SMS send: %s', error)
+
+
+if __name__=='__main__':
+    try:
+        card=int(sys.argv[3])
+        if card not in (0,1):raise ValueError('Invalid SIM card')
+        result=send(sys.argv[1],sys.argv[2],card)
+    except Exception as error:
+        result={'ok':False,'error':str(error)}
+    with receiver.locked():
+        receiver.atomic(receiver.RUN / 'last-send.json', {**result, 'time': int(time.time())})
+    print(json.dumps(result,ensure_ascii=False))

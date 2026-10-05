@@ -6,10 +6,10 @@
 #   e5-sms-notify read     the messages have been seen: unread 0
 #   e5-sms-notify test     what a new message does, without one
 #
-# ModemManager signals org.freedesktop.ModemManager1.Modem.Messaging.Added
-# (object path, received) once per message, when its first part arrives;
-# `received` is false for the messages it loads from storage at start and for
-# the ones stored locally, which are not new.  The unread state is a file
+# The receive service tracks both SIM storages and driver SMS events.
+# Existing messages form a silent baseline; new messages on either SIM alert
+# once. Complete multipart messages are forwarded according to their origin
+# card. The persisted inbox survives a reboot. The unread state is a file
 # other programs read -- the info screen lights up and shows the message
 # (e5-notify.sms.screen) and marks it in its status bar:
 #   /tmp/run/e5-sms/unread   the paths of the unread messages, one per line
@@ -33,49 +33,10 @@ touch "$UNREAD"
 
 case "${1:-}" in
 read)
-	: > "$UNREAD"
-	exit 0 ;;
+	exec /usr/libexec/e5-sms-receive read ;;
 test)
 	alert
 	exit 0 ;;
 esac
 
-# dbus-monitor prints the signal header, then its arguments, one per line:
-#   signal ... member=Added
-#      object path "/org/freedesktop/ModemManager1/SMS/3"
-#      boolean true
-# It writes into a FIFO this shell reads, not into a pipeline: procd stops a
-# service by its main process, and a pipeline's other half would outlive it
-# (and then vibrate a second time for every message).
-FIFO=$STATE/monitor
-rm -f "$FIFO" && mkfifo "$FIFO"
-dbus-monitor --system \
-	"type='signal',interface='org.freedesktop.ModemManager1.Modem.Messaging',member='Added'" \
-	> "$FIFO" &
-MON=$!
-trap 'kill $MON 2>/dev/null; rm -f "$FIFO"; exit 0' TERM INT
-
-sms=
-while IFS= read -r line; do
-	case "$line" in
-	*"member=Added"*)
-		sms= ;;
-	*'object path "'*)
-		sms=${line#*\"}; sms=${sms%\"*} ;;
-	*"boolean true"*)
-		[ -n "$sms" ] || continue
-		grep -qx "$sms" "$UNREAD" || echo "$sms" >> "$UNREAD"
-		logger -t e5-sms-notify "new message $sms"
-		alert &
-		# the webhook (e5-notify.forward): e5-sms waits for all the parts
-		[ "$(uci -q get e5-notify.forward.enabled)" = 1 ] &&
-			/usr/libexec/e5-sms forward "$sms" >/dev/null 2>&1 &
-		sms= ;;
-	*"boolean false"*)
-		sms= ;;
-	esac
-done < "$FIFO"
-# dbus-monitor ended (the bus restarted): procd starts this again
-kill $MON 2>/dev/null
-rm -f "$FIFO"
-exit 1
+exec /usr/libexec/e5-sms-receive serve

@@ -7,18 +7,16 @@
 //   e5-sms sim                   the card in use: {"card": 0|1, "name": "SIM1"|"SIM2", "operator"}
 //   e5-sms send NUMBER FILE [CARD]  the text in FILE (any characters: no quoting
 //                                on a command line) -> {"ok", "error"}; CARD 0|1
-//                                another than the one in use: switched to first
+//                                selected for this send, without switching data
 //   e5-sms delete ID             -> {"ok"}
 //   e5-sms forward PATH|ID       the message to the webhook of e5-notify.forward
 //   e5-sms forward-test          a made-up message to it, enabled or not
 //   e5-sms forward-log           the last forwards
 //
-// The cards: ModemManager has one modem, the card in use (e5-sim: sipc_wwan
-// card=, the data card too); the other card's URCs are drained by sipc_wwan
-// (FINDINGS 47.1), so its new messages are not seen -- they stay in its
-// storage and are listed once that card is the one in use.  Every message
-// listed is the card in use's; sending from the other card switches to it
-// (e5-sim, the data connection moves with it).
+// Receiving uses the stable two-SIM inbox managed by e5-sms-receive. IDs
+// >= 1000000000 identify those persisted messages; lower IDs are MM outgoing
+// objects. Sending uses the Unisoc per-operation PDU submit command.
+// Forward routing always follows the stored origin card, not the data card.
 //
 // The forward (/etc/config/e5-notify, section "forward") is one HTTP request
 // by curl: url, method (GET|POST), content_type, body, header (a list), timeout.
@@ -33,6 +31,8 @@ import { cursor } from 'uci';
 
 const SMS_PATH = '/org/freedesktop/ModemManager1/SMS/';
 const STATE = '/tmp/run/e5-sms';
+const RECEIVE = '/usr/libexec/e5-sms-receive';
+const CACHE_ID = 1000000000;
 const LOG = `${STATE}/forward.log`;
 const LOG_KEEP = 50;
 
@@ -78,6 +78,7 @@ function sms_id(p) {
 }
 
 function sms_get(id) {
+	if (id >= CACHE_ID) return sh_json(`${RECEIVE} get ${id} 2>/dev/null`);
 	let s = sh_json(`mmcli -J -m any --timeout=5 -s ${SMS_PATH}${id} 2>/dev/null`)?.sms;
 	if (!s)
 		return null;
@@ -107,68 +108,36 @@ function sim_info() {
 	};
 }
 
-// after a switch: ModemManager takes the port for a new modem, which has to
-// come up to registered before it sends
-function wait_modem(secs) {
-	for (let i = 0; i < secs / 2; i++) {
-		let st = mm_val(sh_json('mmcli -J -m any --timeout=5 2>/dev/null')?.modem?.generic?.state);
-		if (st == 'registered' || st == 'connected' || st == 'connecting')
-			return true;
-		sleep(2000);
-	}
-	return false;
-}
-
 function sms_list() {
 	let sim = sim_info();
 	let lj = sh_json('mmcli -J -m any --timeout=5 --messaging-list-sms 2>/dev/null');
 	if (lj == null)
-		return { messages: [], sim, error: 'no modem' };
+		return { messages: stat(RECEIVE) ? (sh_json(`${RECEIVE} list 2>/dev/null`)?.messages ?? []) : [], sim, error: 'no modem' };
 	let paths = lj['modem.messaging.sms'] ?? lj.modem?.messaging?.sms ?? [];
-	let list = [];
+	let inbox = stat(RECEIVE) ? sh_json(`${RECEIVE} list 2>/dev/null`) : null;
+	let list = inbox?.messages ?? [];
 	for (let p in paths) {
 		let id = sms_id(p);
 		let m = (id != null) ? sms_get(id) : null;
-		if (m)
-			push(list, { ...m, sim: sim.name });
+		if (m && (!inbox?.dual_sim || m.direction == 'out'))
+			push(list, { ...m, sim: sim.name, card: sim.card });
 	}
 	list = sort(list, (a, b) => (a.time == b.time) ? b.id - a.id : ((a.time ?? '') < (b.time ?? '') ? 1 : -1));
-	return { messages: list, sim };
+	return { messages: list, sim, dual_sim: inbox?.dual_sim ?? false, slots: inbox?.slots ?? {}, updated: inbox?.updated };
 }
 
 function sms_send(number, file, card) {
-	number = replace(`${number ?? ''}`, /[ -]/g, '');
-	if (!match(number, /^\+?[0-9]{3,20}$/))
-		return { ok: false, error: 'bad number' };
-	let st = stat(file ?? '');
-	if (!st || st.size == 0)
-		return { ok: false, error: 'no text' };
-	if (st.size > 4000)
-		return { ok: false, error: 'text too long' };
-	if (card != null && card != '' && `${card}` != `${card_in_use()}`) {
-		if (`${card}` != '0' && `${card}` != '1')
-			return { ok: false, error: 'bad card' };
-		system(`logger -t e5-sms 'switching to SIM${+card + 1} to send'`);
-		if (system(`e5-sim ${card} >/dev/null 2>&1`) != 0 || `${card_in_use()}` != `${card}`)
-			return { ok: false, error: `switching to SIM${+card + 1} failed` };
-		if (!wait_modem(120))
-			return { ok: false, error: `SIM${+card + 1} did not register` };
-	}
-	let r = sh(`mmcli -m any --timeout=10 --messaging-create-sms=${q('number=' + number)} --messaging-create-sms-with-text=${q(file)} 2>&1`);
-	let m = match(r.out, /\/SMS\/([0-9]+)/);
-	if (r.rc != 0 || !m)
-		return { ok: false, error: trim(r.out) || 'create failed' };
-	let s = sh(`mmcli -s ${SMS_PATH}${m[1]} --send --timeout=60 2>&1`);
-	if (s.rc != 0)
-		return { ok: false, id: +m[1], error: trim(s.out) || 'send failed' };
-	system(`logger -t e5-sms 'sent a message to ${number} from SIM${card_in_use() + 1}'`);
-	return { ok: true, id: +m[1], sim: card_in_use() ? 'SIM2' : 'SIM1' };
+	if (card == null || card == '') card = card_in_use();
+	if (`${card}` != '0' && `${card}` != '1') return {ok:false,error:'bad card'};
+	return sh_json(`/usr/libexec/e5-sms-send ${q(number ?? '')} ${q(file ?? '')} ${card}`)
+	    ?? {ok:false,error:'SMS sender returned no result'};
 }
 
 function sms_delete(id) {
 	id = sms_id(id);
 	if (id == null)
 		return { ok: false, error: 'bad id' };
+	if (id >= CACHE_ID) return sh_json(`${RECEIVE} delete ${id} 2>/dev/null`) ?? {ok:false,error:'Delete failed'};
 	let r = sh(`mmcli -m any --timeout=10 --messaging-delete-sms=${SMS_PATH}${id} 2>&1`);
 	return { ok: r.rc == 0, error: r.rc == 0 ? null : trim(r.out) };
 }
@@ -208,10 +177,11 @@ function log_add(entry) {
 	writefile(LOG, join('\n', lines) + '\n');
 }
 
-function forward_cfg() {
+function forward_cfg(card) {
 	let c = cursor();
-	let g = (k, d) => c.get('e5-notify', 'forward', k) ?? d;
-	let hdr = c.get('e5-notify', 'forward', 'header');
+	let section = c.get('e5-notify', 'forward', 'mode') == 'per_sim' ? `forward_sim${card + 1}` : 'forward';
+	let g = (k, d) => c.get('e5-notify', section, k) ?? d;
+	let hdr = c.get('e5-notify', section, 'header');
 	return {
 		enabled: g('enabled', '0') == '1',
 		url: g('url', ''),
@@ -255,12 +225,13 @@ function forward_once(cfg, vals) {
 }
 
 function forward(msg, test) {
-	let cfg = forward_cfg();
+	let card = msg.card ?? card_in_use();
+	let cfg = forward_cfg(card);
 	if (!test && !cfg.enabled)
 		return { ok: false, skipped: true, error: 'forward disabled' };
 	let vals = {
 		from: msg.number, text: msg.text, time: msg.time ?? '',
-		sim: sim_name(), device: trim(readfile('/proc/sys/kernel/hostname') ?? 'E5')
+		sim: msg.sim ?? `SIM${card + 1}`, device: trim(readfile('/proc/sys/kernel/hostname') ?? 'E5')
 	};
 	let r = null;
 	for (let i = 0; i < (test ? 1 : 3); i++) {
@@ -270,7 +241,7 @@ function forward(msg, test) {
 		if (r.ok)
 			break;
 	}
-	let entry = { time: time(), id: msg.id, from: msg.number, test: !!test, ok: r.ok, code: r.code, error: r.error };
+	let entry = { time: time(), id: msg.id, card, sim: vals.sim, from: msg.number, test: !!test, ok: r.ok, code: r.code, error: r.error };
 	log_add(entry);
 	system(`logger -t e5-sms-forward ${q((r.ok ? 'forwarded' : 'forward failed: ' + r.error) + ' (from ' + msg.number + ')')}`);
 	return r;
@@ -310,7 +281,8 @@ else if (cmd == 'forward')
 else if (cmd == 'forward-test')
 {
 	let lt = localtime();
-	out(forward({ id: 0, number: '10086', text: 'E5 短信转发测试 / forward test',
+	let card = ARGV[1] == '1' ? 1 : 0;
+	out(forward({ id: 0, card, sim:`SIM${card + 1}`, number: '10086', text: 'E5 短信转发测试 / forward test',
 		time: sprintf('%04d-%02d-%02d %02d:%02d:%02d', lt.year, lt.mon, lt.mday, lt.hour, lt.min, lt.sec) }, true));
 }
 else if (cmd == 'forward-log') {

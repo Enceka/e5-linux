@@ -18,43 +18,49 @@ per-card storage metadata; message contents and verification codes were not
 decoded or recorded. SIM 1 held one message, SIM 2 held four including three
 older messages. This verifies the CP's dual-standby SMS reception in this test.
 
-The Linux/application path is still incomplete: ModemManager exposed only
-one received SMS object and the notification service reported only the SIM 1
-arrival. SIM 2's new message remained in its own storage, accessible by an
-explicit card-addressed query. A visible inactive SIM object means it is not
-the selected primary SIM; it does not by itself mean the CP radio is off.
-Incoming calls to both numbers and SIM selection for outgoing operations have
-not been verified by this SMS test.
+## Application support
 
-The CP already starts both SIM radio stacks. Linux currently publishes one AT
-port and one ModemManager modem at a time. `sipc_wwan` merges the selected
-SIM URCs and reads/discards the other URC ring to avoid filling the CP buffer.
-`e5-sim` stops WAN/ModemManager and changes the port, and `e5-sms send ... CARD`
-uses that switch. Thus selecting the sending SIM also changes the data SIM.
+The new `sipc_wwan` exposes `/sys/bus/platform/devices/*/sms_events`: a
+sequence-numbered snapshot of the latest 64 `+CMTI` storage arrivals, each
+with its originating SIM. `poll(POLLPRI)` wakes `e5-sms-receive`; no secondary
+URCs are mixed into ModemManager's primary reply stream. The secondary radio
+needs `CNMI=2,1,0,0,0`, configured without changing its RF or data selection.
+A bounded scan recovers missed events and supports older kernels.
 
-The remaining target is application support for that dual standby: either SIM
-can notify incoming SMS/calls at idle,
-and the user can choose a SIM for each send/dial independently of the data SIM.
-This does not imply two simultaneous active voice calls.
+`e5-sms-receive` reads both SIM storages through `e5-at` and ModemManager,
+restores the primary AT context, and stores a private durable inbox in
+`/etc/e5-sms`. Existing messages form a silent baseline; new messages alert
+once, with multipart completion and stable IDs across reboots. SIM identity
+and PDU fingerprints prevent deleting a different message at a reused index.
+Updating an OpenWrt image keeps this inbox. The information screen shows the
+source card in lists, details and alerts. The user confirmed both cards'
+notifications and source labels on 2026-10-05.
 
-Work order:
+LuCI merges/filter both inboxes, replies using the message's origin card, and
+supports `shared` or `per_sim` forward profiles. Forward routing uses the
+stored message origin, not the selected data SIM; switching profile modes
+retains inactive settings. HTTP tests use mocked curl, without external sends.
 
-1. Compare Android RIL per-SIM command and URC rings, including basic ATD/ATH
-   commands. Extended commands currently receive SPACTCARD prefixes; basic
-   commands do not. Validate serialization and which channel receives replies.
-2. Publish two independently identifiable AT/URC endpoints, or retain explicit
-   SIM identity in a multiplexed transport. Continue draining every CP ring,
-   but dispatch its data instead of discarding the secondary SIM events.
-3. Extend the Unisoc ModemManager integration to keep two live SIM contexts.
-   Two ports under one physical parent are not automatically two independent
-   modems: grouping, initialization, SIM identity and shared RF state need work.
-4. Give every SMS/call an origin SIM. Merge inboxes without ID collisions;
-   route sends/dials to the selected context without restarting the modem or
-   changing SPSWDATA. Keep primary data selection as a separate operation.
-5. Validate incoming SMS/calls to each SIM while the other carries data,
-   multipart SMS, reboot recovery, absent/locked SIMs, and call/data coexistence.
-   Keep the existing per-card band restrictions while testing; enabling a SIM
-   with untested RF settings previously triggered CP assertions.
+ModemManager r915 adds the authorized `+E5SMS=<card>,<PDU>` command. It queues
+an explicitly card-addressed CMGS and immediately queues the raw PDU after
+the prompt, using the same port/queue as upstream SMS sending. `e5-sms-send`
+sets the selected card's SMSC, encodes GSM7 or UTF-16 (including multipart),
+records sent messages with origin SIM, and restores the primary context.
+It never calls SPSWDATA, SetPrimarySimSlot, e5-sim or WAN restart. Partial
+submission reports how many parts succeeded and does not retry automatically.
+Hardware sending and the corrected driver's active notification are under test;
+unit tests cover both paths without sending real SMS.
+
+## Remaining voice integration
+
+The CP starts both SIM radio stacks, but Linux still publishes one AT port
+and one ModemManager modem. `e5-sim` remains the explicit **data SIM** switch.
+Receiving calls on both numbers and selecting the outgoing call SIM require
+retaining the secondary call URCs, identifying each call's card, routing basic
+ATD/ATA/ATH and CLCC to that context, and selecting its audio path. The SMS
+work does not establish this voice support or two simultaneous active calls.
+Keep the existing per-card band restrictions: untested RF settings previously
+triggered CP assertions. No calls are placed automatically during testing.
 
 Upstream `SetPrimarySimSlot` selects a primary SIM and may recreate the modem;
 its presence alone does not implement per-operation SMS/voice selection:
@@ -63,8 +69,3 @@ https://github.com/linux-mobile-broadband/ModemManager/blob/main/introspection/o
 Android exposes subscription/slot-specific radio services, rather than asking
 the user to restart telephony for each message:
 https://android.googlesource.com/platform/frameworks/opt/telephony/+/refs/heads/main/src/java/com/android/internal/telephony/RIL.java
-
-The remaining dual-SIM integration must receive and identify both SIMs'
-unsolicited events in Linux and route per-operation commands. CP reception
-already works in the SMS test above; UI selection alone does not complete
-the application notification and routing path.

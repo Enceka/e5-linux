@@ -18,6 +18,13 @@
 # path fail") once it carries data.  Warned about here, never written.
 set -u
 
+# Card-addressed inbox reads, send and a data-card switch must not overlap.
+# A send transaction already holds this same lock while calling e5-sim.
+if [ "${E5_SMS_MODEM_LOCKED:-}" != 1 ]; then
+    mkdir -p /tmp/run/e5-sms
+    exec flock -x -w 15 /tmp/run/e5-sms/modem.lock env E5_SMS_MODEM_LOCKED=1 "$0" "$@"
+fi
+
 log() { logger -t e5-sim "$*"; echo "$*"; }
 
 card_in_use() {

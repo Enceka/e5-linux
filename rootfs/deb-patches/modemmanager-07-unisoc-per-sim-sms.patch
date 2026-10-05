@@ -1,0 +1,127 @@
+Description: Unisoc card-addressed PDU sending without a data SIM switch
+ Reuse the modem AT port owner and its prompt/raw payload queue. Expose a
+ narrowly validated +E5SMS command through the existing authorized Command
+ operation. Neither SPSWDATA nor SetPrimarySimSlot is involved.
+Author: e5-linux
+Forwarded: no
+
+--- a/src/plugins/unisoc/mm-broadband-modem-unisoc.c
++++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c
+@@ -1360,6 +1360,107 @@
+ 
+ /*****************************************************************************/
+ 
++/* E5 card-addressed PDU submit through the existing single AT port owner.
++ * Modem.Command's normal authorization applies. The PDU is queued raw
++ * immediately after the prompt, as in mm-base-sms, without SPSWDATA. */
++static MMIfaceModemInterface *iface_modem_parent;
++typedef struct {
++    MMIfacePortAt *port;
++    gchar *payload;
++    gchar *response;
++} E5SmsContext;
++static void e5_sms_free (E5SmsContext *ctx)
++{
++    g_clear_object (&ctx->port);
++    g_free (ctx->payload);
++    g_free (ctx->response);
++    g_free (ctx);
++}
++static void e5_sms_payload_ready (MMBaseModem *modem, GAsyncResult *res, GTask *task)
++{
++    E5SmsContext *ctx = g_task_get_task_data (task);
++    GError *error = NULL;
++    const gchar *response = mm_base_modem_at_command_full_finish (modem, res, &error);
++    if (error)
++        g_task_return_error (task, error);
++    else {
++        ctx->response = g_strdup (response);
++        g_task_return_pointer (task, ctx->response, NULL);
++    }
++    g_object_unref (task);
++}
++static void e5_sms_prompt_ready (MMBaseModem *modem, GAsyncResult *res, GTask *task)
++{
++    E5SmsContext *ctx = g_task_get_task_data (task);
++    GError *error = NULL;
++    mm_base_modem_at_command_full_finish (modem, res, &error);
++    if (error) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++    mm_base_modem_at_command_full (modem, ctx->port, ctx->payload, 60,
++                                   FALSE, TRUE, NULL,
++                                   (GAsyncReadyCallback)e5_sms_payload_ready, task);
++}
++static const gchar *e5_command_finish (MMIfaceModem *self, GAsyncResult *res, GError **error)
++{
++    if (g_task_get_source_tag (G_TASK (res)) == e5_command_finish)
++        return g_task_propagate_pointer (G_TASK (res), error);
++    return iface_modem_parent->command_finish (self, res, error);
++}
++static void e5_command (MMIfaceModem *self, const gchar *command, guint timeout,
++                       GAsyncReadyCallback callback, gpointer user_data)
++{
++    const gchar *arg = command;
++    E5SmsContext *ctx;
++    GTask *task;
++    GError *error = NULL;
++    gchar *cmd;
++    gsize length, i;
++    guint card;
++    if (g_str_has_prefix (arg, "AT")) arg += 2;
++    if (g_str_equal (arg, "+E5SMS=?")) {
++        task = g_task_new (self, NULL, callback, user_data);
++        g_task_set_source_tag (task, e5_command_finish);
++        g_task_return_pointer (task, (gpointer)"+E5SMS: 1", NULL);
++        g_object_unref (task);
++        return;
++    }
++    if (!g_str_has_prefix (arg, "+E5SMS=")) {
++        iface_modem_parent->command (self, command, timeout, callback, user_data);
++        return;
++    }
++    task = g_task_new (self, NULL, callback, user_data);
++    g_task_set_source_tag (task, e5_command_finish);
++    arg += strlen ("+E5SMS=");
++    if ((arg[0] != '0' && arg[0] != '1') || arg[1] != ',') goto invalid;
++    card = arg[0] - '0'; arg += 2; length = strlen (arg);
++    if (length < 12 || length > 512 || length % 2 ||
++        arg[0] != '0' || arg[1] != '0' ||
++        !g_ascii_isxdigit (arg[2]) || !g_ascii_isxdigit (arg[3]) ||
++        (g_ascii_xdigit_value (arg[3]) & 3) != 1)
++        goto invalid;
++    for (i = 0; i < length; i++) if (!g_ascii_isxdigit (arg[i])) goto invalid;
++    ctx = g_new0 (E5SmsContext, 1);
++    ctx->port = mm_base_modem_get_best_at_port (MM_BASE_MODEM (self), &error);
++    if (!ctx->port) {
++        e5_sms_free (ctx); g_task_return_error (task, error); g_object_unref (task); return;
++    }
++    ctx->payload = g_strdup_printf ("%s\x1a", arg);
++    g_task_set_task_data (task, ctx, (GDestroyNotify)e5_sms_free);
++    cmd = g_strdup_printf ("+SPACTCARD=%u;+CMGS=%u", card, (guint)(length/2 - 1));
++    mm_base_modem_at_command_full (MM_BASE_MODEM (self), ctx->port, cmd, 10,
++                                   FALSE, FALSE, NULL,
++                                   (GAsyncReadyCallback)e5_sms_prompt_ready, task);
++    g_free (cmd);
++    return;
++invalid:
++    g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                             "Expected +E5SMS=<0|1>,<SMS-SUBMIT PDU with default SMSC>");
++    g_object_unref (task);
++}
++
+ MMBroadbandModemUnisoc *
+ mm_broadband_modem_unisoc_new (const gchar  *device,
+                                const gchar  *physdev,
+@@ -1389,6 +1490,9 @@
+ static void
+ iface_modem_init (MMIfaceModemInterface *iface)
+ {
++    iface_modem_parent = g_type_interface_peek_parent (iface);
++    iface->command = e5_command;
++    iface->command_finish = e5_command_finish;
+     iface->create_bearer = modem_create_bearer;
+     iface->create_bearer_finish = modem_create_bearer_finish;
+     iface->load_current_capabilities = modem_load_current_capabilities;

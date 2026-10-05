@@ -8,11 +8,27 @@ config sms 'sms'
 	option screen '1'
 
 config forward 'forward'
+	# shared: both cards use this profile; per_sim: use each card's profile.
+	option mode 'shared'
 	# a new message to a webhook, by curl (服务 -> 短信 -> 转发; /usr/libexec/e5-sms)
 	option enabled '0'
 	option url ''
 	option method 'POST'
 	option content_type 'application/json'
 	# {from} {text} {time} {sim} {device}: escaped for where they stand
+	option body '{"from":"{from}","text":"{text}","time":"{time}","sim":"{sim}","device":"{device}"}'
+	option timeout '10'
+
+config forward 'forward_sim1'
+	option enabled '0'
+	option method 'POST'
+	option content_type 'application/json'
+	option body '{"from":"{from}","text":"{text}","time":"{time}","sim":"{sim}","device":"{device}"}'
+	option timeout '10'
+
+config forward 'forward_sim2'
+	option enabled '0'
+	option method 'POST'
+	option content_type 'application/json'
 	option body '{"from":"{from}","text":"{text}","time":"{time}","sim":"{sim}","device":"{device}"}'
 	option timeout '10'

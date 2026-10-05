@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Two-SIM SMS inbox, driven by SIPC sysfs events with bounded fallback scans.
+
+All AT commands go through ModemManager. Receiving never switches data SIMs
+or restarts WAN. SMS text is not written to diagnostic logs.
+"""
+import argparse
+import contextlib
+import fcntl
+import glob
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+import re
+import select
+import signal
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.environ.get('E5_SMS_LIB', str(Path(__file__).resolve().parents[1] / 'lib/e5')))
+from sms_pdu import listing, assemble
+
+DATA = Path(os.environ.get('E5_SMS_DATA', '/etc/e5-sms'))
+RUN = Path(os.environ.get('E5_SMS_RUN', '/tmp/run/e5-sms'))
+INBOX = DATA / 'inbox.json'
+MIN_ID = 1000000000  # separate from ModemManager object IDs; stable across restarts
+running = True
+
+
+def execute(argv, timeout=12):
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    if result.returncode:
+        # Do not include arbitrary AT responses/PDU data in a diagnostic error.
+        match = re.search(r'\+CM[ES] ERROR:\s*\d+', result.stdout + result.stderr)
+        raise RuntimeError(match[0] if match else f'{Path(argv[0]).name} failed (exit {result.returncode})')
+    return result.stdout
+
+
+def current_card():
+    try:
+        return 1 if Path('/sys/module/sipc_wwan/parameters/card').read_text().strip() == '1' else 0
+    except OSError:
+        return 0
+
+
+def at(card, command):
+    return execute(['e5-at', f'AT+SPACTCARD={card};+{command}'])
+
+
+def atomic(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + f'.{os.getpid()}.part')
+    with temporary.open('w') as file:
+        os.chmod(temporary, 0o600)
+        json.dump(value, file, ensure_ascii=False)
+        file.write('\n')
+        file.flush(); os.fsync(file.fileno())
+    temporary.replace(path)
+
+
+@contextlib.contextmanager
+def modem_locked(blocking=False):
+    """Share the modem transaction lock with e5-sim and SMS sending."""
+    RUN.mkdir(parents=True, exist_ok=True)
+    with (RUN / 'modem.lock').open('a') as file:
+        try:
+            fcntl.flock(file, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+
+
+@contextlib.contextmanager
+def locked():
+    RUN.mkdir(parents=True, exist_ok=True)
+    with (RUN / 'inbox.lock').open('a') as file:
+        fcntl.flock(file, fcntl.LOCK_EX)
+        yield
+
+
+def load():
+    if not INBOX.exists():
+        return {'version': 1, 'next_id': MIN_ID, 'initialized': [], 'messages': [], 'slots': {}}
+    data = json.loads(INBOX.read_text())
+    if data.get('version') != 1:
+        raise ValueError('Unsupported SMS inbox version')
+    return data
+
+
+def save(data):
+    DATA.mkdir(parents=True, exist_ok=True); DATA.chmod(0o700)
+    atomic(INBOX, data)
+    unread = ''.join(f'/org/freedesktop/ModemManager1/SMS/{m["id"]}\n'
+                     for m in data['messages'] if m.get('unread') and not m.get('deleted'))
+    temp = RUN / ('unread.' + str(os.getpid()))
+    temp.write_text(unread); temp.chmod(0o600); temp.replace(RUN / 'unread')
+
+
+def ingest(data, card, identity, messages, now):
+    """Stable IDs, per-SIM baselines, multipart updates and durable deduplication."""
+    scope = f'{card}:{identity}'
+    baseline = scope not in data['initialized']
+    alerts, forwards = [], []
+    for message in messages:
+        fingerprints = {p['fingerprint'] for p in message['parts']}
+        old = next((m for m in data['messages'] if m['card'] == card and m['identity'] == identity
+                    and fingerprints.intersection(p['fingerprint'] for p in m['parts'])), None)
+        if old and old.get('deleted'):
+            continue
+        if old is None:
+            old = {'id': data['next_id'], 'card': card, 'sim': f'SIM{card + 1}',
+                   'identity': identity, 'unread': not baseline, 'historical': baseline,
+                   'first_seen': now, 'forward_attempted': baseline}
+            data['next_id'] += 1; data['messages'].append(old)
+            if not baseline:
+                alerts.append(old['id'])
+        old.update(message)
+        old['direction'] = 'in'
+        if old['state'] == 'received' and not old.get('forward_attempted'):
+            old['forward_attempted'] = True
+            forwards.append(old['id'])
+    if baseline:
+        data['initialized'].append(scope)
+    data['slots'][str(card)] = {'identity': identity, 'ok': True, 'updated': now, 'error': None}
+    return alerts, forwards
+
+
+def read_card(card, own):
+    ccid = at(card, 'CCID?')
+    match = re.search(r'\+CCID:\s*"?([0-9A-Fa-f]{10,24})', ccid)
+    if not match:
+        raise RuntimeError('SIM identity unavailable')
+    identity = hashlib.sha256(match[1].upper().encode()).hexdigest()
+    if card != own:
+        # The secondary radio starts with CNMI=0 on this CP: explicitly ask it
+        # to store SMS and announce +CMTI on its own URC ring. No RF/data switch.
+        cnmi = at(card, 'CNMI?')
+        if not re.search(r'\+CNMI:\s*2,\s*1,', cnmi):
+            at(card, 'CNMI=2,1,0,0,0')
+    mode = at(card, 'CMGF?')
+    if not re.search(r'\+CMGF:\s*0', mode):
+        at(card, 'CMGF=0')
+    response = at(card, 'CMGL=4')
+    parts, errors = listing(response)
+    if errors:
+        raise RuntimeError(f'{len(errors)} SMS part(s) could not be decoded: {errors[0]["error"]}')
+    return identity, assemble(parts)
+
+
+def alert(ids, data):
+    for identifier in ids:
+        message = next(m for m in data['messages'] if m['id'] == identifier)
+        subprocess.run(['logger', '-t', 'e5-sms-notify', f'new message {identifier} {message["sim"]}'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if ids:
+        subprocess.Popen(['/usr/libexec/e5-sms-notify', 'test'], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def forward(ids):
+    for identifier in ids:
+        subprocess.Popen(['/usr/libexec/e5-sms', 'forward', str(identifier)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def scan(cards):
+    with modem_locked() as acquired:
+        if acquired:
+            return scan_locked(cards)
+
+
+def scan_locked(cards):
+    if not running:
+        return
+    # Do not interpose a card-addressed command during an active voice call.
+    calls = execute(['mmcli', '-m', 'any', '--voice-list-calls'])
+    if re.search(r'\((dialing|ringing-out|ringing-in|active|held|waiting)\)', calls):
+        return
+    own = current_card()
+    with locked():
+        data = load(); alerts, forwards = [], []
+        try:
+            for card in sorted(cards):
+                try:
+                    identity, messages = read_card(card, own)
+                    new, ready = ingest(data, card, identity, messages, int(time.time()))
+                    alerts += new; forwards += ready
+                except (RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+                    data['slots'][str(card)] = {'ok': False, 'updated': int(time.time()), 'error': str(error)}
+        finally:
+            at(own, 'CFUN?')  # restore the AT context for basic dial/send commands
+        data['updated'] = int(time.time()); save(data)
+    alert(alerts, data); forward(forwards)
+
+
+def public(message):
+    return {key: message[key] for key in ['id', 'card', 'sim', 'number', 'text', 'time', 'state', 'direction', 'unread']}
+
+
+def inbox():
+    with locked():
+        data = load()
+        messages = [public(m) for m in data['messages'] if not m.get('deleted')]
+        return {'messages': sorted(messages, key=lambda m: (m['time'], m['id']), reverse=True),
+                'updated': data.get('updated'), 'slots': data['slots'], 'dual_sim': True}
+
+
+def mark_read(identifier=None):
+    with locked():
+        data = load()
+        for message in data['messages']:
+            if identifier is None or message['id'] == identifier:
+                message['unread'] = False
+        save(data)
+    return {'ok': True}
+
+
+def delete(identifier):
+    with modem_locked() as acquired:
+        if not acquired:
+            return {'ok': False, 'error': 'Modem is busy sending or switching SIM; try again shortly'}
+        calls = execute(['mmcli', '-m', 'any', '--voice-list-calls'])
+        if re.search(r'\((dialing|ringing-out|ringing-in|active|held|waiting)\)', calls):
+            return {'ok': False, 'error': 'A voice call is in progress; try again afterwards'}
+        return delete_locked(identifier)
+
+
+def delete_locked(identifier):
+    with locked():
+        data = load()
+        message = next((m for m in data['messages'] if m['id'] == identifier and not m.get('deleted')), None)
+        if not message:
+            return {'ok': False, 'error': 'No such message'}
+        if message['direction'] == 'out':
+            message['deleted'] = True; save(data)
+            return {'ok': True}
+        own = current_card()
+        try:
+            identity, live = read_card(message['card'], own)
+            if identity != message['identity']:
+                raise RuntimeError('The SIM card has changed; no storage was deleted')
+            present = {p['index']: p['fingerprint'] for item in live for p in item['parts']}
+            # A reused storage index must never delete a different incoming SMS.
+            for part in message['parts']:
+                if part['index'] in present and present[part['index']] != part['fingerprint']:
+                    raise RuntimeError('SMS storage index has been reused; refresh before deleting')
+            for part in message['parts']:
+                if part['index'] in present:
+                    at(message['card'], f'CMGD={part["index"]}')
+            message['deleted'] = True; message['unread'] = False
+            save(data)
+            return {'ok': True}
+        finally:
+            at(own, 'CFUN?')
+
+
+class Events:
+    def __init__(self):
+        self.fd = None; self.path = None; self.sequence = 0
+
+    def wait(self, timeout):
+        paths = glob.glob('/sys/bus/platform/devices/*/sms_events')
+        path = paths[0] if len(paths) == 1 else None
+        if path != self.path or self.fd is None:
+            self.close(); self.path = path; self.sequence = 0
+            if path:
+                self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        if self.fd is None:
+            time.sleep(min(timeout, 2)); return set()
+        poll = select.poll(); poll.register(self.fd, select.POLLPRI | select.POLLERR)
+        poll.poll(int(timeout * 1000))
+        os.lseek(self.fd, 0, os.SEEK_SET)
+        lines = os.read(self.fd, 4096).decode().splitlines()
+        cards, latest, first = set(), 0, None
+        for line in lines:
+            sequence, card, memory, index = line.split()
+            latest = max(latest, int(sequence))
+            first = int(sequence) if first is None else min(first, int(sequence))
+            if int(sequence) > self.sequence:
+                cards.add(int(card))
+        if latest < self.sequence or (self.sequence and first is not None and first > self.sequence + 1):
+            cards = {0, 1}
+        self.sequence = latest
+        return cards
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd); self.fd = None
+
+
+def serve():
+    events = Events(); due = 0
+    while running:
+        try:
+            cards = events.wait(1 if due <= time.monotonic() else min(2, due - time.monotonic()))
+            if due <= time.monotonic():
+                cards = {0, 1}; due = time.monotonic() + (30 if events.fd is not None else 10)
+            if cards:
+                scan(cards)
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            logging.warning('SMS receive: %s', error)
+            events.close(); time.sleep(2)
+    events.close()
+
+
+def stop(*_):
+    global running
+    running = False
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=['serve', 'scan', 'list', 'get', 'read', 'delete'])
+    parser.add_argument('id', type=int, nargs='?')
+    args = parser.parse_args()
+    signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
+    try:
+        if args.action == 'serve':
+            serve()
+        elif args.action == 'scan':
+            scan({0, 1}); print(json.dumps({'ok': True}))
+        elif args.action == 'list':
+            print(json.dumps(inbox(), ensure_ascii=False))
+        elif args.action == 'get':
+            print(json.dumps(next((m for m in inbox()['messages'] if m['id'] == args.id), None), ensure_ascii=False))
+        elif args.action == 'read':
+            print(json.dumps(mark_read(args.id)))
+        elif args.action == 'delete':
+            if args.id is None: raise ValueError('Message ID required')
+            print(json.dumps(delete(args.id)))
+    except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+        print(json.dumps({'ok': False, 'error': str(error)})); sys.exit(1)

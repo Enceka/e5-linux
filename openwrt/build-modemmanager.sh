@@ -42,7 +42,8 @@ set -euo pipefail
 # 6: rebuild legacy cached APKs and require a source/checksum manifest.
 # 7: card-addressed SMS submit through the existing AT command owner.
 # 8: native per-call SIM slot and dual-card voice tracking.
-E5REV=8
+# 9: discard snapshots taken before a dial completed; retain undecodable calls.
+E5REV=9
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"

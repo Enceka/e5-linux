@@ -238,18 +238,25 @@ Forwarded: no
          return;
  
      /* Iterate over the call info list */
-@@ -429,6 +457,10 @@
+@@ -428,6 +456,17 @@
+             ctx->call_info_list = g_list_delete_link (ctx->call_info_list, l);
              return;
          }
-     }
++    }
 +
 +    /* An E5 ATD still queued behind an idle poll has not reached the CP yet. */
 +    if (g_object_get_data (G_OBJECT (call), "e5-call-starting"))
 +        return;
++    if (mm_gdbus_call_get_sim_slot (MM_GDBUS_CALL (call))) {
++        const gint64 *started = g_object_get_data (G_OBJECT (call), "e5-call-started-at");
++        const gint64 *snapshot = g_object_get_data (G_OBJECT (ctx->self), "e5-voice-snapshot-start");
++        if (started && (!snapshot || *snapshot < *started)) return;
++        if (started && !mm_base_call_get_index (call) && state == MM_CALL_STATE_DIALING &&
++            g_get_monotonic_time () - *started < 5000000) return;
+     }
  
      /* not found in list! this call is now terminated */
-     mm_obj_dbg (ctx->self, "call '%s' with direction %s, state %s, number '%s', index %u"
-@@ -512,6 +544,8 @@
+@@ -512,6 +551,8 @@
  
              mm_obj_dbg (self, "creating new incoming call...");
              call = create_incoming_call (self, call_info->number);
@@ -376,15 +383,21 @@ Forwarded: no
  /*****************************************************************************/
  /* Start the CALL */
  
-@@ -1025,6 +1069,7 @@
+@@ -1025,6 +1069,13 @@
      GError *error = NULL;
      const gchar *response = NULL;
  
-+    g_object_set_data (G_OBJECT (g_task_get_source_object (task)), "e5-call-starting", NULL);
++    {
++        MMBaseCall *call = g_task_get_source_object (task);
++        gint64 *started = g_new (gint64, 1);
++        *started = g_get_monotonic_time ();
++        g_object_set_data_full (G_OBJECT (call), "e5-call-started-at", started, g_free);
++        g_object_set_data (G_OBJECT (call), "e5-call-starting", NULL);
++    }
      response = mm_base_modem_at_command_finish (modem, res, &error);
  
      /* check response for error */
-@@ -1052,6 +1097,11 @@
+@@ -1052,6 +1103,11 @@
  
      task = g_task_new (self, NULL, callback, user_data);
  
@@ -396,7 +409,7 @@ Forwarded: no
      port = mm_base_modem_peek_best_at_port (MM_BASE_MODEM (self->priv->modem), &error);
      if (!port) {
          g_task_return_error (task, error);
-@@ -1060,6 +1110,11 @@
+@@ -1060,6 +1116,11 @@
      }
  
      cmd = g_strdup_printf ("ATD%s;", mm_gdbus_call_get_number (MM_GDBUS_CALL (self)));
@@ -408,7 +421,7 @@ Forwarded: no
      mm_base_modem_at_command_full (self->priv->modem,
                                     port,
                                     cmd,
-@@ -1113,10 +1168,12 @@
+@@ -1113,10 +1174,12 @@
      GTask *task;
  
      task = g_task_new (self, NULL, callback, user_data);
@@ -425,7 +438,7 @@ Forwarded: no
                                (GAsyncReadyCallback)call_accept_ready,
                                task);
  }
-@@ -1159,10 +1216,7 @@
+@@ -1159,10 +1222,7 @@
      task = g_task_new (self, NULL, callback, user_data);
  
      cmd = g_strdup_printf ("+CTFR=%s", number);
@@ -437,7 +450,7 @@ Forwarded: no
                                (GAsyncReadyCallback)call_deflect_ready,
                                task);
      g_free (cmd);
-@@ -1200,10 +1254,7 @@
+@@ -1200,10 +1260,7 @@
      MMBaseCall *self;
  
      self = g_task_get_source_object (task);
@@ -449,7 +462,7 @@ Forwarded: no
                                (GAsyncReadyCallback)chup_ready,
                                task);
  }
-@@ -1245,10 +1296,7 @@
+@@ -1245,10 +1302,7 @@
          gchar *cmd;
  
          cmd = g_strdup_printf ("+CHLD=1%u", self->priv->index);
@@ -461,7 +474,7 @@ Forwarded: no
                                    (GAsyncReadyCallback)chld_hangup_ready,
                                    task);
          g_free (cmd);
-@@ -1304,10 +1352,7 @@
+@@ -1304,10 +1358,7 @@
      task = g_task_new (self, NULL, callback, user_data);
  
      cmd = g_strdup_printf ("AT+VTS=%c", dtmf[0]);
@@ -522,7 +535,7 @@ Forwarded: no
  
  static MMBroadbandModemUnisocPrivate *
  get_private (gpointer self)
-@@ -1360,6 +1372,257 @@
+@@ -1360,6 +1372,269 @@
  
  /*****************************************************************************/
  
@@ -532,6 +545,7 @@ Forwarded: no
 +typedef struct {
 +    guint slot;
 +    guint own;
++    gint64 started_at;
 +    GList *calls;
 +    GError *error;
 +} VoiceListContext;
@@ -556,6 +570,11 @@ Forwarded: no
 +    GError *error = NULL;
 +    mm_base_modem_at_command_finish (modem, res, &error);
 +    get_private (modem)->voice_loading = FALSE;
++    {
++        gint64 *snapshot = g_new (gint64, 1);
++        *snapshot = ctx->started_at;
++        g_object_set_data_full (G_OBJECT (modem), "e5-voice-snapshot-start", snapshot, g_free);
++    }
 +    if (!ctx->error && error) ctx->error = error; else g_clear_error (&error);
 +    if (ctx->error) g_task_return_error (task, g_steal_pointer (&ctx->error));
 +    else { g_task_return_pointer (task, ctx->calls, (GDestroyNotify)mm_3gpp_call_info_list_free); ctx->calls = NULL; }
@@ -585,6 +604,12 @@ Forwarded: no
 +    GList *list = NULL, *item;
 +    const gchar *response = mm_base_modem_at_command_finish (modem, res, &error);
 +    if (!error) mm_3gpp_parse_clcc_response (response, modem, &list, &error);
++    if (response && strstr (response, "+CLCC:") && !list && !error)
++        g_set_error_literal (&error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                             "CLCC response contained calls but none could be decoded");
++    if (list || has_live_on_slot (modem, ctx->slot + 1))
++        mm_obj_info (modem, "voice snapshot SIM%u: %u parsed call(s), error=%s", ctx->slot + 1,
++                      g_list_length (list), error ? error->message : "none");
 +    if (error) {
 +        /* Absent/locked card must not hide the other card. A failed query
 +         * while that card has a live call must never terminate it by omission. */
@@ -630,7 +655,7 @@ Forwarded: no
 +        g_object_unref (task); return;
 +    }
 +    get_private (self)->voice_loading = TRUE;
-+    ctx = g_new0 (VoiceListContext, 1); ctx->own = port_card ();
++    ctx = g_new0 (VoiceListContext, 1); ctx->own = port_card (); ctx->started_at = g_get_monotonic_time ();
 +    g_task_set_task_data (task, ctx, (GDestroyNotify)voice_list_free);
 +    voice_query_next (task);
 +}
@@ -780,7 +805,7 @@ Forwarded: no
  /* E5 card-addressed PDU submit through the existing single AT port owner.
   * Modem.Command's normal authorization applies. The PDU is queued raw
   * immediately after the prompt, as in mm-base-sms, without SPSWDATA. */
-@@ -1485,6 +1748,9 @@
+@@ -1485,6 +1760,9 @@
  static void
  mm_broadband_modem_unisoc_init (MMBroadbandModemUnisoc *self)
  {
@@ -790,7 +815,7 @@ Forwarded: no
  }
  
  static void
-@@ -1536,6 +1802,7 @@
+@@ -1536,6 +1814,7 @@
  {
      MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
  

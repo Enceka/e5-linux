@@ -61,7 +61,7 @@ real SMS, plus UTF-16 SMSC replies and the LuCI string-valued card argument.
 
 ## Dual-SIM voice implementation (hardware validation in progress)
 
-ModemManager r916 extends native call creation with `sim-slot=1|2` and exposes
+ModemManager r917 extends native call creation with `sim-slot=1|2` and exposes
 read-only `Call.SimSlot` (0 unknown, 1/2 known). `mmcli -J -o CALL` reports it as
 `call.properties.sim-slot`. Applications still use CreateCall, Call.Start,
 Call.Accept and Call.Hangup. A call's source slot remains independent of the
@@ -94,11 +94,17 @@ up the other call automatically. Source-free multiparty/global supplementary
 operations are not exposed by this adapter. This implements dual standby and
 per-call selection, not two simultaneously active voice calls.
 
-The feature is deployed on kernel `6.18.54-e5-00072-g020b970e351e`, MM r916 and
+The feature is deployed on kernel `6.18.54-e5-00072-g020b970e351e`, MM r917 and
 phone 1.5. The local creation-only test confirms an inactive SIM2 object with
 no dial, then removes exactly that object. Unit checks compile the production
 matching/routing functions against an in-memory model; UI tests intercept all
-call requests. User-operated outgoing/incoming audio checks are still pending.
+call requests. The initial SIM2 dial exposed a stale-snapshot race: CP had an active call
+while an older empty snapshot marked its MM object terminated. r917 records
+the snapshot acquisition epoch and dial completion epoch; older snapshots
+cannot end that call, and an unindexed new dial gets a short state-acquisition
+grace period. Replies containing CLCC records that fail decoding are errors,
+never empty lists. The user confirmed SIM2 outgoing downlink after this fix;
+SIM2 incoming/upstream and sustained duration are still under validation.
 
 Keep the existing per-card band restrictions: untested RF settings previously
 triggered CP assertions. Actual calls are always operated manually by the user.

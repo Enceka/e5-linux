@@ -6,7 +6,25 @@ implementation even though the image sources contained it. Rebuilding and
 updating the daemon exposes two SIM object paths, with slot 1 still selected
 for data. `build-rootfs.sh` now requires the APK/source checksum record created
 by `build-modemmanager.sh`; an old unverified APK stops packaging. This slot
-enumeration fix does not implement the dual-standby telephony transport below.
+enumeration fix is separate from the application event transport below.
+
+## Verified dual standby and remaining application work (2026-10-05)
+
+With two China Unicom SIMs and SIM 1 carrying data, manual SMS requests to both
+numbers reached their own SIM storage without switching the data SIM or
+restarting ModemManager. SIM 2 received the test message at 19:20:38 UTC+8;
+SIM 1 received its test message at 19:21:58 UTC+8. These were checked through
+per-card storage metadata; message contents and verification codes were not
+decoded or recorded. SIM 1 held one message, SIM 2 held four including three
+older messages. This verifies the CP's dual-standby SMS reception in this test.
+
+The Linux/application path is still incomplete: ModemManager exposed only
+one received SMS object and the notification service reported only the SIM 1
+arrival. SIM 2's new message remained in its own storage, accessible by an
+explicit card-addressed query. A visible inactive SIM object means it is not
+the selected primary SIM; it does not by itself mean the CP radio is off.
+Incoming calls to both numbers and SIM selection for outgoing operations have
+not been verified by this SMS test.
 
 The CP already starts both SIM radio stacks. Linux currently publishes one AT
 port and one ModemManager modem at a time. `sipc_wwan` merges the selected
@@ -14,7 +32,8 @@ SIM URCs and reads/discards the other URC ring to avoid filling the CP buffer.
 `e5-sim` stops WAN/ModemManager and changes the port, and `e5-sms send ... CARD`
 uses that switch. Thus selecting the sending SIM also changes the data SIM.
 
-The target is dual standby: either SIM can notify incoming SMS/calls at idle,
+The remaining target is application support for that dual standby: either SIM
+can notify incoming SMS/calls at idle,
 and the user can choose a SIM for each send/dial independently of the data SIM.
 This does not imply two simultaneous active voice calls.
 
@@ -45,6 +64,7 @@ Android exposes subscription/slot-specific radio services, rather than asking
 the user to restart telephony for each message:
 https://android.googlesource.com/platform/frameworks/opt/telephony/+/refs/heads/main/src/java/com/android/internal/telephony/RIL.java
 
-Dual-SIM implementation is a driver/telephony integration project. The first
-milestone should be receiving and identifying both SIMs' unsolicited events;
-UI selection alone cannot establish that behavior.
+The remaining dual-SIM integration must receive and identify both SIMs'
+unsolicited events in Linux and route per-operation commands. CP reception
+already works in the SMS test above; UI selection alone does not complete
+the application notification and routing path.

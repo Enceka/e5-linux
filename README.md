@@ -90,6 +90,8 @@ ModemManager `1.24.0-r918`, info screen core `1.6.7`, Phone plugin `1.5`.
 - **Single SIM (OpenWrt):** if the preferred data slot is empty, boot selects the
   inserted slot automatically. Empty slots are skipped during CP power-up; LuCI
   keeps physical SIM1/SIM2 numbering and identifies the selected data SIM.
+- **Charger auto-start (OpenWrt):** brings up NR/CH directly while retaining PM.
+  Modem, IPv4/IPv6 and info screen recovery are verified without an extra reboot.
 - **Dual-SIM SMS:** both cards receive and send without changing the data SIM.
   Lists and alerts show the source card. LuCI provides merged/card-filtered
   inboxes and shared or separate forwarding profiles; updating keeps the inbox.
@@ -105,7 +107,8 @@ ModemManager `1.24.0-r918`, info screen core `1.6.7`, Phone plugin `1.5`.
   diagnostics for USB/hotspot connection problems.
 - **Android → Linux:** install the [Magisk module](magisk/README.md), then use its
   manual Action to enter the selected installed Linux system. Module safety
-  checks are tested; Android hardware activation has not yet been tested.
+  checks and Android root-shell activation are tested; its Magisk UI Action has
+  not been separately exercised.
 
 Flash bundles are in `out/openwrt/`; verified release files and checksums are in
 `out/release/`. Download a complete bundle from [Releases](https://github.com/Enceka/e5-linux/releases),

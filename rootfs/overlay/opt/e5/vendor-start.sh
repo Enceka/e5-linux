@@ -88,6 +88,13 @@ chmod 0666 /sys/devices/platform/soc/*/*sipa-dele*/sipa_dele_reset 2>/dev/null |
 mountpoint -q "$A/proc/cmdline" || mount --bind /run/e5-cmdline.android "$A/proc/cmdline"
 
 echo "stage=exec"
+modem_exe=/vendor/bin/modem_control
+if [ -x /opt/e5/e5-modem-coldboot ]; then
+  modem_exe=$(/opt/e5/e5-modem-coldboot "$A" /run/e5-cmdline.android) || exit 5
+  case "$modem_exe" in /vendor/bin/modem_control|/tmp/e5-coldboot/modem_control) ;; *) exit 5 ;; esac
+  [ "$modem_exe" != /tmp/e5-coldboot/modem_control ] ||
+    echo "stage=cold-modem-start verified NR/CH-only loader; live PM retained"
+fi
 unset LD_PRELOAD
 export LD_LIBRARY_PATH=/apex/com.android.runtime/lib64/bionic:/system/lib64:/vendor/lib64
-exec chroot "$A" /vendor/bin/modem_control
+exec chroot "$A" "$modem_exe"

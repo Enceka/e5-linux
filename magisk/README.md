@@ -37,3 +37,7 @@ bash magisk/build.sh
 输出位于 `out/magisk/`，时间精确到秒，使用 UTC+8。构建使用主线内核的
 arm64 Docker 镜像 `e5-mainline-build`；静态辅助程序不依赖 Android 的 Python
 或动态库。`E5_MAGISK_BUILD_IMAGE` 可指定已有的 arm64 C 编译环境。
+
+2026-10-06 实机验证：从 Android 执行已安装模块的 `switch.sh check` 与
+`switch.sh reboot`，校验 boot_b／SD 安装并保存启动控制备份，成功返回 OpenWrt。
+Magisk 界面的“操作”按钮尚未单独实测。

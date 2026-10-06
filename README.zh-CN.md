@@ -82,6 +82,8 @@ ModemManager `1.24.0-r918`，信息屏核心 `1.6.7`，电话插件 `1.5`。
 
 - **单卡（OpenWrt）：** 首选上网卡槽为空时，启动自动选择已插卡的槽；
   初始化跳过空卡槽，LuCI 保留物理 SIM1／SIM2 编号并显示当前上网卡。
+- **插线自启（OpenWrt）：** 在充电启动模式中直接启动 NR／CH，保留 PM；
+  模组、IPv4／IPv6 和信息屏已实测恢复，无额外重启。
 - **双卡短信：** 两张卡均可收发，不切换上网卡；列表、详情和提醒显示来源卡。
   LuCI 支持双卡合并／筛选收件箱、共用或分别设置转发，更新镜像保留收件箱。
 - **双卡电话（OpenWrt）：** 在“信息屏 → 应用 → 电话”选择 SIM1／SIM2。
@@ -93,8 +95,8 @@ ModemManager `1.24.0-r918`，信息屏核心 `1.6.7`，电话插件 `1.5`。
   非活动 Debian 槽。
 - **连接修复：** 信息屏 USB 设置提供重置 USB 连接和一键诊断，便于排查 USB／热点。
 - **Android 切回 Linux：** 安装 [Magisk 模块](magisk/README.md)，启用后手动点击
-  “操作”，进入当前选择的已安装 Linux。模块校验与写入边界测试已通过，Android
-  实机激活仍未测试。
+  “操作”，进入当前选择的已安装 Linux。校验、写入边界及 Android root 命令切回
+  Linux 已验证，Magisk 界面的“操作”按钮尚未单独实测。
 
 刷入包位于 `out/openwrt/`，校验后的交付文件位于 `out/release/`。
 可从 [Releases](https://github.com/Enceka/e5-linux/releases) 下载完整包，解压后按包内

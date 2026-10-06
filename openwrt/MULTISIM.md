@@ -39,6 +39,41 @@ separately, and shows the selected data SIM. Tests cover both single slots,
 dual/empty slots, locked/busy cards, channel readiness, BusyBox contention,
 the production MM power plan and LuCI rendering.
 
+## Modem startup in charger mode (2026-10-06)
+
+LK's charger auto-start leaves NR/CH offline while PM is already running.
+The vendor daemon considers opening the PM channel sufficient evidence that
+the modem was booted, so it skips the initial load. Linux reaches its UI, but
+the NR AT channel returns ENODEV and ModemManager has no modem.
+
+`e5-modem-coldboot` selects a private copy of the recipient's modem_control
+only in charger mode with `modem=shutdown` and an explicitly unavailable NR
+channel. The currently verified build is identified by its complete SHA-256
+`a0dfdb32b616671febdebe23efce10efd3f9abc0cbcf3b19ff22d7c8ebb0a5e2`.
+After validating the arm64 ELF and original instructions, the copy bypasses
+the PM-only boot predicate and changes the initial load mask from `0x3f` to
+`0x22`: CP/NR and CH, excluding SP/PM. Original vendor code still performs all
+image/NV handling, validation, processor startup and alive negotiation.
+
+The original executable, firmware images, boot partitions, boot-control and
+system selection are preserved. Normal boot and an already-online CP use the
+original program. Unknown executable fingerprints, unexpected boot states
+and ambiguous channel errors are refused with a concrete diagnostic, rather
+than applying an offset patch to another build. The generic image contains
+only this adapter, not the proprietary program or firmware.
+
+Hardware testing powered off OpenWrt with USB attached. It returned once in
+`sprdboot.mode=charger`, loaded CH and CP with mask `0x22`, received Modem Alive,
+exposed the modem and restored IPv4/IPv6 connectivity. No PM image load, modem
+assertion or additional system boot was observed. The user confirmed the
+information screen/network and absence of an extra reboot. Source SHA-256
+remained unchanged. Script tests cover exact edits, architecture/fingerprint
+rejection, normal/online paths, channel errors and original-file preservation.
+
+During recovery, the installed Magisk module's Android root-shell switch
+command also successfully returned to OpenWrt; its UI Action was not separately
+exercised.
+
 ## Verified dual standby and remaining application work (2026-10-05)
 
 With two China Unicom SIMs and SIM 1 carrying data, manual SMS requests to both

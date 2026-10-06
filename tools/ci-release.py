@@ -87,6 +87,10 @@ def audit_root(info):
                 # build-rootfs.sh installs this safety guard at /sbin/sysupgrade.
                 tail = 'sbin/sysupgrade'
             expected[prefix + tail] = file_digest(root / item)
+    # These shared startup files are copied from the Debian overlay, rather
+    # than openwrt/overlay. Verify the selective cold-start adapter as well.
+    for name in ('vendor-start.sh', 'e5-modem-coldboot'):
+        expected['opt/e5/' + name] = file_digest(TOP / 'rootfs/overlay/opt/e5' / name)
     found, versions, modules = {}, {}, set()
     rootfs = TOP / 'work/openwrt' / f'e5-openwrt-{info["openwrt_version"]}-generic-rootfs.tar.gz'
     if not rootfs.is_file():

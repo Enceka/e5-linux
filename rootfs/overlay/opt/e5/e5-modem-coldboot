@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Prepare a verified, private NR/CH-only startup copy of the recipient's loader.
+
+The vendor boot predicate checks the already-running PM channel. On an E5
+charger boot that skips NR/CH, bypass that predicate and select only LOAD_CP
+(2) and LOAD_CH (32). Keep the live PM processor untouched. No firmware,
+radio NV, boot partition, boot-control or original executable is modified.
+"""
+import errno
+import hashlib
+import os
+from pathlib import Path
+import re
+import struct
+import sys
+import tempfile
+
+KNOWN_SHA256 = {'a0dfdb32b616671febdebe23efce10efd3f9abc0cbcf3b19ff22d7c8ebb0a5e2'}
+EDITS = (
+    # mov w19,w0 -> mov w19,wzr: PM being online does not imply CP online.
+    (0xD18C, bytes.fromhex('f303002a'), bytes.fromhex('f3031f2a')),
+    # mov w0,63 -> mov w0,34: LOAD_CP | LOAD_CH; no PM stop/load operations.
+    (0xD1D0, bytes.fromhex('e0078052'), bytes.fromhex('40048052')),
+)
+
+
+def selective_copy(data):
+    digest = hashlib.sha256(data).hexdigest()
+    if digest not in KNOWN_SHA256:
+        raise ValueError('unsupported modem_control build; SHA-256=' + digest)
+    if data[:6] != b'\x7fELF\x02\x01' or struct.unpack_from('<H', data, 18)[0] != 183:
+        raise ValueError('modem_control is not little-endian arm64 ELF')
+    result = bytearray(data)
+    for offset, before, after in EDITS:
+        if data[offset:offset + len(before)] != before:
+            raise ValueError(f'modem_control instruction mismatch at {offset:#x}')
+        result[offset:offset + len(before)] = after
+    return bytes(result)
+
+
+def requires_cold_start(commandline, port='/dev/stty_nr1'):
+    if not re.search(r'(^|\s)(sprdboot|androidboot)\.mode=charger(\s|$)', commandline):
+        return False
+    if not re.search(r'(^|\s)modem=shutdown(\s|$)', commandline):
+        raise ValueError('unexpected modem boot state; refusing a selective load')
+    try:
+        descriptor = os.open(port, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as error:
+        if error.errno in (errno.ENODEV, errno.ENOENT):
+            return True
+        raise ValueError('cannot establish that CP is offline: ' + str(error)) from error
+    os.close(descriptor)
+    return False
+
+
+def prepare(android, commandline):
+    if not requires_cold_start(commandline):
+        return '/vendor/bin/modem_control'
+    source = android / 'vendor/bin/modem_control'
+    patched = selective_copy(source.read_bytes())
+    target = android / 'tmp/e5-coldboot'
+    target.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink():
+        raise ValueError('cold-start staging directory must not be a symlink')
+    target.chmod(0o755)
+    descriptor, name = tempfile.mkstemp(prefix='.modem_control.', dir=target)
+    try:
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(patched)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), 0o755)
+        os.replace(name, target / 'modem_control')
+    finally:
+        if os.path.exists(name):os.unlink(name)
+    return '/tmp/e5-coldboot/modem_control'
+
+
+if __name__ == '__main__':
+    try:
+        if len(sys.argv) != 3:
+            raise ValueError('usage: e5-modem-coldboot ANDROID_ROOT CMDLINE_FILE')
+        print(prepare(Path(sys.argv[1]), Path(sys.argv[2]).read_text().replace('\0', ' ')))
+    except (ValueError, OSError) as error:
+        print('cold modem startup refused: ' + str(error), file=sys.stderr)
+        sys.exit(1)

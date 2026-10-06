@@ -41,6 +41,10 @@ errors before retrying; they identify the failing stage and device response.
   is empty. CP power-up skips empty slots; the LuCI modem page preserves physical
   SIM1/SIM2 labels and shows the current data SIM. With both inserted, the data
   SIM preference is retained.
+- **Charger auto-start:** starts the missing NR/CH processors while retaining
+  live PM. Modem/network startup is verified in charger mode without an extra
+  reboot. The adapter validates the recipient loader's full fingerprint;
+  unrecognized builds report a specific diagnostic.
 - **LuCI → Services → SMS:** merged or card-filtered inboxes, source labels,
   send-card selection and shared/per-SIM forwarding profiles. Receiving/sending
   does not change the selected data card.

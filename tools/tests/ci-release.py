@@ -79,6 +79,10 @@ class RootAudit(unittest.TestCase):
             (top / 'work/openwrt').mkdir(parents=True)
             (top / 'upstream/out-release').mkdir(parents=True)
             (top / 'upstream/out-release/kernel.release').write_text('6.18-e5\n')
+            (top / 'rootfs/overlay/opt/e5').mkdir(parents=True)
+            for name in ('vendor-start.sh', 'e5-modem-coldboot'):
+                (top / 'rootfs/overlay/opt/e5' / name).write_bytes(b'startup fixture')
+                files = {**files, 'opt/e5/' + name: b'startup fixture'}
             path = top / 'work/openwrt/e5-openwrt-25.12.5-generic-rootfs.tar.gz'
             with tarfile.open(path, 'w:gz') as archive:
                 for name, data in files.items():

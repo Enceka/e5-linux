@@ -8,6 +8,37 @@ for data. `build-rootfs.sh` now requires the APK/source checksum record created
 by `build-modemmanager.sh`; an old unverified APK stops packaging. This slot
 enumeration fix is separate from the application event transport below.
 
+## Single-SIM cold boot (2026-10-06)
+
+A fresh install with only physical SIM2 inserted exposed two separate faults:
+`e5-sim` used util-linux `flock -w`, which OpenWrt's BusyBox rejects, and the
+Unisoc cold power sequence activated the empty SIM1 protocol stack, causing
+the CP to assert at `mnphone_api.c:7048`. MM r918 probes both addressed CPIN
+contexts and skips power/mode activation only for an explicitly absent SIM.
+Unknown/busy replies are not treated as absence. The sequence preserves the
+vendor dual-card order and restores the selected card's AT context.
+
+Before WWAN/ModemManager owns the channel, `e5-sim-probe` queries presence
+without activating RF or submitting PINs. It waits for both channel opening
+and AT readiness: the spipe node can exist while open still returns ENODEV.
+An empty preferred slot falls back only to a positively inserted other slot;
+two inserted cards retain the user's data-card preference. The selected slot
+is persisted and used to load `sipc_wwan`.
+
+Hardware verification started with preference SIM1 and only SIM2 inserted.
+After reboot, both configuration/runtime selected card 1 (physical SIM2),
+MM exposed primary slot 2, and its power plan was SIM1 absent/SIM2 present.
+WAN connected through `sipa_eth8` with the automatic `cbnet` APN; three IPv4
+ping replies were received and no new CP assertion was logged. IPv6 WAN also
+reached the up state. No call or SMS was initiated during this test.
+
+LuCI previously filtered empty slots, then labelled the remaining array from
+one, incorrectly showing the SIM2 object as SIM1. It now preserves physical
+slot positions, labels empty slots, reports temporary SIM query failures
+separately, and shows the selected data SIM. Tests cover both single slots,
+dual/empty slots, locked/busy cards, channel readiness, BusyBox contention,
+the production MM power plan and LuCI rendering.
+
 ## Verified dual standby and remaining application work (2026-10-05)
 
 With two China Unicom SIMs and SIM 1 carrying data, manual SMS requests to both

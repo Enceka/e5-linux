@@ -1,0 +1,130 @@
+Description: Unisoc cold power-up skips positively absent SIM slots
+ Probe both CPIN contexts before the RIL power sequence, omit the absent slot's
+ SIM/mode/protocol activation and restore the selected port context. Starting
+ the empty first protocol stack when only SIM2 is inserted asserts this CP.
+Author: e5-linux
+Forwarded: no
+
+--- a/src/plugins/unisoc/mm-broadband-modem-unisoc.c
++++ b/src/plugins/unisoc/mm-broadband-modem-unisoc.c
+@@ -736,8 +736,12 @@
+  * Every command goes on whatever it answers: the second slot may be empty.
+  * The last one leaves the channel on the first card, for a port without the
+  * card prefix. */
++static guint port_card (void);
+ typedef struct {
+     MMBaseModemAtCommandAlloc cmds[9];
++    gboolean present[2];
++    guint probe;
++    guint own;
+ } CardsOnContext;
+ 
+ static void
+@@ -790,37 +794,82 @@
+         mode2 = b;
+     }
+ 
+-    ctx = g_slice_new0 (CardsOnContext);
+-    ctx->cmds[n].command = g_strdup ("+SPACTCARD=0;+SFUN=2");
+-    ctx->cmds[n++].timeout = 60;
+-    ctx->cmds[n].command = g_strdup ("+SPACTCARD=1;+SFUN=2");
+-    ctx->cmds[n++].timeout = 60;
+-    ctx->cmds[n].command = g_strdup_printf ("+SPACTCARD=1;+SPTESTMODEM=%u,%u", mode1, mode2);
+-    ctx->cmds[n++].timeout = 10;
+-    ctx->cmds[n].command = g_strdup_printf ("+SPACTCARD=0;+SPTESTMODEM=%u,%u", mode1, mode2);
+-    ctx->cmds[n++].timeout = 10;
+-    ctx->cmds[n].command = g_strdup ("+SPSWDATA");
+-    ctx->cmds[n++].timeout = 10;
+-    ctx->cmds[n].command = g_strdup ("+SPACTCARD=0;+SFUN=4");
+-    ctx->cmds[n++].timeout = 60;
+-    ctx->cmds[n].command = g_strdup ("+SPACTCARD=1;+SFUN=4");
+-    ctx->cmds[n++].timeout = 60;
+-    ctx->cmds[n].command = g_strdup ("+SPACTCARD=0;+CFUN?");
++    ctx = g_task_get_task_data (task);
++    /* Only a positively absent slot is skipped. CPIN is readable before
++     * SFUN here; powering an absent first stack asserts this CP when only
++     * SIM2 is inserted (mnphone_api.c:7048). Keep the two-card RIL order. */
++    if (ctx->present[0]) {
++        ctx->cmds[n].command = g_strdup ("+SPACTCARD=0;+SFUN=2");
++        ctx->cmds[n++].timeout = 60;
++    }
++    if (ctx->present[1]) {
++        ctx->cmds[n].command = g_strdup ("+SPACTCARD=1;+SFUN=2");
++        ctx->cmds[n++].timeout = 60;
++        ctx->cmds[n].command = g_strdup_printf ("+SPACTCARD=1;+SPTESTMODEM=%u,%u", mode1, mode2);
++        ctx->cmds[n++].timeout = 10;
++    }
++    if (ctx->present[0]) {
++        ctx->cmds[n].command = g_strdup_printf ("+SPACTCARD=0;+SPTESTMODEM=%u,%u", mode1, mode2);
++        ctx->cmds[n++].timeout = 10;
++    }
++    if (ctx->present[ctx->own]) {
++        ctx->cmds[n].command = g_strdup_printf ("+SPACTCARD=%u;+SPSWDATA", ctx->own);
++        ctx->cmds[n++].timeout = 10;
++    }
++    if (ctx->present[0]) {
++        ctx->cmds[n].command = g_strdup ("+SPACTCARD=0;+SFUN=4");
++        ctx->cmds[n++].timeout = 60;
++    }
++    if (ctx->present[1]) {
++        ctx->cmds[n].command = g_strdup ("+SPACTCARD=1;+SFUN=4");
++        ctx->cmds[n++].timeout = 60;
++    }
++    ctx->cmds[n].command = g_strdup_printf ("+SPACTCARD=%u;+CFUN?", ctx->own);
+     ctx->cmds[n++].timeout = 5;
+-    g_task_set_task_data (task, ctx, (GDestroyNotify) cards_on_context_free);
++    mm_obj_info (self, "power plan: SIM1=%s, SIM2=%s, data SIM%u",
++                 ctx->present[0] ? "present" : "absent", ctx->present[1] ? "present" : "absent", ctx->own + 1);
+ 
+     mm_base_modem_at_sequence (self, (const MMBaseModemAtCommand *) ctx->cmds, NULL, NULL,
+                                (GAsyncReadyCallback) cards_on_sequence_ready, task);
+ }
+ 
+-static void
+-cards_on (MMBaseModem         *self,
+-          GAsyncReadyCallback  callback,
+-          gpointer             user_data)
+-{
+-    mm_base_modem_at_command (self, "+SPTESTMODE?", 5, FALSE,
+-                              (GAsyncReadyCallback) cards_on_testmode_ready,
+-                              g_task_new (self, NULL, callback, user_data));
++static void cards_on_probe_next (GTask *task);
++static void
++cards_on_probe_ready (MMBaseModem *self, GAsyncResult *res, GTask *task)
++{
++    CardsOnContext *ctx = g_task_get_task_data (task);
++    GError *error = NULL;
++    mm_base_modem_at_command_finish (self, res, &error);
++    if (error && g_error_matches (error, MM_MOBILE_EQUIPMENT_ERROR, MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED))
++        ctx->present[ctx->probe] = FALSE;
++    g_clear_error (&error);
++    ctx->probe++;
++    cards_on_probe_next (task);
++}
++static void
++cards_on_probe_next (GTask *task)
++{
++    MMBaseModem *self = g_task_get_source_object (task);
++    CardsOnContext *ctx = g_task_get_task_data (task);
++    gchar *command;
++    if (ctx->probe < 2) {
++        command = g_strdup_printf ("+SPACTCARD=%u;+CPIN?", ctx->probe);
++        mm_base_modem_at_command (self, command, 5, FALSE, (GAsyncReadyCallback)cards_on_probe_ready, task);
++    } else {
++        command = g_strdup_printf ("+SPACTCARD=%u;+SPTESTMODE?", ctx->own);
++        mm_base_modem_at_command (self, command, 5, FALSE, (GAsyncReadyCallback)cards_on_testmode_ready, task);
++    }
++    g_free (command);
++}
++static void
++cards_on (MMBaseModem *self, GAsyncReadyCallback callback, gpointer user_data)
++{
++    GTask *task = g_task_new (self, NULL, callback, user_data);
++    CardsOnContext *ctx = g_slice_new0 (CardsOnContext);
++    ctx->present[0] = ctx->present[1] = TRUE;
++    ctx->own = port_card ();
++    g_task_set_task_data (task, ctx, (GDestroyNotify)cards_on_context_free);
++    cards_on_probe_next (task);
+ }
+ 
+ static gboolean

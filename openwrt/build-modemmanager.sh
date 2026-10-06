@@ -43,7 +43,8 @@ set -euo pipefail
 # 7: card-addressed SMS submit through the existing AT command owner.
 # 8: native per-call SIM slot and dual-card voice tracking.
 # 9: discard snapshots taken before a dial completed; retain undecodable calls.
-E5REV=9
+# 10: skip absent SIM power-up and restore the selected AT context.
+E5REV=10
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
@@ -59,6 +60,7 @@ done
 # the source patches, numbered after OpenWrt's own
 rm -rf "$WORK/patches" && mkdir -p "$WORK/patches/src" "$WORK/patches/pkg"
 cp "$HERE/tests/voice-identity.py" "$WORK/voice-identity.py"
+cp "$HERE/tests/sim-power.py" "$WORK/sim-power.py"
 n=900
 for p in "$TOP"/rootfs/deb-patches/modemmanager-0*.patch; do
     cp "$p" "$WORK/patches/src/$n-e5-$(basename "$p" | sed 's/^modemmanager-//')"
@@ -141,6 +143,7 @@ make package/modemmanager/compile -j"$JOBS" >/build/log 2>&1 || { tail -80 /buil
 voice_source=$(find build_dir -path "*/modemmanager-*/src/mm-iface-modem-voice.c" -print -quit)
 [ -n "$voice_source" ] || { echo "missing patched voice source" >&2; exit 1; }
 python3 /work/voice-identity.py "$(dirname "$voice_source")"
+python3 /work/sim-power.py "$(dirname "$voice_source")"
 rm -f /out/modemmanager*.apk
 find bin/packages -name "modemmanager*-r$((rel + 900 + E5REV)).apk" -exec cp {} /out/ \;
 ls -la /out/modemmanager*.apk

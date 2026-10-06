@@ -37,6 +37,10 @@ errors before retrying; they identify the failing stage and device response.
 - **Info screen → Apps → Phone:** dialer and contacts on one screen. Phone 1.5
   selects the outgoing SIM and labels the origin of incoming calls. Ring sound,
   vibration and screen wake are plugin settings.
+- **Single SIM:** boot switches to the inserted slot if the preferred data slot
+  is empty. CP power-up skips empty slots; the LuCI modem page preserves physical
+  SIM1/SIM2 labels and shows the current data SIM. With both inserted, the data
+  SIM preference is retained.
 - **LuCI → Services → SMS:** merged or card-filtered inboxes, source labels,
   send-card selection and shared/per-SIM forwarding profiles. Receiving/sending
   does not change the selected data card.
@@ -49,7 +53,7 @@ errors before retrying; they identify the failing stage and device response.
 ## Dual-SIM validation
 
 Current stack: kernel `6.18.54-e5-00072-g020b970e351e`, ModemManager
-`1.24.0-r917`, information screen `1.6.7`, Phone plugin `1.5`.
+`1.24.0-r918`, information screen `1.6.7`, Phone plugin `1.5`.
 
 Both cards' SMS reception, sending and correct source identity are verified.
 SIM2 outgoing receiver downlink and incoming alerts are verified. SIM2

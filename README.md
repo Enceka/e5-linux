@@ -82,11 +82,14 @@ channels that survive a failed boot.
 | Idle load | ✅ load average ~0 at idle (it read 6+ from vendor threads in `D` and synchronous console output) — kernel `0015`, FINDINGS §29 |
 | OpenWrt | ✅ OpenWrt 25.12 as a second system in the root image or on the SD A/B layout: ModemManager WAN, IPv4 NAT + IPv6 LAN, USB + hotspot bridge, LuCI/SSH, Bluetooth A2DP, the info screen and the Phone app. The panel remains an info screen rather than a full desktop |
 
-## Current tested versions and usage (2026-10-05)
+## Current tested versions and usage (2026-10-06)
 
 Mainline kernel `6.18.54-e5-00072-g020b970e351e`, OpenWrt `25.12.5`,
-ModemManager `1.24.0-r917`, info screen core `1.6.7`, Phone plugin `1.5`.
+ModemManager `1.24.0-r918`, info screen core `1.6.7`, Phone plugin `1.5`.
 
+- **Single SIM (OpenWrt):** if the preferred data slot is empty, boot selects the
+  inserted slot automatically. Empty slots are skipped during CP power-up; LuCI
+  keeps physical SIM1/SIM2 numbering and identifies the selected data SIM.
 - **Dual-SIM SMS:** both cards receive and send without changing the data SIM.
   Lists and alerts show the source card. LuCI provides merged/card-filtered
   inboxes and shared or separate forwarding profiles; updating keeps the inbox.

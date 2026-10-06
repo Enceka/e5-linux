@@ -29,6 +29,16 @@ start_service() {
 		# build has no card parameter, and the first card is the CP'"'"'s default)
 		C=$(uci -q get e5-sim.main.card)
 		[ "$C" = 1 ] || C=0
+		if ! grep -q "^sipc_wwan " /proc/modules && [ -x /usr/libexec/e5-sim-probe ]; then
+			chosen=$(/usr/libexec/e5-sim-probe /dev/stty_nr1 "$C")
+			case "$chosen" in 0|1)
+				if [ "$chosen" != "$C" ]; then
+					echo "preferred SIM$((C + 1)) absent: selecting SIM$((chosen + 1))"
+					uci set e5-sim.main.card="$chosen" && uci commit e5-sim
+					C=$chosen
+				fi ;;
+			esac
+		fi
 		grep -q "^sipc_wwan " /proc/modules || insmod $M/sipc_wwan.ko card=$C ||
 			{ [ $C = 0 ] && insmod $M/sipc_wwan.ko; } || exit 1
 		echo "sipc_wwan loaded, SIM card $C"'

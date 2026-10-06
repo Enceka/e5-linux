@@ -124,7 +124,8 @@ docker run --rm --platform linux/arm64 -v "$HERE/src":/src:ro -v "$WORK":/out "$
         gcc -static -Os -s -o /out/logdw /src/logdw.c &&
         gcc -static -Os -s -Wall -o /out/e5-vibrate /src/e5-vibrate.c &&
         gcc -static -Os -s -Wall -o /out/e5-ctl-raw /src/e5-ctl-raw.c &&
-        gcc -static -Os -s -Wall -o /out/e5-modemd /src/e5-modemd.c'
+        gcc -static -Os -s -Wall -o /out/e5-modemd /src/e5-modemd.c &&
+        gcc -static -Os -s -Wall -Wextra -o /out/e5-sim-probe /src/e5-sim-probe.c'
 
 # what a standalone image carries of the device's own (the Debian root's in the
 # directory form); an empty directory each otherwise
@@ -248,6 +249,7 @@ docker run --rm --platform linux/arm64 \
     -v "${SCREEN_PLUGINS:-$WORK/no-infoscreen}":/in/infoscreen-plugins:ro \
     -v "$WORK/e5-ctl-raw":/in/e5-ctl-raw:ro -v "$TOP/rootfs/overlay/usr/share/alsa":/in/alsa:ro \
     -v "$WORK/e5-modemd":/in/e5-modemd:ro \
+    -v "$WORK/e5-sim-probe":/in/e5-sim-probe:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" -v "$TP":/in/transplant:ro \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" -e E5_BUILD_EPOCH="${E5_BUILD_EPOCH:-}" \
@@ -346,6 +348,7 @@ cp /in/logdw $R/opt/e5/bin/logdw && chmod 755 $R/opt/e5/bin/logdw
 cp /in/e5-vibrate $R/usr/bin/e5-vibrate && chmod 755 $R/usr/bin/e5-vibrate
 cp /in/e5-ctl-raw $R/opt/e5/e5-ctl-raw && chmod 755 $R/opt/e5/e5-ctl-raw
 cp /in/e5-modemd $R/usr/sbin/e5-modemd && chmod 755 $R/usr/sbin/e5-modemd
+cp /in/e5-sim-probe $R/usr/libexec/e5-sim-probe && chmod 755 $R/usr/libexec/e5-sim-probe
 # the card'"'"'s UCM profile: applied by e5-audio-dsp with amixer (OpenWrt has no alsaucm)
 mkdir -p $R/usr/share/alsa && cp -a /in/alsa/ucm2 $R/usr/share/alsa/
 cp /in/busybox $R/opt/e5/bin/busybox && chmod 755 $R/opt/e5/bin/busybox

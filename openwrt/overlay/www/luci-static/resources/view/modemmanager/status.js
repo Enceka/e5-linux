@@ -71,6 +71,18 @@ return view.extend({
 		]);
 	},
 
+	revisionRows: function (revision) {
+		/* e5-revision-rows: already applied; the boot helper preserves this view. */
+		var rows = [];
+		String(revision || '').split('\n').forEach(function (line) {
+			line = line.replace(/\s+/g, ' ').trim();
+			if (!line) return;
+			var match = line.match(/^([A-Za-z][^:]*):\s*(.*)$/);
+			rows.push(match ? [match[1].trim(), match[2]] : [_('Build'), line]);
+		});
+		return rows.length > 1 ? rows : [[_('Revision'), revision]];
+	},
+
 	renderContent: function (modems) {
 		var node = E('div', {}, E('div'));
 
@@ -81,7 +93,7 @@ return view.extend({
 			var modemSection = this.renderSection(_('Modem Info'), [
 				[_('Manufacturer'), generic.manufacturer],
 				[_('Model'), generic.model],
-				[_('Revision'), generic.revision],
+				...this.revisionRows(generic.revision),
 				[E('abbr', { 'title': _('International Mobile Station Equipment Identity') }, [
 					_('IMEI')
 				]), modem3gpp.imei],

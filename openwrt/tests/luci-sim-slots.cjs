@@ -14,6 +14,9 @@ const view = new Function('view', 'ui', 'poll', 'dom', 'helper', 'L', 'E', '_',
   {extend: x => x}, {tabs: {initTabGroup() {}}}, {}, {}, helper, L, E, translate);
 
 (async () => {
+  assert.deepEqual(view.revisionRows('V1.0'), [['Revision', 'V1.0']]);
+  assert.deepEqual(view.revisionRows('Platform Version: E5\nHW Version: 1\n2026-10-06'),
+    [['Platform Version', 'E5'], ['HW Version', '1'], ['Build', '2026-10-06']]);
   const one = '/org/freedesktop/ModemManager1/SIM/41';
   const two = '/org/freedesktop/ModemManager1/SIM/0';
   helper.getSim = async index => ({sim: {properties: {active: true, 'operator-name': 'fixture'}}});

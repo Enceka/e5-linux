@@ -97,6 +97,20 @@ class APN(unittest.TestCase):
             apn.main('save', {'name':'stored'})
             self.assertEqual(worker.call_args.args[0], 'save')
 
+    def test_alphanumeric_card_identity_preserved_for_apply_and_auto(self):
+        for iccid in ('898604E112345678901F', '898604Z11234567890af'):
+            who = dict(self.who, iccid=iccid)
+            with patch.object(apn, 'identity', return_value=who), patch.object(apn, 'auth_supported', return_value=True), patch.object(apn, 'invoke', return_value={'ok':1}) as worker:
+                for action in ('apply', 'auto'):
+                    self.assertTrue(apn.main(action, {})['ok'])
+                    self.assertEqual(worker.call_args.args[1]['iccid'], iccid)
+
+    def test_invalid_card_identity_cannot_write(self):
+        for iccid in (12345678901234567890, '898604Z11234567890af\n', '898604/112345678901F', 'short', 'x'*23, '卡'*20):
+            with patch.object(apn, 'identity', return_value=dict(self.who, iccid=iccid)), patch.object(apn, 'invoke') as worker:
+                self.assertEqual(apn.main('auto', {})['error'], 'apn_identity')
+                worker.assert_not_called()
+
     def test_private_resolve_and_password_are_not_rpc(self):
         rpc = (PLUGIN / 'root/usr/libexec/rpcd/mu300dash').read_text(encoding='utf-8')
         branch = rpc[rpc.index('        apn_set)'):rpc.index('        sim_get)')]
@@ -123,7 +137,16 @@ class APN(unittest.TestCase):
     def test_every_model_gets_idempotent_hook_before_attach(self):
         # Minimal tracked fixture for the pinned netifd patch anchors, not a
         # developer's ignored work directory or a network-fetched moving file.
-        proto = '''proto_modemmanager_setup() {
+        proto = '''modemmanager_set_plmn() {
+\tmmcli --modem="${device}" \\
+\t\t--timeout 120 \\
+\t\t--3gpp-register-in-operator="${plmn}" || {
+\t\tproto_block_restart "${interface}"
+\t}
+}
+proto_modemmanager_setup() {
+\t\t\tproto_notify_error "${interface}" MM_FAILED_REASON_SIM_MISSING
+\t\t\tproto_block_restart "${interface}"
 \t# set initial eps bearer settings
 \t\tcase "$init_epsbearer" in
 \t\tesac
@@ -134,6 +157,7 @@ class APN(unittest.TestCase):
 \t\treturn 1
 \t}
 }
+proto_modemmanager_teardown() { :; }
 '''
         for profile in ('e5', 't551m', 'm8'):
             root = self.root / profile

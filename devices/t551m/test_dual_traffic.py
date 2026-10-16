@@ -15,13 +15,15 @@ with tempfile.TemporaryDirectory(prefix='dual-traffic-') as directory:
     for name in ['data','run','net']: (root/name).mkdir()
     for name in ['traffic','traffic-core.uc']: shutil.copy(source/name,root/name)
     card=root/'card';card.write_text('0')
-    def counters(slot,rx,tx):
-        dev=root/'net'/('sipa_eth8' if slot else 'sipa_eth0')
+    def counters(slot,rx,tx,cid=1):
+        dev=root/'net'/('sipa_eth'+str(slot*8+cid-1))
         (dev/'statistics').mkdir(parents=True,exist_ok=True)
-        (dev/'ifindex').write_text(str(slot+50))
+        (dev/'ifindex').write_text(str(slot+50+cid-1))
         (dev/'statistics/rx_bytes').write_text(str(rx))
         (dev/'statistics/tx_bytes').write_text(str(tx))
     counters(0,1000,200);counters(1,3000,400)
+    # Existing CID2 counters must not be charged again during ledger migration.
+    counters(0,7000,700,2);counters(1,9000,900,2)
     day=time.strftime('%Y-%m-%d');month=day[:7]
     old={'version':1,'config':{'plan_name':'legacy','monthly_gb':20},'started_at':int(time.time()),
          'last':{'device':'sipa_eth0','boot':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
@@ -103,11 +105,24 @@ with tempfile.TemporaryDirectory(prefix='dual-traffic-') as directory:
         for slot in ['0','1']:assert rpc('get',{'slot':slot})['status']['cycle_used']==0
         counters(1,3310,442);rpc('flush')
         assert rpc('get',{'slot':'1'})['status']['today']=={'rx':10,'tx':2}
+        counters(0,7100,720,2);counters(1,9300,940,2);rpc('flush')
+        assert rpc('get',{'slot':'0'})['status']['today']=={'rx':100,'tx':20}
+        assert rpc('get',{'slot':'1'})['status']['today']=={'rx':310,'tx':42}
     finally:proc.terminate();proc.wait(timeout=5)
     (root/'run/state.json').unlink()
     proc=start()
     try:
-        assert rpc('get',{'slot':'0'})['status']['cycle_used']==0
-        assert rpc('get',{'slot':'1'})['status']['today']=={'rx':10,'tx':2}
+        assert rpc('get',{'slot':'0'})['status']['today']=={'rx':100,'tx':20}
+        assert rpc('get',{'slot':'1'})['status']['today']=={'rx':310,'tx':42}
     finally:proc.terminate();proc.wait(timeout=5)
-print('PASS: isolated SIM counters/migration, explicit clear scopes, preserved plans, calibration reset, live counter baselines, write-failure rollback, warm/cold restart')
+    api=(Path(__file__).parent/'infoscreen/base/api.uc').read_text()
+    def function(name):
+        start=api.index('function '+name+'(')
+        return api[start:api.index('\n}',start)+2]
+    screen=root/'screen-counters.uc'
+    screen.write_text("import {readfile,stat} from 'fs';\n" +
+                      '\n'.join(function(name) for name in ('read_trim','read_num','sim_counters')).replace('/sys/class/net',str(root/'net')) +
+                      '\nprint(sprintf("%J",[sim_counters(0),sim_counters(1),sim_counters(2)]));\n')
+    result=json.loads(subprocess.check_output(['ucode',str(screen)]))
+    assert result==[{'rx':8270,'tx':949},{'rx':12610,'tx':1382},{'rx':None,'tx':None}],result
+print('PASS: isolated SIM/CID2 counters/migration, screen counters, explicit clear scopes, preserved plans, calibration reset, live counter baselines, write-failure rollback, warm/cold restart')

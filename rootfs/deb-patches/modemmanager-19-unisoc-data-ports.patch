@@ -1,0 +1,105 @@
+Description: register and select all PDP data ports in the active SIM bank
+ Preserve IPv4-only and custom APN contexts without changing the AT sequence.
+ Stock libimpl-ril getEthIndexBySocketId/getEthNameByCid use cid-1/cid+7.
+Forwarded: not-needed
+
+--- a/src/plugins/unisoc/mm-broadband-bearer-unisoc.c
++++ b/src/plugins/unisoc/mm-broadband-bearer-unisoc.c
+@@ -63,6 +63,42 @@
+     g_slice_free (CommonContext, ctx);
+ }
+ 
++/* Stock libimpl-ril getEthIndexBySocketId(): SIM1 cid-1, SIM2 cid+7.
++ * Read the existing driver's selected card; never send an extra AT command.
++ * Only that card's eight net ports are handed to this modem by hotplug.
++ */
++static MMPort *
++get_context_data_port (MMBaseModem *modem, guint cid, GError **error)
++{
++    g_autofree gchar *card = NULL;
++    g_autofree gchar *name = NULL;
++    MMPort *port;
++    guint base;
++
++    if (!g_file_get_contents ("/sys/module/sipc_wwan/parameters/card", &card, NULL, error))
++        return NULL;
++    g_strstrip (card);
++    if (!g_str_equal (card, "0") && !g_str_equal (card, "1")) {
++        g_set_error_literal (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                             "Cannot identify the selected SIPC SIM card");
++        return NULL;
++    }
++    if (cid < 1 || cid > 8) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
++                     "PDP context %u has no data port in the selected SIM bank", cid);
++        return NULL;
++    }
++    base = g_str_equal (card, "1") ? 8 : 0;
++    name = g_strdup_printf ("sipa_eth%u", base + cid - 1);
++    port = mm_base_modem_get_port (modem, name);
++    if (port && mm_port_get_port_type (port) != MM_PORT_TYPE_NET)
++        g_clear_object (&port);
++    if (!port)
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
++                     "No network interface for PDP context %u (%s)", cid, name);
++    return port;
++}
++
+ static GTask *
+ common_task_new (MMBroadbandBearerUnisoc *self,
+                  MMBaseModem             *modem,
+@@ -75,6 +111,7 @@
+ {
+     CommonContext *ctx;
+     GTask         *task;
++    GError        *error = NULL;
+ 
+     task = g_task_new (self, cancellable, callback, user_data);
+     ctx = g_slice_new0 (CommonContext);
+@@ -83,22 +120,12 @@
+     ctx->cid = cid;
+     if (data)
+         ctx->data = g_object_ref (data);
+-    else if (cid <= 1)
+-        ctx->data = mm_base_modem_get_best_data_port (modem, MM_PORT_TYPE_NET);
+-    else {
+-        g_autofree gchar *name = NULL;
+-
+-        name = g_strdup_printf ("sipa_eth%u", cid ? cid - 1 : 0);
+-        ctx->data = mm_base_modem_get_port (modem, name);
+-        if (ctx->data && mm_port_get_port_type (ctx->data) != MM_PORT_TYPE_NET)
+-            g_clear_object (&ctx->data);
+-    }
++    else
++        ctx->data = get_context_data_port (modem, cid, &error);
+     g_task_set_task_data (task, ctx, (GDestroyNotify) common_context_free);
+ 
+     if (!ctx->data) {
+-        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
+-                                 "No network interface for PDP context %u (sipa_eth%u)",
+-                                 cid, cid ? cid - 1 : 0);
++        g_task_return_error (task, error);
+         g_object_unref (task);
+         return NULL;
+     }
+--- a/src/plugins/unisoc/77-mm-unisoc-sipc.rules
++++ b/src/plugins/unisoc/77-mm-unisoc-sipc.rules
+@@ -2,7 +2,7 @@
+ 
+ # Unisoc (Spreadtrum) SoC modems reached over SIPC: the AT port is the WWAN
+ # port the kernel's sipc_wwan driver registers on the sprd,spipe AT channel,
+-# the data path the sipa_eth interface of the first PDP context.  Tag both for
++# the data path the sipa_eth interfaces of the PDP contexts.  Tag all for
+ # the unisoc plugin and group them into one modem.
+ #
+ # One assignment per rule: where there is no udev (OpenWrt), ModemManager
+@@ -13,7 +13,7 @@
+ SUBSYSTEM=="wwan", DRIVERS=="sprd-spipe", ENV{ID_MM_UNISOC_SIPC}="1"
+ SUBSYSTEM=="wwan", DRIVERS=="sprd-spipe", ENV{ID_MM_PHYSDEV_UID}="unisoc-sipc"
+ SUBSYSTEM=="wwan", DRIVERS=="sprd-spipe", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
+-SUBSYSTEM=="net", KERNEL=="sipa_eth0", ENV{ID_MM_UNISOC_SIPC}="1"
+-SUBSYSTEM=="net", KERNEL=="sipa_eth0", ENV{ID_MM_PHYSDEV_UID}="unisoc-sipc"
++SUBSYSTEM=="net", KERNEL=="sipa_eth[0-9]|sipa_eth1[0-5]", ENV{ID_MM_UNISOC_SIPC}="1"
++SUBSYSTEM=="net", KERNEL=="sipa_eth[0-9]|sipa_eth1[0-5]", ENV{ID_MM_PHYSDEV_UID}="unisoc-sipc"
+ 
+ LABEL="mm_unisoc_sipc_end"

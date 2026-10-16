@@ -20,9 +20,9 @@ class Discovery(unittest.TestCase):
         physical.mkdir(parents=True)
         port = root/'sys/class/wwan/wwan0at0'; port.parent.mkdir(parents=True); port.symlink_to(physical)
         if net:
-            for name in ('sipa_eth0','sipa_eth8'):
+            for name in ('sipa_eth'+str(i) for i in range(16)):
                 (root/'sys/class/net'/name).mkdir(parents=True)
-        cache = root/'events.cache'; cache.write_text('add,sipa_eth8,net,old\nadd,sipa_eth0,net,old\n')
+        cache = root/'events.cache'; cache.write_text(''.join(f'add,sipa_eth{i},net,old\n' for i in range(16)))
         common = root/'common'
         common.write_text(f'''MODEMMANAGER_RUNDIR={root}/run
 MODEMMANAGER_EVENTS_CACHE={cache}
@@ -40,10 +40,11 @@ mm_report_event() {{ printf '%s %s %s\\n' "$1" "$2" "$3" >> {root}/events; }}
         return events.read_text().splitlines() if events.exists() else []
 
     def test_selected_card_and_order(self):
-        for card, own, other in [('0','sipa_eth0','sipa_eth8'), ('1','sipa_eth8','sipa_eth0')]:
+        for card, own, other in [('0',0,8), ('1',8,0)]:
             root, script = self.fixture(card)
-            self.assertEqual(self.run_script(root, script), [
-                'add wwan0at0 wwan', f'remove {other} net', f'add {own} net'])
+            self.assertEqual(self.run_script(root, script), ['add wwan0at0 wwan'] +
+                             [f'remove sipa_eth{i} net' for i in range(other,other+8)] +
+                             [f'add sipa_eth{i} net' for i in range(own,own+8)])
 
     def test_external_wwan_is_not_claimed(self):
         root, script = self.fixture(external=True)
@@ -59,7 +60,45 @@ mm_report_event() {{ printf '%s %s %s\\n' "$1" "$2" "$3" >> {root}/events; }}
 
     def test_missing_net_port_keeps_at_notification(self):
         root, script = self.fixture(net=False)
-        self.assertEqual(self.run_script(root, script), ['add wwan0at0 wwan'])
+        self.assertEqual(self.run_script(root, script), ['add wwan0at0 wwan'] +
+                         [f'remove sipa_eth{i} net' for i in range(8,16)])
+
+    def test_missing_context_does_not_hide_other_contexts(self):
+        root, script = self.fixture()
+        (root/'sys/class/net/sipa_eth1').rmdir()
+        events = self.run_script(root, script)
+        self.assertNotIn('add sipa_eth1 net', events)
+        self.assertIn('add sipa_eth2 net', events)
+
+    def test_debian_filter_is_scoped_and_waits_for_at(self):
+        for card in ('0','1'):
+            root, _ = self.fixture(card)
+            script = root/'allowed'
+            script.write_text((TOP/'rootfs/overlay/usr/local/sbin/e5-mm-sipa-port-allowed').read_text().replace('/sys/',str(root)+'/sys/'))
+            for index in range(18):
+                result = subprocess.run(['sh',str(script),f'sipa_eth{index}'])
+                self.assertEqual(result.returncode == 0, int(card)*8 <= index < int(card)*8+8)
+            (root/'sys/class/wwan/wwan0at0').unlink()
+            self.assertNotEqual(subprocess.run(['sh',str(script),f'sipa_eth{int(card)*8}']).returncode,0)
+
+    def test_openwrt_filter_allows_removing_other_card_even_without_at(self):
+        # Execute the filter from the package patch, including its real shell
+        # condition, rather than duplicating that condition in this test.
+        patch = (TOP/'openwrt/patches/modemmanager-package-sipa-eth.patch').read_text()
+        lines = '\n'.join(line[1:] for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++'))
+        block = lines[lines.index('if [ "$action"'):lines.index('mm_log "debug" "unisoc sipa')]
+        for card in ('0','1'):
+            root, _ = self.fixture(card)
+            block_ = block.replace('/sys/',str(root)+'/sys/')
+            script = root/'filter'
+            script.write_text('filter() {\n'+block_+'\n}\naction=$1 name=$2\nfilter\n')
+            for index in range(18):
+                result = subprocess.run(['sh',str(script),'add',f'sipa_eth{index}'])
+                self.assertEqual(result.returncode == 0,int(card)*8 <= index < int(card)*8+8)
+            (root/'sys/class/wwan/wwan0at0').unlink()
+            self.assertNotEqual(subprocess.run(['sh',str(script),'add',f'sipa_eth{int(card)*8}']).returncode,0)
+            for index in range(16):
+                self.assertEqual(subprocess.run(['sh',str(script),'remove',f'sipa_eth{index}']).returncode,0)
 
     def test_shared_patch_is_idempotent_and_preserves_replay_sequence(self):
         patch = runpy.run_path(str(TOP/'devices/t551m/network-startup.py'))['patch_root']

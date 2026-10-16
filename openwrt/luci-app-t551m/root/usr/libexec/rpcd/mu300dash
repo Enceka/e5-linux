@@ -116,17 +116,27 @@ m_status() {
 # Fast, uncached per-card counters. No AT, Wi-Fi enumeration or full sysinfo.
 # Fractional uptime avoids integer-second jitter in subsecond rate deltas.
 m_rates() {
-    local dev=sipa_eth0 stamp rest rx tx idx
+    local dev=sipa_eth0 stamp rest rx=0 tx=0 idx base=0 offset=0 path r t
     [ "$MU300_SIM_SLOT" = 0 ] || dev=sipa_eth8
+    [ "$MU300_SIM_SLOT" = 0 ] || base=8
     IFS=' ' read -r stamp rest < /proc/uptime
     case "$stamp" in ''|*[!0-9.]*) printf '{"error":"Clock unavailable"}\n'; return ;; esac
-    if ! { IFS= read -r rx < "/sys/class/net/$dev/statistics/rx_bytes" &&
-           IFS= read -r tx < "/sys/class/net/$dev/statistics/tx_bytes" &&
-           IFS= read -r idx < "/sys/class/net/$dev/ifindex"; }; then
+    if ! IFS= read -r idx < "/sys/class/net/$dev/ifindex"; then
         printf '{"card":%s,"ts":%s,"device":"%s","net":null}\n' "$MU300_SIM_SLOT" "$stamp" "$dev"
         return
     fi
-    case "$rx:$tx:$idx" in *[!0-9:]*) printf '{"error":"Counters unavailable"}\n'; return ;; esac
+    while [ "$offset" -lt 8 ]; do
+        path=/sys/class/net/sipa_eth$((base + offset))
+        offset=$((offset + 1))
+        [ -d "$path" ] || continue
+        if ! { IFS= read -r r < "$path/statistics/rx_bytes" && IFS= read -r t < "$path/statistics/tx_bytes"; }; then
+            printf '{"card":%s,"ts":%s,"device":"%s","net":null}\n' "$MU300_SIM_SLOT" "$stamp" "$dev"
+            return
+        fi
+        case "$r:$t" in *[!0-9:]*|:*|*:) printf '{"error":"Counters unavailable"}\n'; return ;; esac
+        rx=$((rx + r)); tx=$((tx + t))
+    done
+    case "$idx" in *[!0-9]*) printf '{"error":"Counters unavailable"}\n'; return ;; esac
     [ -n "$rx" ] && [ -n "$tx" ] && [ -n "$idx" ] || { printf '{"error":"Counters unavailable"}\n'; return; }
     printf '{"card":%s,"ts":%s,"device":"%s","ifindex":%s,"net":{"rx":%s,"tx":%s}}\n' \
         "$MU300_SIM_SLOT" "$stamp" "$dev" "$idx" "$rx" "$tx"

@@ -60,7 +60,8 @@ set -euo pipefail
 # 26: stock indexed call release; failed hangup remains visible and retryable.
 # 27: stock ECIND SIM events through the existing MM owner; no SIM polling.
 # 28: retry registration-cancelled setup; cycle PDP backoff through 1/3/5/7 s.
-E5REV=28
+# 29: alphanumeric APN identities and all PDP ports in the selected SIM bank.
+E5REV=29
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
@@ -84,10 +85,13 @@ cp "$HERE/tests/voice-hangup.py" "$WORK/voice-hangup.py"
 cp "$HERE/tests/data-priority-hook.py" "$WORK/data-priority-hook.py"
 cp "$HERE/tests/modem-mobility.py" "$WORK/modem-mobility.py"
 cp "$HERE/tests/sms-isolation.py" "$WORK/sms-isolation.py"
+cp "$HERE/tests/modem-data-ports.py" "$WORK/modem-data-ports.py"
 cp "$HERE/files/modemmanager-unisoc-renew" "$WORK/modemmanager-unisoc-renew"
 mkdir -p "$WORK/devices/t551m" "$WORK/openwrt/overlay/usr/libexec"
 cp "$TOP/devices/t551m/network-startup.py" "$WORK/devices/t551m/network-startup.py"
 cp "$HERE/overlay/usr/libexec/e5-mm-report-ports" "$WORK/openwrt/overlay/usr/libexec/e5-mm-report-ports"
+mkdir -p "$WORK/openwrt/overlay/etc/hotplug.d/wwan"
+cp "$HERE/overlay/etc/hotplug.d/wwan/26-e5-sipa-eth" "$WORK/openwrt/overlay/etc/hotplug.d/wwan/26-e5-sipa-eth"
 cp "$HERE/overlay/usr/libexec/e5-network-recovery" "$WORK/openwrt/overlay/usr/libexec/e5-network-recovery"
 mkdir -p "$WORK/openwrt/overlay/etc/init.d"
 cp "$HERE/overlay/etc/init.d/e5-network-recovery" "$WORK/openwrt/overlay/etc/init.d/e5-network-recovery"
@@ -192,6 +196,7 @@ python3 /work/voice-hangup.py "$(dirname "$voice_source")"
 python3 /work/data-priority-hook.py "$(dirname "$voice_source")"
 python3 /work/modem-mobility.py "$(dirname "$voice_source")" /work/modemmanager-unisoc-renew
 python3 /work/sms-isolation.py "$(dirname "$voice_source")"
+python3 /work/modem-data-ports.py "$(dirname "$voice_source")"
 rm -f /out/modemmanager*.apk
 find bin/packages -name "modemmanager*-r$((rel + 900 + E5REV)).apk" -exec cp {} /out/ \;
 ls -la /out/modemmanager*.apk

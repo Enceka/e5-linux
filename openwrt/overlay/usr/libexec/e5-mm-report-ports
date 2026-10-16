@@ -3,8 +3,8 @@
 # No AT commands, radio changes, extra daemon or polling are used here.
 [ -r /sys/module/sipc_wwan/parameters/card ] || exit 0
 case "$(cat /sys/module/sipc_wwan/parameters/card)" in
-    0) interface=sipa_eth0; other=sipa_eth8 ;;
-    1) interface=sipa_eth8; other=sipa_eth0 ;;
+    0) base=0; other=8 ;;
+    1) base=8; other=0 ;;
     *) exit 0 ;;
 esac
 . /usr/share/ModemManager/modemmanager.common
@@ -15,9 +15,22 @@ for port in /sys/class/wwan/wwan*at*; do
     # Do not claim external USB/PCIe WWAN devices or another serial channel.
     case "$physical" in /sys/devices/platform/sipc-virt/*/wwan/*/*) ;; *) continue ;; esac
     mm_report_event add "${port##*/}" wwan "$physical"
-    [ -e "/sys/class/net/$interface" ] || continue
-    if grep -q "^add,$other,net," "$MODEMMANAGER_EVENTS_CACHE" 2>/dev/null; then
-        mm_report_event remove "$other" net "/sys/devices/virtual/net/$other"
-    fi
-    mm_report_event add "$interface" net "/sys/devices/virtual/net/$interface"
+    # Stock getEthIndexBySocketId: cid-1 for SIM1, cid+7 for SIM2.
+    # Withdraw the whole other bank before publishing this card's contexts.
+    index=$other
+    while [ "$index" -lt "$((other + 8))" ]; do
+        interface=sipa_eth$index
+        if grep -q "^add,$interface,net," "$MODEMMANAGER_EVENTS_CACHE" 2>/dev/null; then
+            mm_report_event remove "$interface" net "/sys/devices/virtual/net/$interface"
+        fi
+        index=$((index + 1))
+    done
+    index=$base
+    while [ "$index" -lt "$((base + 8))" ]; do
+        interface=sipa_eth$index
+        if [ -e "/sys/class/net/$interface" ]; then
+            mm_report_event add "$interface" net "/sys/devices/virtual/net/$interface"
+        fi
+        index=$((index + 1))
+    done
 done

@@ -242,6 +242,14 @@ def patch_root(root, profile='t551m'):
         # The helper is installed by the common overlay before these run.
         raise ValueError('Missing shared SIPC port discovery helper')
     discovery.chmod(0o755)
+    # The APK update path must replace the old CID-1-only hotplug handler too.
+    hotplug = Path('etc/hotplug.d/wwan/26-e5-sipa-eth')
+    source = Path(__file__).resolve().parents[2] / 'openwrt/overlay' / hotplug
+    if source.is_file():
+        target = root / hotplug
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes().replace(b'\r\n', b'\n'))
+        target.chmod(0o755)
     patch_wifi_capabilities(root)
     config = root / 'etc/config/unisoc_modem'
     if config.exists() and profile == 't551m':
@@ -364,6 +372,10 @@ def patch_root(root, profile='t551m'):
 \t\t\telse
 \t\t\t\tproto_block_restart "${interface}"
 \t\t\tfi'''
+        # Older staging runs also rewrote the generic else branch below.
+        # Normalize it before validating/updating this shared hook again.
+        text = text.replace(replacement.replace('proto_block_restart "${interface}"',
+                            'modemmanager_unisoc_block_restart "$interface" "$device"'), replacement)
         if original in text:
             text = text.replace(original, replacement)
         elif replacement not in text:
@@ -376,8 +388,10 @@ def patch_root(root, profile='t551m'):
             start = text.index(start_marker)
             end = text.index(end_marker, start)
             body = text[start:end]
+            body = body.replace(replacement, '# unisoc-missing-sim-guard-placeholder')
             body = body.replace('proto_block_restart "${interface}"',
                                 'modemmanager_unisoc_block_restart "$interface" "$device"')
+            body = body.replace('# unisoc-missing-sim-guard-placeholder', replacement)
             text = text[:start] + body + text[end:]
         proto.write_text(text)
 

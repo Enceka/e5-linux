@@ -49,14 +49,30 @@ const bus = ubus.connect(null, 2);
 if (!bus) die('Traffic ubus connection failed\n');
 
 function snapshot(slot) {
-    // The SIPA net IDs belong to SIMs, even when only one carries data.
+    // Count the SIM's whole bank, including a data APN placed at CID 2+.
+    // Keep its historical device key and first port's generation for ledgers.
     let name = slot == 1 ? 'sipa_eth8' : 'sipa_eth0';
-    if (!name) return null;
-    let rx = trim(fs.readfile(NET + '/' + name + '/statistics/rx_bytes') || '');
-    let tx = trim(fs.readfile(NET + '/' + name + '/statistics/tx_bytes') || '');
     let idx = trim(fs.readfile(NET + '/' + name + '/ifindex') || '');
-    if (!match(rx, /^[0-9]+$/) || !match(tx, /^[0-9]+$/) || !match(idx, /^[0-9]+$/)) return null;
-    return { device: name, boot: boot, ifindex: int(idx), rx: int(rx), tx: int(tx) };
+    if (!match(idx, /^[0-9]+$/)) return null;
+    let rx = 0, tx = 0;
+    for (let offset = 0; offset < 8; offset++) {
+        let path = NET + '/sipa_eth' + (slot * 8 + offset);
+        if (!fs.stat(path)) continue;
+        let r = trim(fs.readfile(path + '/statistics/rx_bytes') || '');
+        let t = trim(fs.readfile(path + '/statistics/tx_bytes') || '');
+        if (!match(r, /^[0-9]+$/) || !match(t, /^[0-9]+$/)) return null;
+        rx += int(r); tx += int(t);
+    }
+    let sample = { device: name, boot: boot, ifindex: int(idx), rx, tx };
+    let db = ledger.slots[slot];
+    if (!db.bank_counters) {
+        // Upgrade without charging old non-CID1 counters to today's usage.
+        if (db.last?.boot == boot && db.last?.ifindex == int(idx)) {
+            db.last.rx = rx; db.last.tx = tx;
+        }
+        db.bank_counters = true;
+    }
+    return sample;
 }
 function view(now, slot) {
     let s = core.status(ledger.slots[slot], now);
@@ -108,8 +124,10 @@ const obj = bus.publish(BUS, {
         sample(false);
         let previous = ledger.slots, revision = ledger.revision, now = time();
         let next = [previous[0],previous[1]];
-        for (let id in slot == 'all' ? [0,1] : [int(slot)])
+        for (let id in slot == 'all' ? [0,1] : [int(slot)]) {
             next[id] = core.clear_records(previous[id], snapshot(id), now);
+            next[id].bank_counters = true;
+        }
         ledger.slots = next;
         ledger.revision++;
         if (!atomic(BASE + '/state.json', ledger)) {

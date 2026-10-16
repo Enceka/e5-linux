@@ -88,7 +88,8 @@ def main(action, payload=None, device='unisoc-sipc'):
             if action in ('apply', 'auto'):
                 return dict(ok=0, error='apn_identity')
             who = {}
-        if action in ('apply', 'auto') and not re.fullmatch(r'[0-9]{18,22}', who.get('iccid', '') or ''):
+        iccid = who.get('iccid', '')
+        if action in ('apply', 'auto') and (not isinstance(iccid, str) or not re.fullmatch(r'[A-Za-z0-9]{18,22}', iccid)):
             return dict(ok=0, error='apn_identity')
         if action in ('apply', 'auto') and 'data_sim' in (payload or {}):
             expected = payload['data_sim']

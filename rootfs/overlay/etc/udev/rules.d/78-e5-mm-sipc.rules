@@ -15,9 +15,11 @@ ACTION!="add|change|move|bind", GOTO="e5_mm_sipc_end"
 ENV{ID_MM_UNISOC_SIPC}!="1", GOTO="e5_mm_sipc_end"
 
 SUBSYSTEM=="wwan", ENV{ID_MM_DEVICE_PROCESS}="1"
-SUBSYSTEM=="net", PROGRAM=="/bin/sh -c 'ls -d /sys/class/wwan/wwan*at* >/dev/null 2>&1'", ENV{ID_MM_DEVICE_PROCESS}="1"
+# A retrigger after a SIM change must clear the previous allowlist decision.
+SUBSYSTEM=="net", ENV{ID_MM_DEVICE_PROCESS}="0"
+SUBSYSTEM=="net", PROGRAM=="/bin/sh /usr/local/sbin/e5-mm-sipa-port-allowed %k", ENV{ID_MM_DEVICE_PROCESS}="1"
 
 SUBSYSTEM=="wwan", KERNEL=="wwan*at*", ACTION=="add", \
-    RUN+="/usr/bin/udevadm trigger --action=add --subsystem-match=net --sysname-match=sipa_eth0"
+    RUN+="/usr/bin/udevadm trigger --action=add --subsystem-match=net --sysname-match=sipa_eth*"
 
 LABEL="e5_mm_sipc_end"

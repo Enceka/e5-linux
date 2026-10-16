@@ -30,8 +30,15 @@ class RatesTest(unittest.TestCase):
             a,b=read(0),read(1)
             self.assertEqual((a['ts'],a['net']['rx'],b['net']['rx']),(123.45,1000,1001))
             self.assertEqual((a['card'],b['card'],b['device']),(0,1,'sipa_eth8'))
+            for name, rx, tx in [('sipa_eth1',200,20),('sipa_eth9',300,30)]:
+                base=root/name
+                (base/'statistics').mkdir(parents=True)
+                (base/'statistics/rx_bytes').write_text(str(rx)+'\n')
+                (base/'statistics/tx_bytes').write_text(str(tx)+'\n')
+            self.assertEqual(read(0)['net'],{'rx':1200,'tx':520})
+            self.assertEqual(read(1)['net'],{'rx':1301,'tx':531})
             (root/'sipa_eth0/statistics/rx_bytes').write_text('9000\n')
-            self.assertEqual(read(0)['net']['rx'],9000)
+            self.assertEqual(read(0)['net']['rx'],9200)
             (root/'sipa_eth0/statistics/rx_bytes').write_text('bad\n')
             self.assertIn('error',read(0))
             (root/'sipa_eth8/statistics/tx_bytes').unlink()

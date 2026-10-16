@@ -19,9 +19,11 @@ def sources(version):
              TOP / 'openwrt/tests/sim-power.py', TOP / 'openwrt/tests/sim-events.py', TOP / 'openwrt/tests/voice-urc.py',
              TOP / 'openwrt/tests/voice-recovery.py', TOP / 'openwrt/tests/voice-hangup.py', TOP / 'openwrt/tests/data-priority-hook.py',
              TOP / 'openwrt/tests/modem-mobility.py',
+             TOP / 'openwrt/tests/modem-data-ports.py',
              TOP / 'openwrt/files/modemmanager-unisoc-renew',
              TOP / 'devices/t551m/network-startup.py',
              TOP / 'openwrt/overlay/usr/libexec/e5-mm-report-ports',
+             TOP / 'openwrt/overlay/etc/hotplug.d/wwan/26-e5-sipa-eth',
              TOP / 'openwrt/overlay/usr/libexec/e5-network-recovery',
              TOP / 'openwrt/overlay/etc/init.d/e5-network-recovery',
              Path(__file__).resolve()]

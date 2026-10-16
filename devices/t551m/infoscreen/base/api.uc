@@ -292,10 +292,23 @@ function wan_dev() {
 	return sim_card() ? 'sipa_eth8' : 'sipa_eth0';
 }
 
+function sim_counters(slot) {
+	if (!stat(`/sys/class/net/sipa_eth${slot * 8}`)) return {rx:null,tx:null};
+	let rx = 0, tx = 0;
+	for (let offset = 0; offset < 8; offset++) {
+		let path = `/sys/class/net/sipa_eth${slot * 8 + offset}`;
+		if (!stat(path)) continue;
+		let r = read_num(path + '/statistics/rx_bytes'), t = read_num(path + '/statistics/tx_bytes');
+		if (r == null || t == null) return {rx:null,tx:null};
+		rx += r; tx += t;
+	}
+	return {rx,tx};
+}
+
 function traffic() {
 	let dev = wan_dev();
-	let base = `/sys/class/net/${dev}/statistics/`;
-	let rx = read_num(base + 'rx_bytes'), tx = read_num(base + 'tx_bytes');
+	let counters = sim_counters(sim_card());
+	let rx = counters.rx, tx = counters.tx;
 	let t = now();
 	let prev = state_get('traffic');
 	// (another card's interface: its counters are not the previous poll's)
@@ -755,8 +768,7 @@ function traffic_usage(slot) {
 		slot, since:s.started_at, total:s.period, source:'unisoc.traffic',
 		days:map(reverse(slice(data.days ?? [],0,7)),d=>({date:substr(d.date,5),rx:d.rx,tx:d.tx}))
 	} : {available:false,slot,source:'unisoc.traffic',error:'traffic_unavailable'};
-	let net = `/sys/class/net/${slot == 1 ? 'sipa_eth8' : 'sipa_eth0'}/statistics/`;
-	wan.session = {rx:read_num(net + 'rx_bytes'),tx:read_num(net + 'tx_bytes')};
+	wan.session = sim_counters(slot);
 	return { ...wan, wan, lan: { available:false } };
 }
 

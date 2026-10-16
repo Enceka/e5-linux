@@ -111,7 +111,11 @@ DATA_DEVICE=$(cfg data_device)
 VIEW_DATA=1
 case ${MU300_SIM_SLOT:-} in
     0|1)
-        DATA_DEVICE=sipa_eth0; [ "$MU300_SIM_SLOT" = 0 ] || DATA_DEVICE=sipa_eth8
+        # Preserve netifd's actual CID port if it belongs to the viewed SIM.
+        case "$MU300_SIM_SLOT:$DATA_DEVICE" in
+            0:sipa_eth[0-7]|1:sipa_eth[89]|1:sipa_eth1[0-5]) ;;
+            *) DATA_DEVICE=sipa_eth0; [ "$MU300_SIM_SLOT" = 0 ] || DATA_DEVICE=sipa_eth8 ;;
+        esac
         [ "$MU300_SIM_SLOT" = "$(rd /sys/module/sipc_wwan/parameters/card)" ] || VIEW_DATA=0
         ;;
 esac

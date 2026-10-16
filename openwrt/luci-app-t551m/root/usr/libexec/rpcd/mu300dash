@@ -290,6 +290,9 @@ do_list() {
 	"sysinfo": { },
 	"sim_get": { },
 	"sim_set": { "slot": "String", "current": "String", "confirm": false },
+	"sim_radio_set": { "slot": "String", "enabled": false, "confirm": false },
+	"sim_radio_get": { },
+	"sim_radio_status": { "id": "String" },
 	"sim_status": { "id": "String" },
 	"status": { "slot": "String" },
 	"rates": { "slot": "String" },
@@ -352,6 +355,9 @@ call)
             printf '%s' "$payload" | "$DASH/apn" "$action" ;;
         sim_get)    "$DASH/data-sim" get ;;
         sim_set)    printf '%s' "$INPUT" | "$DASH/data-sim" set ;;
+        sim_radio_set) printf '%s' "$INPUT" | "$DASH/data-sim" radio ;;
+        sim_radio_get) "$DASH/data-sim" radio-get ;;
+        sim_radio_status) "$DASH/data-sim" status "$(inp '@.id')" ;;
         sim_status) "$DASH/data-sim" status "$(inp '@.id')" ;;
         status)     run_m status     'm_status' ;;
         rates)      m_rates ;;

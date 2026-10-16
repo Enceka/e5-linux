@@ -3,6 +3,7 @@
 'require poll';
 'require mu300.common as M';
 'require mu300.data-sim as DataSim';
+'require mu300.sim-radio as SimRadio';
 
 return view.extend({
 	load: function() { return Promise.resolve(); },
@@ -15,9 +16,12 @@ return view.extend({
 			'<div class="mud-data-sim-host"></div></div>';
 		M.localize(root);
 		this._control = DataSim.attach(root.querySelector('.mud-data-sim-host'));
+		var radios=document.createElement('div'); radios.className='mud-card'; root.appendChild(radios);
+		this._radios=SimRadio.attach(radios);
 		var self = this;
 		this._refresh = function() {
 			if (document.hidden) return Promise.resolve();
+			self._radios.refresh();
 			return M.callSimGet().then(function(data) { self._control.update(data); }, function() { self._control.update(null); });
 		};
 		this._refresh();
@@ -27,6 +31,7 @@ return view.extend({
 	unload: function() {
 		poll.remove(this._refresh);
 		if (this._control) this._control.dispose();
+		if (this._radios) this._radios.dispose();
 	},
 	handleSaveApply: null,
 	handleSave: null,

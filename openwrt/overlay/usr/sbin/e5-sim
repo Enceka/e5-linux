@@ -88,6 +88,9 @@ show() {
 }
 
 switch() {
+	/usr/libexec/unisoc-modem/radio-allowed "$1" || {
+		echo 'Enable the target SIM radio before switching' >&2; return 1;
+	}
 	new=$1
 	[ "$new" = "$(card_in_use)" ] && { echo "already on SIM card $new"; exit 0; }
 	if pidof ModemManager >/dev/null; then

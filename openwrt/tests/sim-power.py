@@ -38,6 +38,7 @@ typedef uint64_t guint64; typedef void GVariant;
 #define g_ascii_strtoull strtoull
 #define MM_CORE_ERROR 2
 #define MM_CORE_ERROR_FAILED 1
+#define MM_CORE_ERROR_WRONG_STATE 2
 typedef enum {MM_BASE_MODEM_AT_RESPONSE_PROCESSOR_RESULT_CONTINUE,
  MM_BASE_MODEM_AT_RESPONSE_PROCESSOR_RESULT_SUCCESS,
  MM_BASE_MODEM_AT_RESPONSE_PROCESSOR_RESULT_FAILURE} MMBaseModemAtResponseProcessorResult;
@@ -55,6 +56,15 @@ typedef struct {const char *response;int code;} GAsyncResult;
 #define TRUE 1
 #define FALSE 0
 typedef void *gpointer;
+typedef void (*GDestroyNotify)(void*);
+#define G_OBJECT(t) (t)
+#define g_slice_new0(t) ((t*)calloc(1,sizeof(t)))
+static unsigned radio_mask=3;
+static gboolean sim_radio_enabled(guint card){return !!(radio_mask&(1u<<card));}
+static guint port_card(void){return 0;}
+static void cards_on_context_free(void *ctx){free(ctx);}
+static void g_object_set_data_full(void *task,const char *key,void *data,GDestroyNotify destroy){destroy(data);}
+static void init_radio_policy_ready(void){}
 #define MM_MOBILE_EQUIPMENT_ERROR 1
 #define MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED 10
 #define mm_obj_info(...) ((void)0)
@@ -124,7 +134,9 @@ static void check(int first,int second,unsigned own){
   assert(sscanf(command,"+SPACTCARD=%u;",&card)==1 && card<2);
   if(strstr(command,"SFUN=") || strstr(command,"SPTESTMODEM=") || strstr(command,"SPSWDATA"))
     assert(ctx.present[card]);
-  if(strstr(command,"SFUN="))sfun[card]++;
+  if(strstr(command,"SFUN=") || strstr(command,"CFUN=4"))sfun[card]++;
+  if(strstr(command,"SFUN=4"))assert(sim_radio_enabled(card));
+  if(strstr(command,"CFUN=4"))assert(!sim_radio_enabled(card));
   if(strstr(command,"SPSWDATA")){assert(card==own);data++;}
   if(strstr(command,"SPTESTMODEM="))assert(strstr(command,"=98,134"));
  }
@@ -139,8 +151,8 @@ static void check(int first,int second,unsigned own){
   assert(!strcmp(ctx.cmds[1].command,"+SPACTCARD=1;+SFUN=2"));
   assert(strstr(ctx.cmds[2].command,"+SPACTCARD=1;+SPTESTMODEM="));
   assert(strstr(ctx.cmds[3].command,"+SPACTCARD=0;+SPTESTMODEM="));
-  assert(!strcmp(ctx.cmds[5].command,"+SPACTCARD=0;+SFUN=4"));
-  assert(!strcmp(ctx.cmds[6].command,"+SPACTCARD=1;+SFUN=4"));
+  assert(!strcmp(ctx.cmds[5].command,sim_radio_enabled(0)?"+SPACTCARD=0;+SFUN=4":"+SPACTCARD=0;+CFUN=4"));
+  assert(!strcmp(ctx.cmds[6].command,sim_radio_enabled(1)?"+SPACTCARD=1;+SFUN=4":"+SPACTCARD=1;+CFUN=4"));
  }
  assert(task.returned==1 && task.error==0 && task.unrefs==1);
  for(unsigned j=0;j<i;j++)free(ctx.cmds[j].command);
@@ -188,13 +200,22 @@ static void power_queries(void){
 }
 
 int main(void){
- for(int first=0;first<2;first++)for(int second=0;second<2;second++)for(unsigned own=0;own<2;own++)check(first,second,own);
+ for(radio_mask=0;radio_mask<4;radio_mask++)
+  for(int first=0;first<2;first++)for(int second=0;second<2;second++)for(unsigned own=0;own<2;own++)check(first,second,own);
+ radio_mask=3;
  CardsOnContext ctx={0};ctx.present[0]=ctx.present[1]=1;GTask task={.data=&ctx};MMBaseModem modem=0;
  GAsyncResult absent={NULL,10},busy={NULL,14};
  cards_on_probe_ready(&modem,&absent,&task);assert(!ctx.present[0] && ctx.probe==1);
  cards_on_probe_ready(&modem,&busy,&task);assert(ctx.present[1] && ctx.probe==2);
- assert(sequenced==8 && next==2);
+ assert(sequenced==32 && next==2);
  failed_modes();fail_each_command();power_queries();
+ radio_mask=0;
+ GTask blocked={0};GAsyncResult powered={"+CFUN: 4",0};power_commands=radio_on=0;
+ power_up_cfun_ready(&modem,&powered,&blocked);
+ assert(blocked.error==MM_CORE_ERROR_WRONG_STATE && blocked.unrefs==1 && !power_commands && !radio_on);
+ radio_mask=2;blocked=(GTask){0};
+ power_up_cfun_ready(&modem,&powered,&blocked);
+ assert(blocked.returned && !blocked.error && blocked.unrefs==1 && !power_commands && !radio_on);
  puts("SIM power checks passed: 8 slot/preference plans, absent vs busy, vendor order, mandatory failure at all 8 steps, invalid mode/CFUN rejection, init port cleanup");
 }
 '''

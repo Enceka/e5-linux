@@ -32,6 +32,8 @@ typedef int MMBroadbandModem;
 #define G_SPAWN_STDERR_TO_DEV_NULL 2
 #define mm_obj_warn(...) (warnings++)
 static unsigned slot, spawned, warnings;
+static int radio_allowed=1;
+static gboolean sim_radio_enabled(unsigned card) {assert(card==slot); return radio_allowed;}
 static int spawn_fails, parent_ready=1, parent_calls;
 static unsigned port_card(void) {return slot;}
 static gboolean g_task_propagate_boolean(GAsyncResult *res,GError **error) {return res->ready;}
@@ -71,6 +73,12 @@ int main(void) {
         assert(spawned==before+2);
     }
     assert(parent_calls==8 && warnings==4);
+    radio_allowed=0;
+    unsigned before=spawned;
+    parent_ready=1;
+    assert(initialization_stopped(&modem,&modem,NULL));
+    assert(modem_power_up_finish(&modem,&ok,NULL));
+    assert(spawned==before); /* disabled data RF must not queue priority AT */
     puts("PASS: MM hooks retain parent results, address both SIMs, detach, survive spawn failure, exclude power-down");
 }
 '''

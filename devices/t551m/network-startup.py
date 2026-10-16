@@ -192,6 +192,15 @@ modemmanager_register_retry() {
 
 # Resolve private profile credentials into local netifd variables only. Do not
 # eval JSON, rewrite global UCI during a SIM switch, or log usernames/passwords.
+RADIO_POLICY = '''\t# unisoc-user-radio-policy: wait without retrying an explicitly disabled SIM.
+\tif [ "$device" = unisoc-sipc ] && [ -e /etc/e5/sim-radio ] &&
+\t   ! /usr/libexec/unisoc-modem/radio-allowed "$(cat /sys/module/sipc_wwan/parameters/card)"; then
+\t\tproto_notify_error "$interface" SIM_RADIO_DISABLED
+\t\tproto_set_available "$interface" 0
+\t\treturn 1
+\tfi
+'''
+
 APN_SELECTION = '''\t# unisoc-apn-selection: shared by E5, T551M and M8 on every dial.
 \tif [ "$device" = unisoc-sipc ] && [ -x /usr/libexec/unisoc-modem/apn ]; then
 \t\tlocal apn_selection apn_family apn_auth apn_source
@@ -313,6 +322,22 @@ def patch_root(root, profile='t551m'):
     proto = root / 'lib/netifd/proto/modemmanager.sh'
     if proto.exists():
         text = proto.read_text()
+        if '# unisoc-data-rf-independent:' not in text:
+            old = '\tlocal disable="$(uci_get network "$interface" disable_modem "1")"'
+            new = '''\t# unisoc-data-rf-independent: Android data-off leaves RF for calls/SMS.
+\tlocal disable_default=1
+\t[ "$device" != unisoc-sipc ] || disable_default=0
+\tlocal disable="$(uci_get network "$interface" disable_modem "$disable_default")"'''
+            if text.count(old) != 1:
+                raise ValueError('Unexpected ModemManager data teardown location')
+            text = text.replace(old, new)
+            proto.write_text(text)
+        if '# unisoc-user-radio-policy:' not in text:
+            anchor = '\t# always cleanup before attempting a new connection, just in case\n'
+            if text.count(anchor) != 1:
+                raise ValueError('Unexpected ModemManager RF policy hook location')
+            text = text.replace(anchor, RADIO_POLICY + anchor)
+            proto.write_text(text)
         if '# unisoc-apn-selection:' not in text:
             anchor = '\t# set initial eps bearer settings\n'
             if text.count(anchor) != 1:

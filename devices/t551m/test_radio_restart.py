@@ -16,7 +16,8 @@ class RadioRestartTest(unittest.TestCase):
         self.trace = self.root/'trace'
         card = self.root/'card';card.write_text('0')
         self.env = dict(os.environ, PATH=str(self.root)+':'+os.environ['PATH'],
-                        TRACE=str(self.trace), STATE='connected', MU300_SIM_SLOT='0',
+                        UNISOC_RADIO_ALLOWED=str(SCRIPT.with_name('radio-allowed')),
+                        UNISOC_RADIO_POLICY=str(self.root/'radio-policy'), TRACE=str(self.trace), STATE='connected', MU300_SIM_SLOT='0',
                         UNISOC_CARD_FILE=str(card), MU300_AT=str(self.root/'at'), CFUN='1')
         self.script('mmcli', '''echo "mmcli $*" >> "$TRACE"
 case "$*" in

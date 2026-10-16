@@ -1542,7 +1542,7 @@ global.handle_request = function(env) {
 			let a=query_args(env.QUERY_STRING ?? '');
 			if ((a.slot != '0' && a.slot != '1') || !match(a.id ?? '',/^[0-9a-f]{32}$/))
 				return reply_json(400,{ok:false,error:'Invalid network job'});
-			return reply_json(200,ubus_call('mu300dash','lock_status',a) ?? {ok:false,state:'error',error:'Network service unavailable'});
+			return reply_json(200,ubus_call('mu300dash',a.service=='sim'?'sim_status':'lock_status',a) ?? {ok:false,state:'error',error:'Network service unavailable'});
 		}
 		let sm = match(path, /^\/settings\/([a-z0-9:_-]+)$/);
 		if (sm) {
@@ -1554,7 +1554,7 @@ global.handle_request = function(env) {
 			let b = read_body(env);
 			let err = c.set(b.id, b.value, b.slot);
 			if (type(err) == 'object' && err.job)
-				return reply_json(200,{ok:true,pending:true,job:err.job,slot:err.slot});
+				return reply_json(200,{ok:true,pending:true,job:err.job,slot:err.slot,service:err.service});
 			let item = null;
 			for (let i in settings_items(c))
 				if (i.id == b.id) item = i;

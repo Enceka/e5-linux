@@ -1429,11 +1429,11 @@ async function stPost(v, body) {
 		method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
 	}).then((r) => r.json()).catch(() => null);
 	if (r?.pending && r.job) {
-		const job=r.job, slot=r.slot, until=Date.now()+245000;
+		const job=r.job, slot=r.slot, service=r.service||'lock', until=Date.now()+245000;
 		try {
 			while (Date.now()<until) {
 				await new Promise(resolve=>setTimeout(resolve,800));
-				r=await fetch('/api/network-job?id='+encodeURIComponent(job)+'&slot='+encodeURIComponent(slot),{cache:'no-store'}).then(r=>r.json());
+				r=await fetch('/api/network-job?id='+encodeURIComponent(job)+'&slot='+encodeURIComponent(slot)+'&service='+encodeURIComponent(service),{cache:'no-store'}).then(r=>r.json());
 				if (!['queued','running'].includes(r.state)) break;
 			}
 			if (r.state!=='done') r={ok:false,error:r.error || (lang=='zh'?'操作尚未完成，请刷新实际状态':'Operation incomplete; refresh actual state')};

@@ -55,6 +55,7 @@ const network = {
         // Missing caches stay unknown; never manufacture an unlocked state.
         let state = data.mode != null && !data.error;
         let c = ctx.uci(), cells = data.cells ?? [];
+        let radio_policy = lock_call('sim_radio_get',{});
         let opts = [{value:'off',label:L('解除所有小区锁定','Unlock all cells')},
                     {value:'auto',label:L('锁定当前服务小区','Lock serving cell')}];
         for (let cell in cells) push(opts,{value:cell,label:cell});
@@ -78,6 +79,9 @@ const network = {
              note:L('切换后重新连接网络','Reconnects after switching')},
             {id:'apn',type:'category',category:'apn',label:L('接入点 APN','Access points (APN)'),
              note:L('与网页共用，按当前上网卡保存','Shared with the web; saved for the current data SIM')},
+            ...map([0,1], n=>({id:'sim_radio'+n,type:radio_policy.ok?'toggle':'info',confirm:true,slot:`${n}`,
+                label:L(`SIM ${n+1} 射频`,`SIM ${n+1} radio`),value:radio_policy.ok?radio_policy.enabled[n]:'--',
+                note:L('重启后保留；关闭后该卡无法通话、收短信或上网','Saved across reboots; off disables calls, SMS and data for this SIM')})),
             {id:'lock_state',type:'info',label:L('锁定状态','Lock status'),value:'SIM '+(int(slot)+1),
              note:data.error ?? L('与网页共用设置和开机回放','Shares settings and boot replay with the web dashboard')},
             {id:'lock_refresh',type:'action',label:L('刷新锁定状态','Refresh lock state')},
@@ -115,7 +119,13 @@ const network = {
         if (id == 'sim_card') {
             if (value != '0' && value != '1') return 'unknown card';
             ctx.forget('modem');
-            return ctx.run(`(/usr/sbin/e5-sim ${value}) >/dev/null 2>&1 &`) == 0 ? null : 'Cannot start SIM switch';
+            let r=lock_call('sim_set',{slot:value,current:`${ctx.sim_card()}`,confirm:true});
+            return r.ok ? (r.id?{job:r.id,slot:value,service:'sim'}:null) : r.error ?? 'Cannot start SIM switch';
+        }
+        if (id == 'sim_radio0' || id == 'sim_radio1') {
+            if (type(value)!='bool') return 'Invalid radio state';
+            let target=id=='sim_radio1'?'1':'0',r=lock_call('sim_radio_set',{slot:target,enabled:value,confirm:true});
+            return r.ok && r.id ? {job:r.id,slot:target,service:'sim'} : r.error ?? 'Cannot start radio operation';
         }
         if (id == 'reconnect') {ctx.forget('modem');ctx.run('(ifup wan) >/dev/null 2>&1 &');return null;}
         slot ??= control_slot();

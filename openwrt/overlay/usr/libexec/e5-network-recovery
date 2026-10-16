@@ -11,6 +11,22 @@ import os
 import selectors
 import signal
 import subprocess
+import fcntl
+from pathlib import Path
+
+
+def radio_allowed():
+    try:
+        flags = Path(os.environ.get('UNISOC_RADIO_POLICY', '/etc/e5/sim-radio')).read_text().strip()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    try:
+        slot = Path('/sys/module/sipc_wwan/parameters/card').read_text().strip()
+        return flags in ('0 0', '0 1', '1 0', '1 1') and slot in ('0', '1') and flags[int(slot)*2] == '1'
+    except OSError:
+        return False
 
 def query(args):
     result = subprocess.run(args, capture_output=True, text=True, timeout=10,
@@ -54,8 +70,43 @@ class Recovery:
     def __init__(self):
         self.key = None
         self.attempted = set()
+        self.voice_enable_attempt = None
+
+    def enable_other_sim_services(self):
+        # MM represents both SIMs' messaging/voice with one logical object.
+        # With the data SIM disabled, netifd deliberately never enables it.
+        # Enable only that logical object for the other allowed SIM: the
+        # Unisoc power hook leaves the disabled data RF untouched.
+        try:
+            flags = Path(os.environ.get('UNISOC_RADIO_POLICY', '/etc/e5/sim-radio')).read_text().strip()
+            own = Path('/sys/module/sipc_wwan/parameters/card').read_text().strip()
+            if flags not in ('0 0','0 1','1 0','1 1') or own not in ('0','1'):
+                return
+            if flags[int(own)*2] != '0' or flags[(1-int(own))*2] != '1':
+                return
+            modem = query(['mmcli','-m','unisoc-sipc','-J'])['modem']
+            if modem.get('generic',{}).get('state') != 'disabled':
+                self.voice_enable_attempt = None
+                return
+            key = (modem.get('dbus-path'),flags,own)
+            if key == self.voice_enable_attempt:
+                return
+            run = Path('/run/unisoc-data-sim')
+            run.mkdir(parents=True,exist_ok=True)
+            with (run/'switch.lock').open('a') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                self.voice_enable_attempt = key
+                subprocess.run(['mmcli','-m','unisoc-sipc','--timeout=60','--enable'],
+                               capture_output=True,timeout=65,check=True)
+        except (OSError,ValueError,KeyError,subprocess.SubprocessError):
+            return
 
     def evaluate(self):
+        if not radio_allowed():
+            self.enable_other_sim_services()
+            self.key = None
+            self.attempted.clear()
+            return
         modem = query(['mmcli', '-m', 'unisoc-sipc', '-J'])['modem']
         key = radio_key(modem)
         if key != self.key:

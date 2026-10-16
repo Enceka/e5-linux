@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-t551m
 PKG_VERSION:=1.1.0
-PKG_RELEASE:=5
+PKG_RELEASE:=6
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=MU300 Linux contributors
 PKGARCH:=all
@@ -31,6 +31,7 @@ define Package/luci-app-t551m/conffiles
 /etc/e5-cpu-voltage-armed.json
 /etc/unisoc-modem/forward/
 /etc/e5-sounds/
+/etc/e5/sim-radio
 endef
 
 define Build/Compile

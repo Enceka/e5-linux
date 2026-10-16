@@ -5,6 +5,7 @@ import copy
 import runpy
 import subprocess
 import unittest
+import tempfile
 from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[1] / 'overlay/usr/libexec/e5-network-recovery'
@@ -118,6 +119,47 @@ class Tests(unittest.TestCase):
         self.modem['generic']['state'] = 'registered'
         self.recovery.evaluate()
         self.assertEqual(len(self.resumes()), 1)
+
+    def test_disabled_data_sim_keeps_other_sim_services_without_data_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'policy').write_text('0 1\n')
+            (root/'card').write_text('0\n')
+            def mapped_path(name):
+                return {'/etc/e5/sim-radio': root/'policy',
+                        '/sys/module/sipc_wwan/parameters/card': root/'card',
+                        '/run/unisoc-data-sim': root/'run'}.get(str(name), Path(name))
+            self.modem['generic']['state'] = 'disabled'
+            with patch.dict(GLOBALS, Path=mapped_path):
+                for _ in range(4):
+                    self.recovery.evaluate()
+                enables = [c for c in self.commands if '--enable' in c]
+                self.assertEqual(len(enables), 1)
+                self.assertFalse(self.resumes())
+                (root/'policy').write_text('0 0\n')
+                self.recovery = Recovery()
+                self.recovery.evaluate()
+                self.assertEqual(len([c for c in self.commands if '--enable' in c]), 1)
+
+    def test_sim_switch_lock_prevents_competing_logical_enable(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'policy').write_text('0 1\n')
+            (root/'card').write_text('0\n')
+            (root/'run').mkdir()
+            def mapped_path(name):
+                return {'/etc/e5/sim-radio': root/'policy',
+                        '/sys/module/sipc_wwan/parameters/card': root/'card',
+                        '/run/unisoc-data-sim': root/'run'}.get(str(name), Path(name))
+            self.modem['generic']['state'] = 'disabled'
+            with (root/'run/switch.lock').open('a') as lock, patch.dict(GLOBALS, Path=mapped_path):
+                fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
+                self.recovery.evaluate()
+                self.assertFalse(self.commands)
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                self.recovery.evaluate()
+                self.assertEqual(len([c for c in self.commands if '--enable' in c]), 1)
 
 
 if __name__ == '__main__':

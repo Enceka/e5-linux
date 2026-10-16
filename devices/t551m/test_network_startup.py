@@ -21,6 +21,17 @@ LOADER = (HERE.parents[1] / 'openwrt/overlay/etc/init.d/e5-sipc-wwan').read_text
 
 
 class Startup(unittest.TestCase):
+    def test_data_disconnect_keeps_unisoc_rf_unless_explicitly_overridden(self):
+        text=(self.root/'lib/netifd/proto/modemmanager.sh').read_text()
+        start=text.index('\t# unisoc-data-rf-independent:')
+        end=text.index('\n\t# low power, only if requested',start)
+        block=text[start:end]
+        for device in ('unisoc-sipc','usb-modem'):
+            for explicit in ('','0','1'):
+                shell='uci_get(){ if [ -n "$EXPLICIT" ]; then echo "$EXPLICIT"; else echo "$4"; fi; }\nmmcli(){ echo MM_DISABLE; }\nrun(){\n'+block+'\n}\nrun\n'
+                result=subprocess.run(['sh','-c',shell],env=dict(os.environ,device=device,interface='wan',EXPLICIT=explicit),capture_output=True,text=True)
+                expected=explicit=='1' or (not explicit and device!='unisoc-sipc')
+                self.assertEqual('MM_DISABLE' in result.stdout,expected,(device,explicit,result.stderr))
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='t551m-network-test-')
         self.root = Path(self.tmp.name)

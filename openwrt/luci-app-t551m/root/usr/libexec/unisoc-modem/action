@@ -1,6 +1,6 @@
 #!/bin/sh
 # mu300-dash-act -- the dashboard's actions, one op per invocation:
-#   mu300-dash-act radio on|off     radio (airplane) via AT+CFUN / the SFUN dance
+#   mu300-dash-act radio on|off     persistent, per-SIM RF control
 #   mu300-dash-act data up|down     netifd wan interface up/down (no AT in-band)
 #   mu300-dash-act wifi on|off      uci wireless disabled flag + wifi up/down
 #   mu300-dash-act modem-reset      the SFUN 5/3/2/4 sequence mobile-data uses for sim-reset
@@ -12,10 +12,7 @@
 # kills a call after 30 s, and AT-heavy sequences must never run inside a request
 # anyway (they would starve the dial watchdog; same rule as the collector).
 #
-# The radio sequences are the ones measured working in this repo (mobile-data):
-# the radio comes up with AT+SFUN=4 and answers +CFUN: 1; if the stack is wedged,
-# AT+SFUN=2 then AT+SFUN=4 brings it back. AT+CFUN=0 is the plain radio-off state
-# this modem boots into, so it is safe to use for "airplane on".
+# All user RF controls share the SIM-management backend and saved policy.
 
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/libexec/unisoc-modem:/usr/sbin:/sbin"
 
@@ -26,20 +23,6 @@ DATA_IFACE=${DATA_IFACE:-wan}
 ok()   { printf '{"ok":1,"op":"%s"}\n' "$1"; }
 fail() { printf '{"ok":0,"op":"%s","error":%s}\n' "$1" "$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n' | sed 's/.*/"&"/')"; }
 
-radio_on() {
-    if [ -n "${MU300_SIM_SLOT:-}" ] && [ "$MU300_SIM_SLOT" != "$(cat /sys/module/sipc_wwan/parameters/card)" ]; then
-        "$AT" -t 15 'AT+CFUN=1' | grep -q '^OK'; return $?
-    fi
-    mmcli -m any --timeout=30 --enable >/dev/null 2>&1 || return 1
-    ifup "$DATA_IFACE"
-}
-radio_off() {
-    if [ -n "${MU300_SIM_SLOT:-}" ] && [ "$MU300_SIM_SLOT" != "$(cat /sys/module/sipc_wwan/parameters/card)" ]; then
-        "$AT" -t 15 'AT+CFUN=4' | grep -q '^OK'; return $?
-    fi
-    ifdown "$DATA_IFACE" 2>/dev/null
-    mmcli -m any --timeout=30 --disable >/dev/null 2>&1
-}
 
 case "${1:-}" in
     data)
@@ -48,13 +31,14 @@ case "${1:-}" in
         fi ;;
 esac
 case "${1:-}:${2:-}" in
-    radio:on)
-        radio_on && ok "radio on" || fail "radio on" "radio did not come up"
-        ;;
-    radio:off)
-        radio_off && ok "radio off" || fail "radio off" "ModemManager disable failed"
+    radio:on|radio:off)
+        slot=${MU300_SIM_SLOT:-$(cat /sys/module/sipc_wwan/parameters/card)}
+        case "$slot" in 0|1) ;; *) fail radio 'Invalid SIM slot'; exit 1;; esac
+        enabled=false; [ "$2" != on ] || enabled=true
+        printf '{"slot":"%s","enabled":%s,"confirm":true}\n' "$slot" "$enabled" | "$DASH/data-sim" radio
         ;;
     data:up)
+        "$DASH/radio-allowed" "$(cat /sys/module/sipc_wwan/parameters/card)" || { fail data 'This SIM radio is disabled by the user'; exit 1; }
         ifup "$DATA_IFACE" 2>/dev/null
         ok "data up"
         ;;

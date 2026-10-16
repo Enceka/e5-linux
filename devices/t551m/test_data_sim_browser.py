@@ -23,6 +23,7 @@ with sync_playwright() as p:
         window.state={ok:true,data_sim:0,saved_sim:0,data_up:true};window.calls=[];window.jobState='running';
         window.target='1';window.immediate=false;window.scopedCalls=[];
         window.rpc={declare:spec=>(...args)=>{
+            if(spec.method==='sim_radio_get')return Promise.resolve({ok:true,enabled:[true,true]});
             if(spec.method==='sim_get')return Promise.resolve(state);
             if(spec.method==='sim_set'){
                 calls.push(args);target=args[0];
@@ -37,7 +38,8 @@ with sync_playwright() as p:
     }''')
     page.evaluate('(source)=>{window.M=new Function("rpc","baseclass",source)(rpc,baseclass);}', (BASE/'mu300/common.js').read_text(encoding='utf-8'))
     page.evaluate('(source)=>{window.DataSim=new Function("baseclass","M",source)(baseclass,M);}', (BASE/'mu300/data-sim.js').read_text(encoding='utf-8'))
-    page.evaluate('(source)=>{window.pageView=new Function("view","poll","M","DataSim",source)(view,poll,M,DataSim);document.body.appendChild(pageView.render());}', (BASE/'view/mu300/sim.js').read_text(encoding='utf-8'))
+    page.evaluate('(source)=>{window.SimRadio=new Function("baseclass","rpc","M",source)(baseclass,rpc,M);}', (BASE/'mu300/sim-radio.js').read_text(encoding='utf-8'))
+    page.evaluate('(source)=>{window.pageView=new Function("view","poll","M","DataSim","SimRadio",source)(view,poll,M,DataSim,SimRadio);document.body.appendChild(pageView.render());}', (BASE/'view/mu300/sim.js').read_text(encoding='utf-8'))
     select = page.locator('#mud-data-sim-select')
     button = page.locator('.mud-data-sim-controls button')
     assert button.is_disabled()
@@ -89,7 +91,7 @@ with sync_playwright() as p:
     for language,title,error in [('en','SIM management','A data SIM switch is already running'),('tr','SIM yönetimi','İnternet SIM kartı zaten değiştiriliyor; lütfen bekleyin')]:
         page.evaluate('language=>{pageView.unload();L.env.lang=language;document.documentElement.lang=language;document.body.replaceChildren(pageView.render());M.callSimSet=async()=>({ok:false,error:"A data SIM switch is already running"});}',language)
         page.wait_for_function("document.querySelector('[data-current]').textContent.includes('SIM 2')")
-        assert page.locator('h3').inner_text()==title
+        assert page.locator('h3').first.inner_text()==title
         select.select_option('0');button.click();page.locator('.mud-dlg button').last.click()
         page.wait_for_function('error=>document.querySelector("[data-result]").textContent.includes(error)',arg=error)
         assert not page.evaluate(r'/[\u3400-\u9fff]/.test(document.body.innerText)'),language

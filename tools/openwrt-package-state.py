@@ -20,6 +20,8 @@ def sources(version):
              TOP / 'openwrt/tests/voice-recovery.py', TOP / 'openwrt/tests/voice-hangup.py', TOP / 'openwrt/tests/data-priority-hook.py',
              TOP / 'openwrt/tests/modem-mobility.py',
              TOP / 'openwrt/tests/modem-data-ports.py',
+             TOP / 'openwrt/tests/modem-data-port-rules.py',
+             TOP / 'openwrt/tests/sim-radio-parser.py',
              TOP / 'openwrt/files/modemmanager-unisoc-renew',
              TOP / 'devices/t551m/network-startup.py',
              TOP / 'openwrt/overlay/usr/libexec/e5-mm-report-ports',

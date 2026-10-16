@@ -13,6 +13,98 @@ import uuid
 RUN = Path(os.environ.get('E5_DATA_SIM_RUN', '/run/unisoc-data-sim'))
 CARD = Path(os.environ.get('E5_DATA_SIM_CARD', '/sys/module/sipc_wwan/parameters/card'))
 SWITCH = os.environ.get('E5_DATA_SIM_TOOL', '/usr/sbin/e5-sim')
+RADIO = Path(os.environ.get('UNISOC_RADIO_POLICY', '/etc/e5/sim-radio'))
+
+
+def radio_policy():
+    try:
+        text = RADIO.read_text()
+    except FileNotFoundError:
+        return [True, True]
+    if not re.fullmatch(r'[01] [01]\n?', text):
+        raise ValueError('Invalid saved SIM radio policy')
+    return [text[0] == '1', text[2] == '1']
+
+
+def radio_apply(slot, enabled):
+    # Share the SMS/SIM transaction lock. SPACTCARD is sticky on the owner;
+    # always restore it, including modem errors and timeouts.
+    lock_path = Path(os.environ.get('E5_SMS_LOCK', '/tmp/run/e5-sms/modem.lock'))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    network_lock = Path(os.environ.get('E5_RADIO_MODEM_LOCK', '/tmp/unisoc-modem/lock-apply.lock'))
+    network_lock.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open('a') as lock, network_lock.open('a') as operation:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(operation, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if Path('/run/unisoc-modem-lock-apply').exists():
+            raise ValueError('Another modem operation is running')
+        flags = radio_policy()
+        flags[int(slot)] = enabled
+        RADIO.parent.mkdir(parents=True, exist_ok=True)
+        tmp = RADIO.with_suffix('.new')
+        with tmp.open('w') as file:
+            file.write(' '.join('1' if v else '0' for v in flags) + '\n')
+            file.flush()
+            os.fsync(file.fileno())
+        tmp.replace(RADIO)
+        directory = os.open(RADIO.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        own = current()
+        at = os.environ.get('E5_RADIO_AT', '/opt/e5/e5-at')
+
+        def command(value):
+            result = subprocess.run([at, '-t', '30', value], capture_output=True,
+                                    text=True, timeout=35)
+            lines = result.stdout.splitlines()
+            if result.returncode or not lines or lines[-1].strip() != 'OK':
+                raise RuntimeError('Radio setting saved; modem command failed: ' +
+                                   (result.stderr or result.stdout)[-180:].strip())
+
+        def availability(available):
+            # Unlike ifdown/ifup, availability preserves the user's data
+            # autostart choice. Re-enabling RF must not undo manual data-off.
+            subprocess.run(['ubus', '-t', '3', 'call', 'network.interface.wan',
+                            'notify_proto', json.dumps({'action': 5, 'available': available})],
+                           capture_output=True, timeout=5, check=True)
+
+        if slot == own and not enabled:
+            availability(False)
+            # netifd teardown is asynchronous. Finish it before changing RF,
+            # so a delayed MM disable cannot override the next explicit on.
+            deadline = time.monotonic() + 15
+            while True:
+                state = json.loads(subprocess.check_output(
+                    ['ubus', '-t', '3', 'call', 'network.interface.wan', 'status'],
+                    text=True, timeout=5))
+                if not state.get('up') and not state.get('pending'):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('Radio setting saved; data teardown is still pending')
+                time.sleep(.2)
+        try:
+            command(f'AT+SPACTCARD={slot};+CFUN={1 if enabled else 4}')
+            result = subprocess.run([at, '-t', '5', f'AT+SPACTCARD={slot};+CFUN?'],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode or not re.search(r'\+CFUN:\s*' + ('1' if enabled else '4') + r'\s*(?:\r?\n|$)', result.stdout):
+                raise RuntimeError('Radio setting saved; RF readback not confirmed')
+        finally:
+            command(f'AT+SPACTCARD={own};+CFUN?')
+        if enabled or not any(flags):
+            # One logical MM modem carries both SIMs' voice/SMS. Disabling
+            # that object for just the data SIM would also disable control of
+            # the other active card. Only disable it when BOTH RFs are off.
+            # The Unisoc power hook never raises a user-disabled data radio
+            # when enabling the logical object for the other card.
+            result = subprocess.run(['mmcli', '-m', 'unisoc-sipc', '--timeout=60',
+                                     '--enable' if any(flags) else '--disable'],
+                                    capture_output=True, text=True, timeout=65)
+            if result.returncode:
+                raise RuntimeError('Radio setting saved; modem command failed: ' + result.stderr[-180:].strip())
+        if slot == own and enabled:
+            availability(True)
 
 
 def current():
@@ -42,7 +134,8 @@ def get():
         up = bool(wan.get('up'))
     except (OSError, ValueError, subprocess.SubprocessError):
         up = False
-    return dict(ok=True, data_sim=card, saved_sim=int(boot) if boot in ('0', '1') else None, data_up=up)
+    return dict(ok=True, data_sim=card, saved_sim=int(boot) if boot in ('0', '1') else None,
+                data_up=up, radio_enabled=radio_policy())
 
 
 def write(job):
@@ -75,6 +168,11 @@ def worker(job_id):
     try:
         if current() != job['previous']:
             raise ValueError('Data SIM changed; refresh before switching')
+        if job.get('kind') == 'radio':
+            radio_apply(job['target'], job['enabled'])
+            job.update(ok=True, state='done')
+            write(job)
+            return
         # e5-sim serializes with SMS transactions, persists the selection,
         # restarts the existing modem interface and applies its automatic APN.
         result = subprocess.run([SWITCH, job['target']], stdout=subprocess.DEVNULL,
@@ -89,10 +187,14 @@ def worker(job_id):
     write(job)
 
 
-def start(args):
+def start(args, radio=False):
     if not isinstance(args, dict):
         raise ValueError('Invalid SIM switch request')
     target, previous = args.get('slot'), args.get('current')
+    if radio:
+        previous = current()
+        if type(args.get('enabled')) is not bool:
+            raise ValueError('Select a valid radio state')
     if target not in ('0', '1') or previous not in ('0', '1'):
         raise ValueError('Select a valid SIM slot')
     if args.get('confirm') is not True:
@@ -106,7 +208,9 @@ def start(args):
         actual = current()
         if previous != actual:
             raise ValueError('Data SIM changed; refresh before switching')
-        if target == actual:
+        if not radio and not radio_policy()[int(target)]:
+            raise ValueError('Enable the target SIM radio before switching')
+        if not radio and target == actual:
             return dict(ok=True, state='done', target=target, unchanged=True)
         # Bounded retention; only completed/stale jobs can exist while we own
         # the lock. No settings, SMS or radio calibration are stored here.
@@ -115,6 +219,8 @@ def start(args):
                 path.unlink()
         job = dict(ok=True, state='running', id=uuid.uuid4().hex, target=target,
                    previous=previous, started=time.monotonic())
+        if radio:
+            job.update(kind='radio', enabled=args['enabled'])
         write(job)
         try:
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'worker', job['id']],
@@ -136,8 +242,12 @@ def main():
     try:
         if sys.argv[1:] == ['get']:
             result = get()
+        elif sys.argv[1:] == ['radio-get']:
+            result = dict(ok=True, enabled=radio_policy())
         elif sys.argv[1:] == ['set']:
             result = start(json.load(sys.stdin))
+        elif sys.argv[1:] == ['radio']:
+            result = start(json.load(sys.stdin), radio=True)
         elif len(sys.argv) == 3 and sys.argv[1] == 'status':
             result = status(sys.argv[2])
         else:

@@ -6,7 +6,7 @@
         "mu300dash": [
           "sysinfo", "status", "rates", "signal", "cells", "at_history", "sim_get", "sim_status",
           "lock_get", "lock_status", "sms_list", "sms_show", "forward_get",
-          "forward_status", "traffic_get", "usb_get", "usb_net_list", "apn_get"
+          "forward_status", "traffic_get", "usb_get", "usb_net_list", "apn_get", "sim_radio_get", "sim_radio_status"
         ],
         "e5-charge": ["get"],
         "e5-sms": [

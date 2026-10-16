@@ -61,7 +61,13 @@ set -euo pipefail
 # 27: stock ECIND SIM events through the existing MM owner; no SIM polling.
 # 28: retry registration-cancelled setup; cycle PDP backoff through 1/3/5/7 s.
 # 29: alphanumeric APN identities and all PDP ports in the selected SIM bank.
-E5REV=29
+# 30: persistent per-slot RF permission, respected by cold/warm power-up.
+# 31: exact SIPA rules compatible with MM's restricted non-udev matcher.
+# 32: netifd availability wait for an explicitly disabled data SIM.
+# 33: data teardown preserves RF by default; explicit disable_modem wins.
+# 34: keep the logical modem enabled for the other SIM's voice/SMS when the
+# data radio is off, without powering that disabled data radio back on.
+E5REV=34
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
@@ -86,6 +92,8 @@ cp "$HERE/tests/data-priority-hook.py" "$WORK/data-priority-hook.py"
 cp "$HERE/tests/modem-mobility.py" "$WORK/modem-mobility.py"
 cp "$HERE/tests/sms-isolation.py" "$WORK/sms-isolation.py"
 cp "$HERE/tests/modem-data-ports.py" "$WORK/modem-data-ports.py"
+cp "$HERE/tests/modem-data-port-rules.py" "$WORK/modem-data-port-rules.py"
+cp "$HERE/tests/sim-radio-parser.py" "$WORK/sim-radio-parser.py"
 cp "$HERE/files/modemmanager-unisoc-renew" "$WORK/modemmanager-unisoc-renew"
 mkdir -p "$WORK/devices/t551m" "$WORK/openwrt/overlay/usr/libexec"
 cp "$TOP/devices/t551m/network-startup.py" "$WORK/devices/t551m/network-startup.py"
@@ -197,6 +205,8 @@ python3 /work/data-priority-hook.py "$(dirname "$voice_source")"
 python3 /work/modem-mobility.py "$(dirname "$voice_source")" /work/modemmanager-unisoc-renew
 python3 /work/sms-isolation.py "$(dirname "$voice_source")"
 python3 /work/modem-data-ports.py "$(dirname "$voice_source")"
+python3 /work/modem-data-port-rules.py "$(dirname "$voice_source")"
+python3 /work/sim-radio-parser.py "$(dirname "$voice_source")/plugins/unisoc/mm-broadband-modem-unisoc.c"
 rm -f /out/modemmanager*.apk
 find bin/packages -name "modemmanager*-r$((rel + 900 + E5REV)).apk" -exec cp {} /out/ \;
 ls -la /out/modemmanager*.apk

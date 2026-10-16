@@ -5,6 +5,10 @@ settings=0
 case "${1:-}" in --settings) settings=1;; '') ;; *) exit 2;; esac
 at=${MU300_AT:-/usr/libexec/unisoc-modem/at}
 selected=${MU300_SIM_SLOT:-}
+own=$(cat "${UNISOC_CARD_FILE:-/sys/module/sipc_wwan/parameters/card}")
+"${UNISOC_RADIO_ALLOWED:-/usr/libexec/unisoc-modem/radio-allowed}" "${selected:-$own}" || {
+    echo 'RECONNECT-DEFERRED radio-disabled-by-user'; exit 0;
+}
 if [ -n "$selected" ]; then
     case "$selected" in 0|1) ;; *) exit 2 ;; esac
     own=$(cat "${UNISOC_CARD_FILE:-/sys/module/sipc_wwan/parameters/card}")

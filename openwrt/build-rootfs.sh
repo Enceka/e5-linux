@@ -110,6 +110,8 @@ mkdir -p "$WORK" "$OUT"
 python3 "$TOP/tools/openwrt-package-state.py" check "$VER"
 BLOCK_APK="$OUT/block-mount-guarded.apk"
 E5_WRT_VER="$VER" sh "$HERE/build-block-mount.sh" "$BLOCK_APK"
+WIFI_APKS="$TOP/work/wifi-sae"
+UNISOC_WRT_VER="$VER" sh "$HERE/build-hostapd.sh" "$WIFI_APKS"
 
 # the Argon theme: not in OpenWrt's feeds; its release's packages (arch all)
 ARGON_URL=https://github.com/jerrykuku/luci-theme-argon/releases/download/v2.4.7
@@ -292,6 +294,7 @@ docker run --rm --platform linux/arm64 \
     -v "$WORK/e5-sim-probe":/in/e5-sim-probe:ro \
     -v "$BLOCK_APK":/in/block-mount-guarded.apk:ro \
     -v "$BLOCK_APK.build-id":/in/block-mount.build-id:ro \
+    -v "$WIFI_APKS":/in/wifi-sae:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" -v "$TP":/in/transplant:ro \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" -e E5_BUILD_EPOCH="${E5_BUILD_EPOCH:-}" -e CONTAINERS="$CONTAINERS" \
@@ -314,6 +317,7 @@ apk add --allow-untrusted /in/apk/bluez-libs-*.apk /in/apk/bluez-daemon-*.apk /i
 # (dbus-utils: dbus-monitor, for e5-sms-notify)
 # (alsa-utils: aplay and amixer for the speaker, e5-audio-dsp and e5-volume)
 # (curl: the webhook of the SMS forward, /usr/libexec/e5-sms)
+apk add --allow-untrusted /in/wifi-sae/*.apk >/dev/null
 apk add $(sed -e "s/#.*//" -e "/^[[:space:]]*$/d" /in/packages.list) >/dev/null
 # SMS email encoding and DingTalk signatures need the OpenSSL command itself.
 command -v openssl >/dev/null
@@ -382,6 +386,8 @@ done
 mkdir -p $R/proc $R/sys $R/dev $R/tmp $R/mnt/e5-disk $R/opt/e5/android $R/opt/e5/bin $R/etc/e5linux
 mkdir -p $R/etc/e5
 cp /in/block-mount.build-id $R/etc/e5/block-mount.build-id
+cp /in/wifi-sae/build-id $R/etc/e5/wifi-sae.build-id
+cp /in/wifi-sae/source-info $R/etc/e5/wifi-sae.source-info
 for f in sbin/block lib/libblkid-tiny.so etc/init.d/fstab; do
     [ -s "$R/$f" ] || { echo "guarded block-mount payload missing: $f" >&2; exit 1; }
 done
@@ -408,7 +414,7 @@ if [ -n "$screen" ] && [ -f /in/infoscreen-plugins/plugins/phone/manifest.json ]
     cp -a /in/infoscreen-plugins/plugins/phone $R/etc/e5-infoscreen/plugins/
     chown -R 0:0 $R/etc/e5-infoscreen/plugins/phone
 fi
-for f in vendor-start.sh e5-modem-coldboot android-run node-perms.sh regdb-load.sh gadget-guard.sh usb-watch.sh e5-next-boot e5-os e5-sd-registry e5-at e5-data-priority e5-audio-dsp e5-call-audio.py; do
+for f in vendor-start.sh android-import-perms.sh e5-modem-coldboot android-run node-perms.sh regdb-load.sh gadget-guard.sh usb-watch.sh e5-next-boot e5-os e5-sd-registry e5-at e5-data-priority e5-audio-dsp e5-call-audio.py; do
     cp /in/opt-e5/$f $R/opt/e5/$f; chmod 755 $R/opt/e5/$f
 done
 cp /in/logdw $R/opt/e5/bin/logdw && chmod 755 $R/opt/e5/bin/logdw
@@ -453,10 +459,11 @@ rm -f $R/etc/rc.d/*pulseaudio
 # (the cage package'"'"'s own kiosk service: cog on http://localhost/, which is LuCI,
 # shown at every boot before the info screen'"'"'s session takes the panel)
 rm -f $R/etc/rc.d/*cage
-for s in e5-hw e5-vendor e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio e5-voice-audio e5-hfp e5-bt bluetoothd dbus modemmanager e5-usb-watch $screen; do
+for s in e5-hw e5-vendor e5-modemd e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-luci e5-audio e5-voice-audio e5-hfp e5-bt bluetoothd dbus modemmanager e5-usb-watch $screen; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done
+ln -sf ../init.d/e5-modemd $R/etc/rc.d/K09e5-modemd
 # no kernel of its own
 rm -rf $R/lib/modules/* $R/boot
 arel=$(cat /in/sa/audio/release)
@@ -483,6 +490,9 @@ if [ "$E5_FEATURES" = 1 ]; then
     python3 /in/feature-source/device/openwrt_device_e5/stage.py --root $R
 elif [ -n "$screen" ]; then
     python3 /in/feature-source/device/openwrt_device_common/shared/ui.py --root $R --profile e5
+fi
+if [ -f $R/usr/libexec/unisoc-modem/disable-channel-analysis ]; then
+    ucode $R/usr/libexec/unisoc-modem/disable-channel-analysis $R
 fi
 cd $R && tar -czf /out/$NAME .
 ls -la /out/$NAME

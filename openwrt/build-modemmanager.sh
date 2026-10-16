@@ -48,8 +48,15 @@ set -euo pipefail
 # 12: confirm transient empty call lists and adopt existing outgoing CP calls.
 # 13: serialize hangup, settle before redial and ignore pre-hangup CLCC snapshots.
 # 14: detached, owner-aware CEUS/CEMODE confirmation with bounded retries.
-# 15: apply PAP/CHAP credentials through the shared Unisoc AT owner.
-E5REV=15
+# 15: PAP/CHAP credentials through the shared Unisoc AT owner.
+# 15: mobility-safe CGEV/SPPCODATA events and in-place bearer address renewal.
+# 16: include shared APN, pre-dial replay and recovery glue in APK upgrades too.
+# 17: replace the complete netifd snapshot so old addresses/DNS do not survive.
+# 18: standalone mask conversion and retry a rejected address update safely.
+# 20: isolate ambiguous dual-SIM CMTI indices and restore scoped SMS AT context.
+# 21: keep compound SMS prompt transactions out of context restoration.
+# 22: fail on invalid power/mode readback and failed activation prerequisites.
+E5REV=22
 VER=${E5_WRT_VER:-25.12.5}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
@@ -70,6 +77,14 @@ cp "$TESTS/sim-power.py" "$WORK/sim-power.py"
 cp "$TESTS/voice-urc.py" "$WORK/voice-urc.py"
 cp "$TESTS/voice-recovery.py" "$WORK/voice-recovery.py"
 cp "$TESTS/data-priority-hook.py" "$WORK/data-priority-hook.py"
+cp "$TESTS/modem-mobility.py" "$WORK/modem-mobility.py"
+cp "$TESTS/sms-isolation.py" "$WORK/sms-isolation.py"
+COMMON="$TOP/device/openwrt_device_common"
+cp "$COMMON/files/modemmanager-unisoc-renew" "$WORK/modemmanager-unisoc-renew"
+mkdir -p "$WORK/device/openwrt_device_common/shared" "$WORK/device/openwrt_device_common/overlay/usr/libexec"
+cp "$COMMON/shared/network-startup.py" "$WORK/device/openwrt_device_common/shared/network-startup.py"
+cp "$COMMON/shared/network-startup-defaults" "$WORK/device/openwrt_device_common/shared/network-startup-defaults"
+cp "$COMMON/overlay/usr/libexec/e5-mm-report-ports" "$WORK/device/openwrt_device_common/overlay/usr/libexec/e5-mm-report-ports"
 n=900
 for p in "$TOP"/device/debian_device_common/patches/modemmanager-[0-9][0-9]-*.patch; do
     cp "$p" "$WORK/patches/src/$n-e5-$(basename "$p" | sed 's/^modemmanager-//')"
@@ -85,12 +100,18 @@ Z=; [ "$DOCKER" = podman ] && Z=,z
 $DOCKER run --rm --platform $PLAT -v e5-openwrt-src:/build \
     -v "$WORK":/work:ro$Z -v "$OUT":/out${Z:+:z} -e VER="$VER" -e E5REV="$E5REV" \
     -e JOBS="${E5_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}" \
-    debian:trixie bash -euc '
+    "${E5_MODEM_BUILD_IMAGE:-debian:trixie}" bash -euc '
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends build-essential ca-certificates clang file flex bison \
+# Reuse a compatible prepared image when supplied, and bound mirror stalls.
+# HTTPS is used only when trusted CA certificates are already available.
+if [ -s /etc/ssl/certs/ca-certificates.crt ]; then
+    sed -i "s@http://deb.debian.org/@https://deb.debian.org/@g" /etc/apt/sources.list.d/debian.sources
+fi
+apt_opts="-o Acquire::http::Pipeline-Depth=0 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3"
+apt-get $apt_opts update -qq
+apt-get $apt_opts install -y -qq --no-install-recommends build-essential ca-certificates clang file flex bison \
     gawk gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync swig unzip wget \
-    xz-utils zlib1g-dev zstd libglib2.0-dev >/dev/null
+    xz-utils zlib1g-dev zstd libglib2.0-dev pkg-config >/dev/null
 # the buildroot refuses to run as root unless told otherwise; it lives in the
 # volume, which is case-sensitive (a macOS bind mount is not)
 export FORCE_UNSAFE_CONFIGURE=1
@@ -112,7 +133,12 @@ P=feeds/packages/net/modemmanager
 # the package directory back to the feed state, then the E5 changes on top
 git -C feeds/packages checkout -q -- net/modemmanager
 git -C feeds/packages clean -qfd -- net/modemmanager
+install -Dm755 /work/modemmanager-unisoc-renew "$P/files/usr/sbin/modemmanager-unisoc-renew"
 for p in /work/patches/pkg/*.patch; do patch -p1 -d $P < "$p"; done
+# Match the rootfs stager: upgrading this APK must retain APN selection,
+# boot replay, port discovery, initial EPS preservation and PDP retries.
+# Package files have no board config, so only the shared glue is affected.
+python3 /work/device/openwrt_device_common/shared/network-startup.py --root "$P/files" --profile e5
 cp /work/patches/src/*.patch $P/patches/
 rel=$(sed -n "s/^PKG_RELEASE:=//p" $P/Makefile)
 sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$((rel + 900 + E5REV))/" $P/Makefile
@@ -156,6 +182,8 @@ python3 /work/sim-power.py "$(dirname "$voice_source")"
 python3 /work/voice-urc.py "$(dirname "$voice_source")"
 python3 /work/voice-recovery.py "$(dirname "$voice_source")"
 python3 /work/data-priority-hook.py "$(dirname "$voice_source")"
+python3 /work/modem-mobility.py "$(dirname "$voice_source")" /work/modemmanager-unisoc-renew
+python3 /work/sms-isolation.py "$(dirname "$voice_source")"
 rm -f /out/modemmanager*.apk
 find bin/packages -name "modemmanager*-r$((rel + 900 + E5REV)).apk" -exec cp {} /out/ \;
 ls -la /out/modemmanager*.apk

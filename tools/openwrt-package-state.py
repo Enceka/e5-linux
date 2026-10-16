@@ -18,10 +18,15 @@ def sources(version):
     files = [TOP / 'openwrt/build-modemmanager.sh', TOP / 'device/openwrt_device_common/tests/voice-identity.py',
              TOP / 'device/openwrt_device_common/tests/sim-power.py', TOP / 'device/openwrt_device_common/tests/voice-urc.py',
              TOP / 'device/openwrt_device_common/tests/voice-recovery.py', TOP / 'device/openwrt_device_common/tests/data-priority-hook.py',
+             TOP / 'device/openwrt_device_common/tests/modem-mobility.py',
+             TOP / 'device/openwrt_device_common/files/modemmanager-unisoc-renew',
+             TOP / 'device/openwrt_device_common/shared/network-startup.py',
+             TOP / 'device/openwrt_device_common/shared/network-startup-defaults',
+             TOP / 'device/openwrt_device_common/overlay/usr/libexec/e5-mm-report-ports',
              Path(__file__).resolve()]
     files += sorted((TOP / 'device/debian_device_common/patches').glob('modemmanager-[0-9][0-9]-*.patch'))
     files += sorted((TOP / 'openwrt/patches').glob('modemmanager-package-*.patch'))
-    return {'openwrt': version, 'files': {str(p.relative_to(TOP)): checksum(p) for p in files}}
+    return {'openwrt': version, 'files': {p.relative_to(TOP).as_posix(): checksum(p) for p in files}}
 
 
 def inspect(version):

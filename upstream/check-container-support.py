@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import runpy
 import tarfile
 
 BUILTIN = '''VIRTUALIZATION KVM IKCONFIG IKCONFIG_PROC CGROUPS MEMCG BLK_CGROUP
@@ -25,6 +26,38 @@ MODULES = {
     'IP_VS_SH': 'ip_vs_sh', 'VXLAN': 'vxlan', 'IPVLAN': 'ipvlan',
     'MACVTAP': 'macvtap', 'DUMMY': 'dummy', 'BINFMT_MISC': 'binfmt_misc', 'FUSE_FS': 'fuse',
 }
+
+# PR #228: optional features must ship their dependency modules too.
+MODULES.update({
+    'VIRTIO_PCI': 'virtio_pci',
+    'VIRTIO_NET': 'virtio_net',
+    'VIRTIO_BLK': 'virtio_blk',
+    'VIRTIO_CONSOLE': 'virtio_console',
+    'HW_RANDOM_VIRTIO': 'virtio_rng',
+    'VIRTIO_BALLOON': 'virtio_balloon',
+    'VIRTIO_INPUT': 'virtio_input',
+    'VIRTIO_FS': 'virtiofs',
+    'VIRTIO_VSOCKETS': 'vmw_vsock_virtio_transport',
+    'NET_9P': '9pnet',
+    'NET_9P_VIRTIO': '9pnet_virtio',
+    '9P_FS': '9p',
+    'VHOST_SCSI': 'vhost_scsi',
+    'USBIP_CORE': 'usbip_core',
+    'USBIP_HOST': 'usbip_host',
+    'USBIP_VHCI_HCD': 'vhci_hcd',
+    'USB_VIDEO_CLASS': 'uvcvideo',
+    'USB_NET_AX8817X': 'asix',
+    'NFS_FS': 'nfs',
+    'NFSD': 'nfsd',
+    'CIFS': 'cifs',
+    'XFS_FS': 'xfs',
+    'DM_CACHE': 'dm_cache',
+    'DM_WRITECACHE': 'dm_writecache',
+    'DM_MULTIPATH': 'dm_multipath',
+    'DM_INTEGRITY': 'dm_integrity',
+    'DM_MIRROR': 'dm_mirror',
+    'MD_RAID456': 'raid456',
+})
 
 
 def digest(path):
@@ -44,6 +77,7 @@ def config_check(path):
     for key in MODULES:
         if config.get('CONFIG_' + key) not in ('y', 'm'):
             raise ValueError('Built kernel missing CONFIG_' + key)
+    runpy.run_path(str(Path(__file__).with_name('audit-bundle.py')))['expanded_check'](config, Path(__file__).with_name('e5-mainline.config'))
     return config
 
 
@@ -53,6 +87,12 @@ def check(out, record=False):
     version = re.search(rb'Linux version ([^\s\x00]+)', (out / 'Image').read_bytes())
     if not version or version[1].decode('ascii') != release:
         raise ValueError('Image and kernel.release disagree')
+    if record:
+        # Canonical modules_install archive, before flat staging/aliases.
+        with tarfile.open(out / 'modules.tar') as archive:
+            inventory = sorted(Path(m.name).name for m in archive if m.isfile() and m.name.endswith('.ko'))
+        (out / 'modules.in-tree').write_text('\n'.join(inventory) + '\n')
+    runpy.run_path(str(Path(__file__).with_name('audit-bundle.py')))['audit'](out, 'config')
     files = list((out / 'modules').glob('*.ko'))
     normalized = {p.name.replace('-', '_'): p for p in files}
     if not files or len(normalized) != len(files):
@@ -65,7 +105,7 @@ def check(out, record=False):
         if config['CONFIG_' + key] == 'm' and name + '.ko' not in normalized:
             raise ValueError('Configured module not packaged: ' + name)
     names = ['Image', 'Image.lk', 'config', 'kernel.release', 'modules.builtin',
-             'modules.builtin.modinfo', 'modules.tar'] + sorted('modules/' + p.name for p in files)
+             'modules.builtin.modinfo', 'modules.tar', 'modules.in-tree'] + sorted('modules/' + p.name for p in files)
     hashes = {name: digest(out / name) for name in names}
     if not all((out / name).stat().st_size for name in names):
         raise ValueError('Empty build artifact')

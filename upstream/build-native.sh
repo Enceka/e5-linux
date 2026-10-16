@@ -25,6 +25,14 @@ export CCACHE_DIR="$TOP/work/ccache"
 echo "== cross gcc $("$X"gcc -dumpversion) ($X)"
 
 cd "$K"
+python3 "$TOP/device/linux_device_common/kernel/display.py" .
+python3 "$TOP/device/linux_device_common/kernel/emmc.py" .
+python3 "$TOP/device/linux_device_common/kernel/eic.py" .
+python3 "$TOP/device/linux_device_common/kernel/thermal.py" .
+python3 "$TOP/device/linux_device_common/kernel/sipa.py" .
+python3 "$TOP/device/linux_device_common/kernel/wifi-tx.py" .
+python3 "$TOP/device/linux_device_common/kernel/fuel-gauge.py" .
+python3 "$TOP/device/linux_device_common/kernel/wifi-sae.py" .
 KV=$(make -s kernelversion)
 O="${E5_OUTDIR:-$TOP/work/build/$KV}"
 mkdir -p "$O"
@@ -41,6 +49,10 @@ if [ -n "${E5_RELEASE:-}" ]; then
 fi
 make O="$O" ARCH=arm64 CROSS_COMPILE="$X" allnoconfig >/dev/null
 ./scripts/kconfig/merge_config.sh -m -O "$O" "$O/.config" "$CFG" >/dev/null
+# PR #228: NFSv4.1 is a separate prerequisite only on kernels exposing it.
+if grep -q '^config NFS_V4_1$' fs/nfs/Kconfig; then
+    scripts/config --file "$O/.config" --enable NFS_V4_1
+fi
 make O="$O" ARCH=arm64 CROSS_COMPILE="$X" olddefconfig >/dev/null
 # options Kconfig did not take: known ones are listed in config-ignored.txt, any other stops the build
 # (mu300-linux: a silently dropped option has cost a working feature before)

@@ -1,0 +1,91 @@
+e5-linux: keep Unisoc static bearer addresses current during mobility.
+
+The CP may keep a PDP context active while changing its IPv4 address. Start a
+netifd-owned event monitor for SIPC data interfaces; it consumes notifications
+from the Unisoc plugin and atomically refreshes address, route and DNS without
+cycling the bearer. A low-rate consistency check covers lost notifications.
+
+diff -ruN a/Makefile b/Makefile
+--- a/Makefile	2026-10-12 19:49:59.000628219 +0800
++++ b/Makefile	2026-10-13 15:27:56.441438296 +0800
+@@ -117,6 +117,7 @@
+ 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/ModemManager $(1)/usr/sbin
+ 	$(INSTALL_BIN) ./files/usr/sbin/ModemManager-wrapper $(1)/usr/sbin
+ 	$(INSTALL_BIN) ./files/usr/sbin/ModemManager-monitor $(1)/usr/sbin
++	$(INSTALL_BIN) ./files/usr/sbin/modemmanager-unisoc-renew $(1)/usr/sbin
+ 
+ 	$(INSTALL_DIR) $(1)/usr/bin
+ 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/mmcli $(1)/usr/bin
+diff -ruN a/files/lib/netifd/proto/modemmanager.sh b/files/lib/netifd/proto/modemmanager.sh
+--- a/files/lib/netifd/proto/modemmanager.sh	2026-10-12 19:49:58.972311408 +0800
++++ b/files/lib/netifd/proto/modemmanager.sh	2026-10-13 15:27:56.441438296 +0800
+@@ -272,6 +272,7 @@
+ proto_modemmanager_init_config() {
+ 	available=1
+ 	no_device=1
++	renew_handler=1
+ 	proto_config_add_string device
+ 	proto_config_add_string apn
+ 	proto_config_add_string 'allowedauth:list(string)'
+@@ -592,1 +593,2 @@
+ 	local address prefix gateway mtu dns1 dns2
++	local bearercid ipv4_address ipv4_prefix ipv4_gateway ipv4_dns1 ipv4_dns2
+@@ -795,6 +797,7 @@
+ 	beareriface=$(modemmanager_get_field "${bearerstatus}" "bearer.status.interface")
+ 	bearermethod_ipv4=$(modemmanager_get_field "${bearerstatus}" "bearer.ipv4-config.method")
+ 	bearermethod_ipv6=$(modemmanager_get_field "${bearerstatus}" "bearer.ipv6-config.method")
++	bearercid=$(modemmanager_get_field "${bearerstatus}" "bearer.status.profile-id")
+ 
+ 	# setup IPv4
+ 	[ -n "${bearermethod_ipv4}" ] && {
+@@ -811,6 +814,11 @@
+ 			dns1=$(modemmanager_get_field "${bearerstatus}" "bearer.ipv4-config.dns.value\[1\]")
+ 			dns2=$(modemmanager_get_field "${bearerstatus}" "bearer.ipv4-config.dns.value\[2\]")
+ 			modemmanager_connected_method_static_ipv4 "${interface}" "${beareriface}" "${address}" "${prefix}" "${gateway}" "${mtu}" "${dns1}" "${dns2}" "${metric}"
++			ipv4_address=$address
++			ipv4_prefix=$prefix
++			ipv4_gateway=$gateway
++			ipv4_dns1=$dns1
++			ipv4_dns2=$dns2
+ 			;;
+ 		"ppp")
+ 			modemmanager_connected_method_ppp_ipv4 "${interface}" "${beareriface}" "${username}" "${password}" "${allowedauth}"
+@@ -850,6 +858,16 @@
+ 		esac
+ 	}
+ 
++	# Unisoc SIPC uses a static IPv4 address which the network may replace
++	# during handover. Keep a netifd-owned monitor for the protocol lifetime.
++	case "$beareriface:$bearermethod_ipv4:$bearercid" in
++		sipa_eth*:static:*[0-9])
++			proto_run_command "$interface" /usr/sbin/modemmanager-unisoc-renew \
++				"$interface" "$device" "$bearerpath" "$beareriface" "$bearercid" \
++				"$ipv4_address" "$ipv4_prefix" "$ipv4_gateway" "$ipv4_dns1" "$ipv4_dns2" "$metric"
++			;;
++	esac
++
+ 	return 0
+ }
+ 
+@@ -862,6 +880,8 @@
+ 	local device lowpower iptype
+ 	json_get_vars device lowpower iptype
+ 
++	proto_kill_command "$interface"
++
+ 	echo "stopping network"
+ 
+ 	# load connected bearer information, just the first one should be ok
+@@ -903,6 +923,12 @@
+ 		mmcli --modem="${device}" --set-power-state-low
+ }
+ 
++proto_modemmanager_renew() {
++	local sigusr1
++	sigusr1=$(kill -l SIGUSR1 2>/dev/null)
++	[ -n "$sigusr1" ] && proto_kill_command "$1" "$sigusr1"
++}
++
+ [ -n "$INCLUDE_ONLY" ] || {
+ 	add_protocol modemmanager
+ }

@@ -1,0 +1,15 @@
+#!/bin/sh /etc/rc.common
+# Temporary service: copy this and field-capture.py to /tmp, then start.
+# No boot enablement, no respawn, no dependence on the SSH session.
+USE_PROCD=1
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /usr/bin/python3 /tmp/e5-field-capture.py \
+		--seconds "${FIELD_CAPTURE_SECONDS:-14400}" \
+		--directory "${FIELD_CAPTURE_DIRECTORY:-/tmp/e5-field-capture}"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param term_timeout 20
+	procd_close_instance
+}

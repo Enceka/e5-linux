@@ -2,6 +2,7 @@
 'require view';
 'require uci';
 'require mu300.common as M';
+'require mu300.sim-radio as SimRadio';
 
 /* MU300 状态看板 -- LuCI 落地页（menu.d 挂在 admin/home）。
  *
@@ -274,8 +275,15 @@ return view.extend({
 			M.busy(btn, true);
 			M.toast(note || ('正在执行 ' + op + ' …'), { type: 'busy' });
 			return L.resolveDefault(M.callAct(op, arg)).then(function(r) {
+                if(op==='radio' && r && r.ok && r.id)
+                    return SimRadio.wait(r,function(){return !self._pollStopped && root.isConnected;}).then(function(done) {
+                        return done && Object.assign({},done,{op:'radio '+arg});
+                    },function(error){return {ok:0,error:error.message};});
+                return r;
+            }).then(function(r) {
 				r = r || {};
 				M.busy(btn, false);
+				if (self._pollStopped || !root.isConnected) return;
 				M.toast(r.ok ? ((r.started ? '已后台执行：' : '已执行：') + (r.op || op)) : ('失败：' + (r.error || '未知错误')),
 					{ type: r.ok ? 'success' : 'error' });
 			}, function() { M.busy(btn, false); M.toast('调用失败', { type: 'error' }); });
@@ -299,7 +307,7 @@ return view.extend({
 		q('btn-radio').onclick = function() {
 			var on = self.lastCell && self.lastCell.cfun === 1;
 			return confirmAction(this, on ? '关闭蜂窝射频' : '打开蜂窝射频',
-				on ? '蜂窝连接会中断。' : '将执行 SFUN 上电序列（最多约 1 分钟）。',
+				on ? '关闭后该卡无法通话、收发短信或上网，设置会在重启后保留。' : '将开启所选卡的射频，设置会在重启后保留。',
 				{ danger: !!on }, 'radio', on ? 'off' : 'on');
 		};
 		q('btn-wifi').onclick = function() {

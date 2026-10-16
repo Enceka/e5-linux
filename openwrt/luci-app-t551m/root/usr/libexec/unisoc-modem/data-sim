@@ -182,6 +182,8 @@ def worker(job_id):
         if current() != job['target'] or saved() != job['target']:
             raise RuntimeError('Data SIM did not match the saved selection; refresh actual state')
         job.update(ok=True, state='done')
+    except BlockingIOError:
+        job.update(ok=False, state='error', error='modem_busy')
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         job.update(ok=False, state='error', error=str(error))
     write(job)

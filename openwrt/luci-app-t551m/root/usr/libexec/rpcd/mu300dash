@@ -179,10 +179,13 @@ m_act() {
     local op arg
     op=$(inp '@.op')
     arg=$(inp '@.arg')
+    if [ "$op" = modem-reset ] &&
+       ! "$DASH/radio-allowed" "${MU300_SIM_SLOT:-$(cat /sys/module/sipc_wwan/parameters/card)}"; then
+        printf '{"ok":0,"error":"This SIM radio is disabled by the user"}\n'; return
+    fi
     case "$op" in
-        radio)      # the SFUN dance can run half a minute: never inside the request
-            setsid "$DASH/action" radio "$arg" >/dev/null 2>&1 &
-            printf '{"ok":1,"started":1,"op":"radio %s"}\n' "$arg"
+        radio)      # Submission is fast; return the actual shared RF job.
+            case "$arg" in on|off) "$DASH/action" radio "$arg" ;; *) printf '{"ok":0,"error":"Invalid radio request"}\n';; esac
             ;;
         modem-reset|reboot|vpn)
             setsid "$DASH/action" "$op" "$arg" >/dev/null 2>&1 &

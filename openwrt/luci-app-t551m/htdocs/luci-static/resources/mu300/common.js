@@ -1425,6 +1425,14 @@ var DASH_I18N = {
 };
 DASH_I18N['铃声与通知'] = ['Ringtones & notifications', 'Zil sesleri ve bildirimler'];
 Object.assign(DASH_I18N, {
+  "关闭后该卡无法通话、收发短信或上网，设置会在重启后保留。": [
+    "This SIM will have no calls, SMS or data. The setting persists after reboot.",
+    "Bu SIM arama, SMS veya veri kullanamaz. Ayar yeniden başlatınca korunur."
+  ],
+  "将开启所选卡的射频，设置会在重启后保留。": [
+    "Enable the selected SIM radio and keep this setting after reboot.",
+    "Seçili SIM radyosunu aç ve ayarı yeniden başlatınca koru."
+  ],
   "SIM 射频": [
     "SIM radios",
     "SIM radyoları"

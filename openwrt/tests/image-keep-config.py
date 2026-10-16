@@ -20,6 +20,7 @@ with tempfile.TemporaryDirectory() as directory:
         for name, text in {
             'etc/config/network': 'user network', 'etc/shadow': 'user password',
             'etc/e5/contacts.json': 'user contacts', 'etc/e5/image-version': 'old',
+            'etc/e5/sim-radio': '0 1\n',
             'etc/e5-infoscreen/plugins/other/user.json': 'other app data',
             phone + 'phone.js': 'old phone', phone + 'manifest.json': 'old manifest',
         }.items():
@@ -34,6 +35,7 @@ with tempfile.TemporaryDirectory() as directory:
                         'test', str(old), str(new)], check=True)
         assert (new / (phone + 'phone.js')).read_text() == ('new phone' if bundled else 'old phone')
         assert (new / 'etc/e5/contacts.json').read_text() == 'user contacts'
+        assert (new / 'etc/e5/sim-radio').read_text() == '0 1\n'
         assert (new / 'etc/config/network').read_text() == 'user network'
         assert (new / 'etc/shadow').read_text() == 'user password'
         assert (new / 'etc/e5-infoscreen/plugins/other/user.json').read_text() == 'other app data'

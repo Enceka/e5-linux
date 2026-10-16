@@ -17,6 +17,7 @@ return view.extend({
 		M.localize(root);
 		this._control = DataSim.attach(root.querySelector('.mud-data-sim-host'));
 		var radios=document.createElement('div'); radios.className='mud-card'; root.appendChild(radios);
+		radios.style.marginTop='16px';
 		this._radios=SimRadio.attach(radios);
 		var self = this;
 		this._refresh = function() {

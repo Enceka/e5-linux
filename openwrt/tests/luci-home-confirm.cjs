@@ -4,24 +4,25 @@ const fs = require('node:fs');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname,
   '../luci-app-t551m/htdocs/luci-static/resources/view/mu300/home.js'), 'utf8');
-const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
+const deferred = () => { let resolve, reject; const promise = new Promise((r,j) => { resolve = r; reject = j; }); return {promise, resolve, reject}; };
 function fixture(on = false) {
-  const buttons = {}, confirmations = [], requests = [];
+  const buttons = {}, confirmations = [], requests = [], jobs = [], toasts = [];
   const root = {isConnected: true, querySelector(id) {
     return buttons[id] ||= {disabled: false, addEventListener() {}};
   }};
   const M = {
     confirmBox(...args) { const d = deferred(); confirmations.push({args, ...d}); return d.promise; },
     callAct(...args) { const d = deferred(); requests.push({args, ...d}); return d.promise; },
-    busy() {}, toast() {},
+    busy(btn,on) { btn.busy=on; }, toast(message,options) { toasts.push({message,options}); },
   };
-  const view = new Function('view', 'M', 'L', source)({extend: x => x}, M,
-    {resolveDefault: p => p.catch(() => undefined)});
+  const view = new Function('view', 'M', 'L', 'SimRadio', source)({extend: x => x}, M,
+    {resolveDefault: p => p.catch(() => undefined)},
+    {wait(job) { const d=deferred();jobs.push(d);return d.promise; }});
   view.refreshLock = () => {};
   view.wire(root);
   view.lastInfo = {wan: {up: on}, wifi: {up: on}};
   view.lastCell = {cfun: on ? 1 : 0};
-  return {view, root, confirmations, requests,
+  return {view, root, confirmations, requests, jobs, buttons, toasts,
     click: name => buttons['#mud-btn-' + name].onclick()};
 }
 async function flush() { await Promise.resolve(); await Promise.resolve(); }
@@ -52,6 +53,23 @@ async function flush() { await Promise.resolve(); await Promise.resolve(); }
     if (leave === 'unload') f.view.unload(); else f.root.isConnected = false;
     f.confirmations[0].resolve(true); await done;
     assert.equal(f.requests.length, 0, 'leaving the page cancels control');
+  }
+  for (const outcome of ['done','error','unload']) {
+    const f=fixture(true),done=f.click('radio');
+    f.confirmations[0].resolve(true);await flush();
+    f.requests[0].resolve({ok:true,id:'radio-job'});await flush();
+    assert.equal(f.jobs.length,1);
+    assert(f.view._quickPending && f.buttons['#mud-btn-radio'].busy);
+    const before=f.toasts.length;
+    if(outcome==='error')f.jobs[0].reject(new Error('modem_busy'));
+    else {
+      if(outcome==='unload')f.view.unload();
+      f.jobs[0].resolve(outcome==='unload'?null:{ok:true,state:'done'});
+    }
+    await done;
+    assert(!f.view._quickPending && !f.buttons['#mud-btn-radio'].busy);
+    if(outcome==='unload')assert.equal(f.toasts.length,before);
+    else assert.equal(f.toasts.at(-1).options.type,outcome==='done'?'success':'error');
   }
   const f = fixture(); f.root.querySelector('#mud-btn-data').disabled = true;
   f.click('data'); assert.equal(f.confirmations.length, 0);

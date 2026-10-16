@@ -26,6 +26,8 @@ case "$*" in
     *--enable) [ "${ENABLE_FAIL:-0}" = 0 ] || exit 1;;
 esac''')
         self.script('uci', 'echo wan')
+        self.script('ubus', 'echo "{\"autostart\":${AUTOSTART:-true}}"')
+        self.script('jsonfilter', 'cat >/dev/null; echo "${AUTOSTART:-true}"')
         for command in ('ifup', 'ifdown'):
             self.script(command, f'echo "{command} $*" >> "$TRACE"')
         self.script('at', '''echo "at $*" >> "$TRACE"
@@ -109,6 +111,21 @@ echo OK''')
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertNotIn(' -K',trace)
         self.assertIn('--disable',trace)
+
+    def test_settings_reconnect_keeps_manual_data_off(self):
+        self.env['AUTOSTART']='false'
+        result, trace = self.run_helper('--settings')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('--disable',trace)
+        self.assertIn('--enable',trace)
+        self.assertNotIn('ifup',trace)
+
+    def test_unreadable_autostart_never_disconnects_or_enables(self):
+        self.env['AUTOSTART']='unknown'
+        result, trace = self.run_helper('--settings')
+        self.assertNotEqual(result.returncode,0)
+        self.assertNotIn('ifdown',trace)
+        self.assertNotIn('--disable',trace)
 
 
 if __name__ == '__main__':

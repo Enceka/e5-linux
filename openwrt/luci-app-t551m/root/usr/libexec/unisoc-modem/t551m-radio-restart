@@ -39,9 +39,14 @@ if [ "$settings" = 1 ]; then
     esac
 fi
 iface=$(uci -q get unisoc_modem.main.data_interface) || iface=wan
-# Restore the netifd interface even if MM rejects a transition (e.g. SIM removal).
-# Otherwise a failed disable leaves WAN administratively down indefinitely.
-trap 'ifup "$iface"' EXIT
+# Preserve the user's data-off choice when applying network settings. Restore
+# an automatic WAN even on MM failure, but never turn manual ifdown into ifup.
+autostart=$(ubus -t 3 call "network.interface.$iface" status | jsonfilter -e '@.autostart')
+case "$autostart" in
+    true) trap 'ifup "$iface"' EXIT ;;
+    false) ;;
+    *) echo 'Cannot read data autostart before reconnect' >&2; exit 1;;
+esac
 ifdown "$iface"
 mmcli -m any --timeout=30 --disable
 mmcli -m any --timeout=30 --enable

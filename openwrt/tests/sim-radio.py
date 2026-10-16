@@ -23,6 +23,7 @@ class RadioTests(unittest.TestCase):
         self.card = self.root / 'card'
         self.card.write_text('0')
         self.env = dict(UNISOC_RADIO_POLICY=str(self.policy), E5_DATA_SIM_CARD=str(self.card),
+                        E5_DATA_SIM_RUN=str(self.root/'jobs'),
                         E5_SMS_LOCK=str(self.root / 'sms.lock'),
                         E5_RADIO_MODEM_LOCK=str(self.root / 'modem.lock'))
         with patch.dict(os.environ, self.env):
@@ -114,6 +115,25 @@ class RadioTests(unittest.TestCase):
                      {'slot':'0','enabled':'false','confirm':True},
                      {'slot':'0','enabled':False,'confirm':False}):
             with self.assertRaises(ValueError): self.scope['start'](args,radio=True)
+
+    def test_data_sim_cannot_switch_to_disabled_target(self):
+        self.policy.write_text('1 0\n')
+        with self.assertRaisesRegex(ValueError,'Enable the target SIM radio'):
+            self.scope['start']({'slot':'1','current':'0','confirm':True})
+        self.assertEqual(self.commands,[])
+
+    def test_worker_reports_busy_without_changing_policy_or_rf(self):
+        self.scope['RUN'].mkdir()
+        job={'id':'a'*32,'state':'running','kind':'radio','previous':'0','target':'1','enabled':False}
+        self.scope['write'](job)
+        with (self.root/'sms.lock').open('a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            self.scope['worker'](job['id'])
+        result=self.scope['status'](job['id'])
+        self.assertEqual(result['error'],'modem_busy')
+        self.assertEqual(result['state'],'error')
+        self.assertFalse(self.policy.exists())
+        self.assertEqual(self.commands,[])
 
     def test_failed_atomic_save_never_issues_rf_command(self):
         self.policy.write_text('1 1\n')

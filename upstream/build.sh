@@ -28,7 +28,9 @@ fi
 cd /src/linux
 python3 /policy/display.py .
 python3 /policy/power.py .
+python3 /policy/charger-capabilities.py .
 python3 /policy/emmc.py .
+python3 /policy/sd-power.py .
 python3 /policy/eic.py .
 python3 /policy/thermal.py .
 python3 /policy/sipa.py .

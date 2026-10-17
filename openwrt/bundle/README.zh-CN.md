@@ -35,7 +35,7 @@ Magisk 内刷入完整固件会清空所选 TF 目标（第一分区，无分区
 
 ## 需要
 
-* 与安装包对应的设备，**bootloader 已解锁**，Android 已用 **Magisk** 获取 root；
+* 与安装包对应的设备，**bootloader 已解锁**，Android 已用 **Magisk、KernelSU 或 KSUNext** 获取 root；安装器使用随包携带的静态 ARM64 BusyBox，不依赖管理器的工具路径；
 * Android 在 slot a 运行（出厂状态就是）；
 * 卡槽里插一张 **4 GB 以上的 SD 卡**（建议 8 GB）：所选目标会清空并用满，不修改分区表；
   或者运行 `launchers/install-to-internal-storage.cmd` / `bash launchers/install-to-internal-storage.sh`，无需插卡；
@@ -49,7 +49,7 @@ Magisk 内刷入完整固件会清空所选 TF 目标（第一分区，无分区
 ## 刷入
 
 1. 在设备上打开 USB 调试，用数据线连上电脑，在手机上允许调试；
-2. 在 Magisk 里给 **Shell** 超级用户权限（第一次运行时手机会弹窗，选允许）；
+2. 在 root 管理器里给 **Shell** 超级用户权限（第一次运行时手机会弹窗，选允许）；
 3. 解压刷机包，在目录里运行：
 
    * **Windows**：双击 `launchers/start-installer.cmd`（或在命令提示符里运行 `launchers/start-installer.cmd`）；

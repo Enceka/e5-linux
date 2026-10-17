@@ -343,7 +343,7 @@ def finish(g, a, path, state):
             g['push'](str(settings), g['TMP']+'/e5-install.conf', 'settings')
             g['push'](str(files/'part-write.sh'), g['TMP']+'/e5-part-write.sh', 'partition installer')
             state['phase'] = 'writing'; save(path, state)
-            command = ('ASH_STANDALONE=1 /data/adb/magisk/busybox sh /data/local/tmp/e5-part-write.sh '
+            command = g['android_shell']('/data/local/tmp/e5-part-write.sh',
                        f'{target} {state["need"]} {state["raw_size"]} {int(state["grow"])} {state["token"]}')
             with g['busy']('写入、扩容并校验独立分区 / installing and verifying root partition'):
                 g['su_checked']('安装独立分区 / install independent root', command, timeout=1800,

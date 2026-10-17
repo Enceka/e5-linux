@@ -28,6 +28,7 @@ class LocksTest(unittest.TestCase):
         self.band = {0:[0,482,0,149,0],3:[549,0,272,0]}
         self.sent, self.fail, self.ignore = [], None, None
         self.restarts = 0
+        self.restart_args = []
         self.reset_bands_on_restart = False
         self.reset_mode_on_restart = False
         self.omit_final = None
@@ -64,9 +65,10 @@ class LocksTest(unittest.TestCase):
     def run_command(self, argv, **kwargs):
         if argv[0] == locks.RESTART:
             self.restarts += 1
+            self.restart_args.append(argv[1:])
             if self.reset_mode_on_restart: self.tm[0] = 134
             if self.reset_bands_on_restart: self.band = {0:[0,0,0,1,0],3:[0,0,16,0]}
-            self.assertEqual(argv, [locks.RESTART, '--settings'])
+            self.assertIn(argv[1:], [['--settings'], ['--bands']])
             return subprocess.CompletedProcess(argv, *self.restart_result)
         cmd = argv[-1];self.sent.append(cmd)
         if cmd == self.fail: return subprocess.CompletedProcess(argv,1,'','AT channel quarantined')
@@ -109,6 +111,7 @@ class LocksTest(unittest.TestCase):
     def test_screen_default_bands_share_persistence_and_restart_once(self):
         locks.apply('bands_default','')
         self.assertEqual(self.restarts,1)
+        self.assertEqual(self.restart_args,[['--bands']])
         self.assertEqual((locks.STATE/'lte').read_text(),','.join(map(str,locks.LTE)))
         self.assertEqual((locks.STATE/'nr').read_text(),'')
         self.assertEqual(locks.snapshot()['nr']['locked'],'')
@@ -375,6 +378,7 @@ class LocksTest(unittest.TestCase):
         self.assertEqual(result['state'], 'error', result)
         self.assertFalse((locks.STATE/'nr').exists())
         self.assertEqual(self.restarts, 0)
+        self.assertEqual(self.restart_args, [])
 
     def test_explicit_endc_error_is_not_recovered_or_saved(self):
         original = self.run_command
@@ -454,6 +458,34 @@ class LocksTest(unittest.TestCase):
         result = locks.main(['apply', 'lte', '1,3'])
         self.assertEqual(result['state'], 'error')
         self.assertFalse((locks.STATE/'lte').exists())
+        self.assertEqual(self.restart_args, [])
+
+    def test_each_band_write_cycles_only_after_acknowledgement(self):
+        for kind, val, command in [('lte','1,3','AT+SPLBAND=1,0,0,0,5,0'),
+                                    ('nr','1,41,78','AT+SPLBAND=2,1,0,272,0')]:
+            for failure in (None, 'rejected', 'no-final'):
+                with self.subTest(kind=kind,failure=failure):
+                    self.fail = command if failure == 'rejected' else None
+                    self.omit_final = command if failure == 'no-final' else None
+                    self.restart_args.clear()
+                    before = (locks.STATE/kind).read_text() if (locks.STATE/kind).exists() else None
+                    result = locks.main(['apply',kind,val])
+                    self.assertEqual(self.restart_args, [] if failure else [['--bands']])
+                    self.assertEqual(result['state'], 'error' if failure else 'done')
+                    if failure:
+                        self.assertEqual((locks.STATE/kind).read_text() if (locks.STATE/kind).exists() else None, before)
+
+    def test_default_band_failure_never_cycles_or_saves_partial_request(self):
+        commands = ['AT+SPLBAND=1,' + ','.join(map(str, locks.masks(locks.LTE, locks.LTE_TABLES))),
+                    'AT+SPLBAND=2,0,0,0,0']
+        for command in commands:
+            with self.subTest(command=command):
+                self.fail = command
+                result = locks.main(['apply','bands_default',''])
+                self.assertEqual(result['state'], 'error')
+                self.assertEqual(self.restart_args, [])
+                self.assertFalse((locks.STATE/'lte').exists())
+                self.assertFalse((locks.STATE/'nr').exists())
 
     def test_band_replay_accepts_normalized_mask_without_late_restart(self):
         (locks.STATE/'nr').write_text('1,41,78')

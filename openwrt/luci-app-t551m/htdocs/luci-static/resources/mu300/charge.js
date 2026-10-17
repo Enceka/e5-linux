@@ -4,7 +4,7 @@
 'require mu300.common as M';
 
 var get = rpc.declare({object:'e5-charge', method:'get', expect:{'':{}}, nobatch:true});
-var configure = rpc.declare({object:'e5-charge', method:'configure', params:['enabled','start','stop'], expect:{'':{}}, nobatch:true});
+var configure = rpc.declare({object:'e5-charge', method:'configure', params:['enabled','start','stop','power_on'], expect:{'':{}}, nobatch:true});
 var fullOnce = rpc.declare({object:'e5-charge', method:'full_once', expect:{'':{}}, nobatch:true});
 
 function message(error) {
@@ -36,6 +36,8 @@ return baseclass.extend({
 <div class="mud-r"><span class="mud-k">充电状态</span><span class="mud-v" data-charge="status" role="status" aria-live="polite">正在读取…</span></div>
 <form data-charge="form">
  <label class="mud-device-toggle"><input type="checkbox" data-charge="enabled" disabled>启用充电上限</label>
+ <label class="mud-device-toggle"><input type="checkbox" data-charge="power_on" disabled>插电直接启动 OpenWrt</label>
+ <div class="mud-note">关机后插电，跳过充电动画并启动系统。关闭此选项保留关机充电；下次启动生效。</div>
  <div class="mud-charge-controls">
   <div class="mud-device-field"><label for="mud-charge-stop">停止充电于（50–100%）</label><input id="mud-charge-stop" data-charge="stop" type="number" min="50" max="100" step="1" required disabled></div>
   <div class="mud-device-field"><label for="mud-charge-start">恢复充电于（20–95%）</label><input id="mud-charge-start" data-charge="start" type="number" min="20" max="95" step="1" required disabled></div>
@@ -49,7 +51,7 @@ return baseclass.extend({
 		var q = function(name) { return card.querySelector('[data-charge="' + name + '"]'); };
 		var state = {}, pending = false;
 		function disable() {
-			['enabled','start','stop','save','once'].forEach(function(name) { q(name).disabled = pending || !state.available; });
+			['enabled','power_on','start','stop','save','once'].forEach(function(name) { q(name).disabled = pending || !state.available; });
 			q('once').disabled = pending || !state.available || !!state.full_once;
 			q('refresh').disabled = pending;
 		}
@@ -60,6 +62,7 @@ return baseclass.extend({
 				s.status === 'Full' ? '已充满' : s.status === 'Charging' || (s.status === 'Not charging' && s.current_ma > 20) ? '正在充电' : !s.online ? '使用电池' : '未充电';
 			q('status').textContent = M.translate(label);
 			q('enabled').checked = !!s.enabled;
+			q('power_on').checked = !!s.power_on;
 			q('start').value = s.start == null ? 70 : s.start;
 			q('stop').value = s.stop == null ? 80 : s.stop;
 			q('once').textContent = M.translate(s.full_once ? '正在临时充满…' : '临时充满一次');
@@ -86,7 +89,7 @@ return baseclass.extend({
 			if (pending || !state.available || !q('form').reportValidity()) return;
 			var start = Number(q('start').value), stop = Number(q('stop').value);
 			if (start >= stop) { q('note').textContent = message('charge_threshold_order'); return; }
-			return perform(function() { return configure(q('enabled').checked ? '1' : '0', String(start), String(stop)); }, true);
+			return perform(function() { return configure(q('enabled').checked ? '1' : '0', String(start), String(stop), q('power_on').checked ? '1' : '0'); }, true);
 		};
 		q('once').onclick = function() { if (state.available && !state.full_once) return perform(fullOnce, true); };
 		// One local snapshot on entry; no background polling or new policy loop.

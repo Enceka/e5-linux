@@ -35,7 +35,7 @@ class Charge(unittest.TestCase):
         c.STATE.mkdir()
         c.SERVICE.write_text('#!/bin/sh\n')
         c.SERVICE.chmod(0o755)
-        self.config = dict(enabled='1', start='70', stop='80', full_once='0')
+        self.config = dict(enabled='1', start='70', stop='80', full_once='0', power_on='0')
         self.calls = []
         self.reload_rc = self.batch_rc = 0
         mock = patch.object(c, 'run', side_effect=self.command)
@@ -68,6 +68,16 @@ class Charge(unittest.TestCase):
         self.config.update(start='60', stop='90')
         self.assertEqual(c.status()['start'], 60)
         self.assertEqual(c.status()['stop'], 90)
+
+    def test_supply_boot_option_is_persistent_and_older_clients_preserve_it(self):
+        self.assertTrue(self.save(power_on='1')['power_on'])
+        self.assertEqual(self.config['power_on'], '1')
+        self.assertTrue(self.save()['power_on'])
+        self.assertFalse(self.save(power_on='0')['power_on'])
+        self.calls.clear()
+        with self.assertRaises(ValueError):
+            self.save(power_on='2')
+        self.assertEqual(self.calls, [])
         self.assertEqual((c.BAT/'charger.0/stop_charge').read_text(), '0')
 
     def test_bad_input_never_changes_config_or_calls_service(self):

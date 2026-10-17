@@ -1,0 +1,44 @@
+#!/usr/bin/python3
+"""Read-only cipher capabilities for a UCI radio, including a stopped radio."""
+import json
+import re
+import subprocess
+import sys
+
+
+def parse(text):
+    section = False
+    suites = []
+    for line in text.splitlines():
+        if line.strip() == 'Supported Ciphers:':
+            section = True
+            continue
+        if not section:
+            continue
+        if not line.strip().startswith('*'):
+            break
+        match = re.search(r'\(([0-9a-fA-F]{2}-[0-9a-fA-F]{2}-[0-9a-fA-F]{2}):([0-9]+)\)', line)
+        if match:
+            suites.append(match[1].lower() + ':' + match[2])
+    return suites
+
+
+def capabilities(radio):
+    if not re.fullmatch(r'[a-zA-Z0-9_]{1,64}', radio):
+        return {}
+    try:
+        found = subprocess.run(['/bin/ubus', 'call', 'iwinfo', 'phyname', json.dumps({'section': radio})],
+                               check=True, capture_output=True, text=True, timeout=3)
+        phy = json.loads(found.stdout).get('phyname', '')
+        if not re.fullmatch(r'phy[0-9]+', phy):
+            return {}
+        result = subprocess.run(['/usr/sbin/iw', 'phy', phy, 'info'],
+                                check=True, capture_output=True, text=True, timeout=3)
+        suites = parse(result.stdout)
+        return {'phy': phy, 'suites': suites} if suites else {}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}  # Unknown is not the same as an empty capability set.
+
+
+if __name__ == '__main__':
+    print(json.dumps(capabilities(sys.argv[1]) if len(sys.argv) == 2 else {}))

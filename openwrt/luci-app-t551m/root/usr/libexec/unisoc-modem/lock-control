@@ -260,6 +260,45 @@ def write_setting(command, timeout, early, readback, recover=False):
         time.sleep(2)
         if not readback(): raise RuntimeError('Unacknowledged setting failed readback: ' + command)
 
+def reconnect(bands=False):
+    try:
+        # The scoped AT client's per-command ceiling includes queue/framing
+        # recovery. Let the band helper finish SFUN=4 and its WAN cleanup.
+        r = subprocess.run([RESTART, '--bands' if bands else '--settings'],
+                           capture_output=True, text=True, timeout=150 if bands else 75)
+        if r.returncode:
+            return {'reconnect': 'failed', 'reconnect_error': (r.stderr or r.stdout)[-240:]}
+        if r.stdout.strip().startswith('RECONNECT-DEFERRED '):
+            return {'reconnect': 'deferred', 'reconnect_reason': r.stdout.strip().split(' ', 1)[1]}
+        return {'reconnect': 'done'}
+    except subprocess.TimeoutExpired:
+        return {'reconnect': 'failed', 'reconnect_error': 'Radio reconnect timed out'}
+
+
+def apply_bands(settings, restart, persist, early):
+    # Only activate after every band write has its own final OK. Rejection or
+    # a missing reply must not trigger a radio cycle or replace saved intent.
+    for kind, val in settings:
+        validate(kind, val)
+    slot = active_card()
+    for kind, val in settings:
+        bands = list(map(int, val.split(','))) if val else []
+        words = masks(bands, LTE_TABLES if kind == 'lte' else NR_TABLES)
+        if kind == 'nr': words.insert(1, 0)
+        at('AT+SPLBAND=' + ('1,' if kind == 'lte' else '2,') + ','.join(map(str, words)),
+           3 if early else 15)
+    if active_card() != slot: raise RuntimeError('Active SIM changed during operation')
+    result = reconnect(bands=True) if restart else {}
+    if persist:
+        for kind, val in settings:
+            atomic(STATE / kind, val)
+    try:
+        snapshot()
+    except RuntimeError as error:
+        result['refresh_error'] = str(error)
+    return result
+
+
 def apply(kind, val, restart=True, persist=True, early=False):
     validate(kind, val)
     if kind == 'gran':
@@ -270,9 +309,9 @@ def apply(kind, val, restart=True, persist=True, early=False):
         if mode is None: raise ValueError('Current network mode cannot be combined with this NR setting')
         return apply('mode', mode, restart=restart, persist=persist, early=early)
     if kind == 'bands_default':
-        bands = ','.join(map(str, LTE))
-        apply('lte', bands, restart=False, persist=persist, early=early)
-        return apply('nr', '', restart=restart, persist=persist, early=early)
+        return apply_bands([('lte', ','.join(map(str, LTE))), ('nr', '')], restart, persist, early)
+    if kind in ('lte', 'nr'):
+        return apply_bands([(kind, val)], restart, persist, early)
     if kind == 'auto_apply':
         atomic(STATE / kind, val)
         return
@@ -292,14 +331,6 @@ def apply(kind, val, restart=True, persist=True, early=False):
     elif kind == 'endc':
         write_setting('AT+SPENDC=' + ('1' if val == 'on' else '2'), 15, early,
                       lambda: verify(kind, val, expected), recover=True)
-    elif kind in ('lte', 'nr'):
-        bands = list(map(int, val.split(','))) if val else []
-        v = masks(bands, LTE_TABLES if kind == 'lte' else NR_TABLES)
-        if kind == 'nr': v.insert(1, 0)
-        expected = ','.join(map(str, v))
-        # Require the command's own OK; do not infer acceptance from a
-        # possibly different pre-existing band mask (including early replay).
-        at('AT+SPLBAND=' + ('1,' if kind == 'lte' else '2,') + expected, 3 if early else 15)
     elif kind == 'cell':
         if val == 'auto':
             subprocess.run(['/usr/libexec/unisoc-modem/cell'], capture_output=True, timeout=25, check=True)
@@ -327,17 +358,9 @@ def apply(kind, val, restart=True, persist=True, early=False):
         # bearer. The restart helper checks MM before touching WAN. Keep its
         # outcome separate from the already verified write, including races
         # where the SIM vanishes during reconnect.
-        try:
-            r = subprocess.run([RESTART, '--settings'], capture_output=True, text=True, timeout=75)
-            if r.returncode:
-                result.update(reconnect='failed', reconnect_error=(r.stderr or r.stdout)[-240:])
-            elif r.stdout.strip().startswith('RECONNECT-DEFERRED '):
-                result.update(reconnect='deferred', reconnect_reason=r.stdout.strip().split(' ', 1)[1])
-            else:
-                if not verify(kind, val, expected): raise RuntimeError('Setting did not survive reconnect')
-                result['reconnect'] = 'done'
-        except subprocess.TimeoutExpired:
-            result.update(reconnect='failed', reconnect_error='Radio reconnect timed out')
+        result.update(reconnect())
+        if result.get('reconnect') == 'done' and not verify(kind, val, expected):
+            raise RuntimeError('Setting did not survive reconnect')
     if kind in ('volte', 'vonr'):
         write_json(RUN / f'{kind}-applied.json', {
             'enabled': val == 'on', 'source': 'modem',

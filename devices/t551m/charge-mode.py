@@ -28,6 +28,15 @@ def charger_boot(commandline):
                           commandline.replace('\0', ' ')))
 
 
+def power_on_supply():
+    try:
+        result = subprocess.run(['uci', '-q', 'get', 'e5-charge.main.power_on'],
+                                capture_output=True, text=True, timeout=2)
+        return result.returncode == 0 and result.stdout.strip() == '1'
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def bitmap_has(text, bit):
     words = text.split()[::-1]
     word, offset = divmod(bit, struct.calcsize('@L') * 8)
@@ -202,6 +211,9 @@ def poweroff_charging(display, backlights):
 def run():
     commandline = (SYS / 'firmware/devicetree/base/chosen/bootargs').read_text()
     if not charger_boot(commandline) or Path('/tmp/.failsafe').exists():
+        return
+    if power_on_supply():
+        report('normal', 'power-on-supply enabled')
         return
     # Treat absent input/backlight as a recoverable boot fault, not a device
     # that can no longer be switched on. No undocumented PMIC writes.

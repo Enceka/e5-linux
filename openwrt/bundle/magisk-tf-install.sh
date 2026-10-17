@@ -23,7 +23,7 @@ preflight() {
     [ "$(getprop ro.boot.verifiedbootstate)" = orange ] || fail 'bootloader must be unlocked'
     [ -s "$P/files/ext4-tools.tar" ] || fail 'missing bundled ext4 tools'
     tar -tf "$P/files/ext4-tools.tar" > "$STATE/ext4-tools.list"
-    for tool in lib/ld-musl-aarch64.so.1 usr/sbin/e2fsck usr/sbin/resize2fs SHA256SUMS; do
+    for tool in lib/ld-musl-aarch64.so.1 usr/sbin/e2fsck usr/sbin/resize2fs ext4-geometry.sh SHA256SUMS; do
         grep -qx "$tool" "$STATE/ext4-tools.list" || fail "missing ext4 tool: $tool"
     done
     [ ! -L /data/e5linux ] || fail 'unsafe boot selector directory'
@@ -205,7 +205,8 @@ install_tf() {
 if [ "${E5_TF_LIB:-0}" = 1 ]; then return 0; fi
 P=${E5_PACKAGE:?}
 BASE=/data/adb/e5-tf-install
-BB=/data/adb/magisk/busybox
+BB=$P/files/busybox
+[ -x "$BB" ] && [ ! -L "$BB" ] || fail 'missing bundled installer BusyBox'
 [ ! -L "$BASE" ] || fail 'unsafe installer directory'
 mkdir -p "$BASE"
 chmod 700 "$BASE"

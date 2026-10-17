@@ -10,7 +10,7 @@ SUPPLY = BAT.parent
 STATE = Path('/tmp/run/e5-charge')
 SERVICE = Path('/etc/init.d/e5-charge')
 LOCK = Path('/var/lock/e5-charge-web.lock')
-METHODS = {'get': {}, 'configure': {'enabled': '', 'start': '', 'stop': ''},
+METHODS = {'get': {}, 'configure': {'enabled': '', 'start': '', 'stop': '', 'power_on': ''},
            'full_once': {}}
 
 
@@ -60,6 +60,7 @@ def status():
             'online': any(read(SUPPLY / name / 'online') == '1' for name in ('usb', 'ac')),
             'stopped': read(STATE / 'stopped') == '1',
             'enabled': cfg('enabled', '0') == '1',
+            'power_on': cfg('power_on', '0') == '1',
             'start': integer(cfg('start', '70'), 20, 95),
             'stop': integer(cfg('stop', '80'), 50, 100),
             'full_once': cfg('full_once', '0') == '1'}
@@ -78,6 +79,9 @@ def dispatch(method, data):
         if start >= stop:
             raise ValueError('charge_threshold_order')
         values = {'enabled': enabled, 'start': start, 'stop': stop}
+        # Older clients omit this key; preserve the independent boot preference.
+        if data.get('power_on') not in (None, ''):
+            values['power_on'] = integer(data['power_on'], 0, 1)
         if not enabled:
             values['full_once'] = 0
     else:

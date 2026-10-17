@@ -30,6 +30,9 @@ class LegacyBinding(unittest.TestCase):
                 stack.enter_context(patch.object(module,'package_profile',return_value={'profile':'e5','android_models':['E5']}))
                 stack.enter_context(patch.object(module,'su',return_value='ok'))
                 stack.enter_context(patch.object(module,'su_checked',return_value=''))
+                # Device selection does not upload package tools; that boundary
+                # is exercised with real shell probes in android-root-tools.py.
+                stack.enter_context(patch.object(module,'android_tools'))
                 def shell(cmd):
                     if cmd.endswith('-c id'):return 'uid=0(root)'
                     return {'getprop ro.product.model':'E5','getprop ro.boot.slot_suffix':'_a',

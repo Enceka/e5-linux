@@ -45,6 +45,7 @@ def main():
     p.add_argument('--wifi-apks', type=Path, default=TOP / 'work/wifi-sae')
     p.add_argument('--cc', default='aarch64-linux-gnu-gcc')
     a = p.parse_args()
+    runpy.run_path(str(TOP / 'openwrt/bundle/flash.py'))['validate_installer_busybox'](a.busybox)
     wifi_build = runpy.run_path(str(TOP / 'openwrt/wifi-sae-state.py'))['inspect'](a.wifi_apks)
     wifi_args = ' '.join('/wifi-sae/' + n for n in sorted(wifi_build['apks']))
     if os.geteuid() != 0 or a.work.exists():
@@ -164,6 +165,8 @@ def main():
     package = a.work / name
     files = package / 'files'
     files.mkdir(parents=True)
+    shutil.copyfile(a.busybox, files / 'busybox')
+    (files / 'busybox').chmod(0o755)
     shutil.copyfile(a.kernel / 'config', files / 'kernel.config')
     shutil.copyfile(a.kernel / 'modules.in-tree', files / 'modules.in-tree')
     init = a.work / 'init'

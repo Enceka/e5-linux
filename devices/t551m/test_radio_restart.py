@@ -26,11 +26,13 @@ case "$*" in
     *--enable) [ "${ENABLE_FAIL:-0}" = 0 ] || exit 1;;
 esac''')
         self.script('uci', 'echo wan')
+        self.script('sleep', 'exit 0')
         self.script('ubus', 'echo "{\"autostart\":${AUTOSTART:-true}}"')
         self.script('jsonfilter', 'cat >/dev/null; echo "${AUTOSTART:-true}"')
         for command in ('ifup', 'ifdown'):
             self.script(command, f'echo "{command} $*" >> "$TRACE"')
         self.script('at', '''echo "at $*" >> "$TRACE"
+case "$*" in *"${FAIL_AT:-no-failure}") echo ERROR; exit 1;; esac
 case "$*" in *'AT+CFUN?') echo "+CFUN: $CFUN";; esac
 echo OK''')
 
@@ -126,6 +128,47 @@ echo OK''')
         self.assertNotEqual(result.returncode,0)
         self.assertNotIn('ifdown',trace)
         self.assertNotIn('--disable',trace)
+
+    def test_bands_use_sfun_even_when_mm_is_failed_and_restore_wan(self):
+        self.env['STATE'] = 'failed'
+        result, trace = self.run_helper('--bands')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertLess(trace.index('ifdown wan'),trace.index('AT+SFUN=5'))
+        self.assertLess(trace.index('AT+SFUN=5'),trace.index('AT+SFUN=4'))
+        self.assertEqual(trace.splitlines()[-1],'ifup wan')
+        self.assertNotIn('mmcli',trace)
+        self.assertNotIn('AT+CFUN=',trace)
+
+    def test_band_standby_cycle_never_touches_data_card_wan(self):
+        self.env['MU300_SIM_SLOT'] = '1'
+        result, trace = self.run_helper('--bands')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('AT+SFUN=5',trace);self.assertIn('AT+SFUN=4',trace)
+        self.assertNotIn('ifdown',trace);self.assertNotIn('ifup',trace)
+
+    def test_band_stop_failure_still_restores_stack_and_wan(self):
+        for command in ('AT+SFUN=5','AT+SFUN=4'):
+            self.env['FAIL_AT'] = command
+            result, trace = self.run_helper('--bands')
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('AT+SFUN=4',trace)
+            self.assertEqual(trace.splitlines()[-1],'ifup wan')
+
+    def test_band_cycle_preserves_manual_data_and_radio_off(self):
+        self.env['AUTOSTART'] = 'false'
+        result, trace = self.run_helper('--bands')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('AT+SFUN=4',trace);self.assertNotIn('ifup',trace)
+        for cfun in ('0','4'):
+            self.env['CFUN'] = cfun
+            result, trace = self.run_helper('--bands')
+            self.assertEqual(result.stdout.strip(),'RECONNECT-DEFERRED radio-off')
+            self.assertNotIn('AT+SFUN=',trace);self.assertNotIn('ifdown',trace)
+        self.env['CFUN'] = '1'
+        Path(self.env['UNISOC_RADIO_POLICY']).write_text('0 1\n')
+        result, trace = self.run_helper('--bands')
+        self.assertEqual(result.stdout.strip(),'RECONNECT-DEFERRED radio-disabled-by-user')
+        self.assertNotIn('at ',trace)
 
 
 if __name__ == '__main__':

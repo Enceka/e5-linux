@@ -224,6 +224,7 @@ class Adapter:
             self.legacy.ADB = self.adb.exe
             self.legacy.SERIAL = serial
             self.legacy.SU = None
+            self.legacy.ANDROID_BUSYBOX = None
             self.legacy.find_adb = lambda: None
 
     def probe(self, serial, method='part'):
@@ -454,6 +455,7 @@ class Adapter:
         the system payload remains on the PC until the existing writer runs.
         """
         m, record = self.legacy, self.ctx.record
+        m.android_tools()
         s, plan = record['device']['storage'], record['plan']
         space = self.read_gpt(s)
         first, last = gpt.gpt_add_root(space['first'], space['last'], s['DISK_SIZE'], plan['gap_start'], plan['openwrt_bytes']//512, 'e5root')

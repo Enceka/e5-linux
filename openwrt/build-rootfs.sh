@@ -482,6 +482,7 @@ IMG=e5-openwrt-$VER.ext4
 [ "$DEVICE_FILES" != 0 ] || IMG=e5-openwrt-$VER-generic.ext4
 docker run --rm --platform linux/arm64 -v "$WORK":/w -v "$OUT":/out \
     -v "$HERE/prepare-ext4-tools.py":/prepare-ext4-tools.py:ro \
+    -v "$HERE/bundle/ext4-geometry.sh":/bundle/ext4-geometry.sh:ro \
     -e NAME="$NAME" -e IMG="$IMG" -e MB="$IMAGE_MB" alpine:3.22 sh -euc '
 apk add -q e2fsprogs python3 binutils >/dev/null
 rm -rf /tmp/r && mkdir /tmp/r && tar -xzf /w/$NAME -C /tmp/r

@@ -39,7 +39,7 @@ Public entry names are descriptive English names. Use `.cmd` on Windows or `.sh`
 
 ## You need
 
-* a matching device with an **unlocked bootloader** and Android rooted with **Magisk**;
+* a matching device with an **unlocked bootloader** and Android rooted with **Magisk, KernelSU or KSUNext**; the package supplies its own static ARM64 BusyBox, independently of the root manager;
 * Android running from slot a (as it comes from the factory);
 * an **SD card of 4 GB or more**: the selected target is erased and used in full,
   without repartitioning or OTA reserve space -- or run
@@ -54,7 +54,7 @@ Public entry names are descriptive English names. Use `.cmd` on Windows or `.sh`
 ## Flash
 
 1. Turn on USB debugging on the E5, connect it, allow debugging on the phone.
-2. Grant **Shell** superuser access in Magisk (the phone asks the first time).
+2. Grant **Shell** superuser access in your root manager (the phone asks the first time).
 3. Unpack the package and run, in its directory:
 
    * **Windows**: double-click `launchers/start-installer.cmd` (or run `launchers/start-installer.cmd` in a command prompt);

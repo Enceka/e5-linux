@@ -41,10 +41,12 @@ def finalize(package, profile, bootctl):
     add_android_switcher(package)
     files = package / 'files'
     for name in ('OpenWrt-Installer.py', 'START-HERE.md', 'files/android-bootchain.sh',
-                 'files/collect-device-files.sh', 'files/android-loop.sh', 'files/ext4-tools.tar', 'scripts/tools/sprd-bt-config.py',
+                 'files/collect-device-files.sh', 'files/android-loop.sh', 'files/ext4-tools.tar', 'files/busybox', 'scripts/tools/sprd-bt-config.py',
                  'scripts/tools/vbc-profile/vbc-profile.py'):
         if not (package / name).is_file():
             raise ValueError('missing package component: ' + name)
+    runpy.run_path(str(HERE / 'flash.py'))['validate_installer_busybox'](files / 'busybox')
+    (files / 'busybox').chmod(0o755)
     helper = bootctl.read_bytes()
     if helper[:6] != b'\x7fELF\x02\x01' or helper[18:20] != b'\xb7\x00':
         raise ValueError('e5-bootctl must be an ARM64 ELF executable')

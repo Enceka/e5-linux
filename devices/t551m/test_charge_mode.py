@@ -9,6 +9,7 @@ from unittest.mock import Mock, call, patch
 spec = importlib.util.spec_from_file_location('charge', Path(__file__).with_name('charge-mode.py'))
 charge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(charge)
+read_boot_policy = charge.power_on_supply
 
 
 class ChargeModeTest(unittest.TestCase):
@@ -30,14 +31,17 @@ class ChargeModeTest(unittest.TestCase):
         self.sys = patch.object(charge, 'SYS', self.root)
         self.state = patch.object(charge, 'STATE', self.root / 'state.json')
         self.display = patch.object(charge, 'open_display', return_value=None)
+        self.boot_policy = patch.object(charge, 'power_on_supply', return_value=False)
         self.sys.start()
         self.state.start()
         self.display.start()
+        self.boot_policy.start()
 
     def tearDown(self):
         self.sys.stop()
         self.state.stop()
         self.display.stop()
+        self.boot_policy.stop()
         self.temp.cleanup()
 
     def file(self, name, value):
@@ -56,6 +60,20 @@ class ChargeModeTest(unittest.TestCase):
             charge.run()
         wait.assert_not_called()
         self.assertEqual(self.bl.read_text(), '180\n')
+
+    def test_enabled_supply_boot_does_not_start_charging_ui_or_wait_for_keys(self):
+        with patch.object(charge, 'power_on_supply', return_value=True), \
+             patch.object(charge, 'wait_for_power') as wait:
+            charge.run()
+        wait.assert_not_called()
+        self.assertEqual(self.bl.read_text(), '180\n')
+        self.assertEqual(self.touch.read_text(), '0\n')
+        self.assertIn('power-on-supply enabled', (self.root/'state.json').read_text())
+
+    def test_missing_or_invalid_boot_option_keeps_charging_mode(self):
+        for rc, value, expected in ((0,'1\n',True),(0,'0\n',False),(0,'yes',False),(1,'1',False)):
+            with patch.object(charge.subprocess, 'run', return_value=subprocess.CompletedProcess([],rc,value,'')):
+                self.assertEqual(read_boot_policy(), expected)
 
     def test_capabilities_find_power_and_touch_without_model_names(self):
         keys, touches = charge.input_devices()

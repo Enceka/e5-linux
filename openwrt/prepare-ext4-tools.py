@@ -37,6 +37,10 @@ def build(root, out):
                 if not candidates:
                     raise ValueError('Missing dependency: ' + lib)
                 pending.append(candidates[0])
+        name = 'ext4-geometry.sh'
+        data = (Path(__file__).resolve().parent / 'bundle' / name).read_bytes().replace(b'\r\n', b'\n')
+        (stage / name).write_bytes(data)
+        hashes[name] = hashlib.sha256(data).hexdigest()
         (stage / 'manifest.json').write_text(json.dumps({'sha256': hashes}, indent=2) + '\n')
         (stage / 'SHA256SUMS').write_text(''.join(v + '  ' + k + '\n' for k, v in sorted(hashes.items())))
         out.parent.mkdir(parents=True, exist_ok=True)

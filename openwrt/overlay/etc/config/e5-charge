@@ -1,4 +1,6 @@
 config charge 'main'
+	# Skip charger-only animation and boot normally when enabled.
+	option power_on '0'
 	# 1: stop charging at `stop` and resume at `start`; 0: charge normally
 	option enabled '0'
 	option stop '80'

@@ -1,14 +1,50 @@
 #!/bin/sh
-# Let the platform owner sequence its power state instead of MU300's SFUN dance.
+# Normal reconnect uses MM; band activation needs the vendor SFUN stack cycle.
 set -eu
 settings=0
-case "${1:-}" in --settings) settings=1;; '') ;; *) exit 2;; esac
+bands=0
+case "${1:-}" in --settings) settings=1;; --bands) bands=1;; '') ;; *) exit 2;; esac
 at=${MU300_AT:-/usr/libexec/unisoc-modem/at}
 selected=${MU300_SIM_SLOT:-}
 own=$(cat "${UNISOC_CARD_FILE:-/sys/module/sipc_wwan/parameters/card}")
 "${UNISOC_RADIO_ALLOWED:-/usr/libexec/unisoc-modem/radio-allowed}" "${selected:-$own}" || {
     echo 'RECONNECT-DEFERRED radio-disabled-by-user'; exit 0;
 }
+# Both UIs use this through lock-control's operation mutex and scoped AT owner.
+# CFUN=4/1 only changes flight mode; it need not activate a new SPLBAND mask.
+if [ "$bands" = 1 ]; then
+    status=$("$at" -t 5 'AT+CFUN?')
+    cfun=$(printf '%s\n' "$status" | sed -n 's/^+CFUN: *\([0-9]*\).*$/\1/p')
+    case "$cfun" in
+        1) ;;
+        0|4) echo 'RECONNECT-DEFERRED radio-off'; exit 0;;
+        *) echo 'Cannot read radio state before band activation' >&2; exit 1;;
+    esac
+    if [ "${selected:-$own}" = "$own" ]; then
+        iface=$(uci -q get unisoc_modem.main.data_interface) || iface=wan
+        autostart=$(ubus -t 3 call "network.interface.$iface" status | jsonfilter -e '@.autostart')
+        case "$autostart" in
+            true) trap 'ifup "$iface"' EXIT ;;
+            false) ;;
+            *) echo 'Cannot read data autostart before reconnect' >&2; exit 1;;
+        esac
+        ifdown "$iface"
+    fi
+    stack_write() {
+        local reply
+        reply=$("$at" -t "$2" "$1") || return 1
+        [ "$(printf '%s\n' "$reply" | tr -d '\r' | sed '/^[[:space:]]*$/d' | tail -n1)" = OK ]
+    }
+    failed=0
+    stack_write 'AT+SFUN=5' 10 || failed=1
+    sleep 1
+    # Always restore the stack, including a missing/failed stop reply.
+    stack_write 'AT+SFUN=4' 30 || failed=1
+    sleep 3
+    "$at" -t 5 'AT+CFUN?' | tr -d '\r' | grep -Eq '^\+CFUN:[[:space:]]*1[[:space:]]*$' || failed=1
+    [ "$failed" = 0 ] || { echo 'Band activation stack restart failed' >&2; exit 1; }
+    exit 0
+fi
 if [ -n "$selected" ]; then
     case "$selected" in 0|1) ;; *) exit 2 ;; esac
     own=$(cat "${UNISOC_CARD_FILE:-/sys/module/sipc_wwan/parameters/card}")

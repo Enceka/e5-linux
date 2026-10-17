@@ -46,6 +46,11 @@ backups/                   电脑安装时自动生成的备份、续装记录�
 
 本包保留 Docker/KVM 的内核支持，不预装 Docker。用户以后可自行安装相应软件包。
 
+电脑安装入口可使用 Magisk、KernelSU 或 KSUNext 的 `su` 授权。请给 Android 的 **Shell** root 权限；
+电脑和 ZIP 模块入口统一使用 `files/busybox` 中随包携带的静态 ARM64 安装工具，不依赖管理器的 BusyBox 或安装路径。
+重置 Android 后，需重新恢复相应管理器及 Shell 授权。不同管理器、不同机型的原生模块安装仍需实刷验证；
+这不代表给 OpenWrt 内核增加 KSU，也不需要在 OpenWrt 中安装 Android root 管理器。
+
 ## 3. 选哪一种方式
 
 先运行根目录的 **`OpenWrt-Installer.exe`**，或在解压目录运行：
@@ -81,7 +86,7 @@ Experimental: userdata-image installation may damage Android's F2FS filesystem.
 - 把完整固件 ZIP 放在手机内部存储，不要依赖将被清空的 TF 卡保存唯一一份包或备份。
 - Android 内部空间需容纳临时展开的系统镜像、启动备份和本机固件：通常至少约 2.5 GiB，建议 3 GiB 以上。
   脚本按包内实际大小检查，空间不足会在清卡前停止。
-- 需要 Magisk 自带 BusyBox 和 Android 的 `blockdev` 等工具；缺少会明确报错。
+- 安装工具使用随包携带的静态 BusyBox；仍需要 Android 提供正常的 root 授权。
   Android 用户空间为 32 位不等于内核不是 ARM64，安装器按内核和实际执行能力检查。
 
 ### 操作

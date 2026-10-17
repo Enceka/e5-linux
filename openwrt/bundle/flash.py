@@ -34,6 +34,7 @@ import random
 import re
 import runpy
 import shutil
+import shlex
 import socket
 import string
 import subprocess
@@ -203,6 +204,63 @@ def checksum_path():
 
 ADB = None
 SU = None
+ANDROID_BUSYBOX = None
+
+
+def validate_installer_busybox(path):
+    """The installer runs before OpenWrt: Android must need no ELF loader."""
+    with open(path, 'rb') as stream:
+        header = stream.read(64)
+        if (len(header) != 64 or header[:7] != b'\x7fELF\x02\x01\x01'
+                or struct.unpack_from('<HH', header, 16) != (2, 183)):
+            raise ValueError('Installer BusyBox must be a static ARM64 ELF executable')
+        offset = struct.unpack_from('<Q', header, 32)[0]
+        entry_size, count = struct.unpack_from('<HH', header, 54)
+        if entry_size != 56 or not 1 <= count <= 128 or offset < 64:
+            raise ValueError('Invalid installer BusyBox program headers')
+        stream.seek(offset)
+        headers = stream.read(entry_size * count)
+        if len(headers) != entry_size * count:
+            raise ValueError('Truncated installer BusyBox program headers')
+        types = [struct.unpack_from('<I', headers, n * entry_size)[0] for n in range(count)]
+        if 1 not in types or any(t in (2, 3) for t in types):
+            raise ValueError('Installer BusyBox must be static (no dynamic loader or libraries)')
+
+
+def android_shell(script, arguments=''):
+    if not ANDROID_BUSYBOX or not re.fullmatch(re.escape(TMP) + r'/e5-tools-[0-9a-f]{32}/busybox', ANDROID_BUSYBOX):
+        raise ValueError('Android installer BusyBox has not been validated')
+    return f'ASH_STANDALONE=1 {ANDROID_BUSYBOX} sh {script}' + (' ' + arguments if arguments else '')
+
+
+def android_tools():
+    """Stage the package's tools, independently of the Android root manager."""
+    global ANDROID_BUSYBOX
+    ANDROID_BUSYBOX = None
+    local = os.path.join(F, 'busybox')
+    try:
+        validate_installer_busybox(local)
+    except (OSError, ValueError) as error:
+        die(f'{error}; download a complete installer package. Nothing was installed.')
+    directory = f'{TMP}/e5-tools-{uuid.uuid4().hex}'
+    path = directory + '/busybox'
+    # adb uploads as shell; the random private directory becomes root-owned
+    # before execution. Never chmod or execute another manager's tool directory.
+    adb('shell', f'umask 077; mkdir {directory}', check=True)
+    adb('push', local, path, check=True)
+    want = sha256(local)
+    probe = (f'for tool in sh chroot nsenter timeout sha256sum dd od blockdev '
+             f'tar gzip losetup mount umount mktemp stat readlink; do '
+             f'{path} --list | {path} grep -qx "$tool" || exit 1; done; '
+             f'PATH=/nonexistent; hash=$(sha256sum {path}); '
+             f'[ "${{hash%% *}}" = {want} ] || exit 1; echo E5_BUSYBOX_OK')
+    out = su_checked('准备随包安装工具 / preparing bundled installer tools',
+                     f'chown 0:0 {directory} {path}; chmod 700 {directory} {path}; '
+                     f'[ "$(sha256sum {path} | cut -d " " -f1)" = {want} ]; '
+                     f'ASH_STANDALONE=1 {path} sh -c ' + shlex.quote(probe))
+    if 'E5_BUSYBOX_OK' not in out.splitlines():
+        die('Bundled installer BusyBox is incompatible; no system or partition was installed.')
+    ANDROID_BUSYBOX = path
 
 
 def find_adb():
@@ -235,9 +293,11 @@ def sh(cmd, timeout=600):
 
 
 def su(cmd, timeout=600):
-    # one argument for adb, one single-quoted string for su: cmd has no '
-    assert "'" not in cmd
-    return adb('shell', f"{SU} -c '{cmd}'" if SU else cmd, timeout=timeout)
+    # Root authorization and applet selection are independent. Explicit
+    # standalone ash keeps Android toybox and manager PATH out of installation.
+    if ANDROID_BUSYBOX:
+        cmd = android_shell('-c', shlex.quote(cmd))
+    return adb('shell', f'{SU} -c ' + shlex.quote(cmd) if SU else cmd, timeout=timeout)
 
 
 def su_checked(stage, cmd, timeout=600, effect=None):
@@ -382,10 +442,10 @@ def _bootchain(mode):
         raise ValueError(mode)
     script = f'{TMP}/e5-android-bootchain.sh'
     push(os.path.join(F, 'android-bootchain.sh'), script, 'boot-chain checks')
-    # Absolute BusyBox path avoids Android toybox differences and Magisk PATH.
+    # Absolute validated path avoids Android toybox and root-manager PATH differences.
     result = su_checked('检查启动链 / checking boot chain' if mode == 'check' else
                         '备份并同步启动链 / backing up and syncing boot chain',
-                        f'ASH_STANDALONE=1 /data/adb/magisk/busybox sh {script} {mode}', timeout=600)
+                        android_shell(script, mode), timeout=600)
     print(result)
 
 
@@ -400,7 +460,8 @@ def install_preflight():
 
 
 def android_checks():
-    global SU, SERIAL
+    global SU, SERIAL, ANDROID_BUSYBOX
+    SU = ANDROID_BUSYBOX = None
     say('连接设备 / looking for Android (USB debugging on)')
     devs = [l for l in adb('devices').splitlines()[1:] if l.strip().endswith('\tdevice')]
     if not SERIAL and len(devs) > 1 and sys.stdin.isatty() and not GUI:
@@ -418,7 +479,7 @@ def android_checks():
             SU = s
             break
     if not SU:
-        die('no root: install Magisk and grant Shell superuser access')
+        die('no root: grant Shell superuser access in Magisk or KernelSU/KSUNext')
     profile = package_profile()
     if profile:
         model = sh('getprop ro.product.model').strip()
@@ -430,7 +491,7 @@ def android_checks():
         die('the bootloader is locked (verifiedbootstate is not orange)')
     if 'ok' not in su('[ -e /dev/block/by-name/boot_b ] && [ -e /dev/block/by-name/l_agdsp_a ] && echo ok'):
         die('no boot_b or l_agdsp_a partition: not an E5?')
-    su_checked('检查 Magisk 工具 / checking Magisk tools', 'test -x /data/adb/magisk/busybox')
+    android_tools()
     print(f'   ok ({sh("getprop ro.product.model").strip()}, root via {SU})')
 
 

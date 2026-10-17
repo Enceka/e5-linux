@@ -28,12 +28,15 @@ window.T551M = (() => {
     function syncTrafficPicker() {
         if (!trafficPicker) return;
         const {select, button, list} = trafficPicker;
-        button.textContent = select.selectedOptions[0]?.textContent || '';
+        const text = select.selectedOptions[0]?.textContent || '';
+        if (button.textContent !== text) button.textContent = text;
         for (const [i, option] of [...select.options].entries()) {
             const row = list.children[i];
-            row.querySelector('span').textContent = option.textContent;
-            row.setAttribute('aria-selected', String(option.selected));
-            row.tabIndex = option.selected ? 0 : -1;
+            const span = row.querySelector('span'), selected = String(option.selected);
+            if (span.textContent !== option.textContent) span.textContent = option.textContent;
+            if (row.getAttribute('aria-selected') !== selected) row.setAttribute('aria-selected', selected);
+            const tabIndex = option.selected ? 0 : -1;
+            if (row.tabIndex !== tabIndex) row.tabIndex = tabIndex;
         }
     }
     function bootTrafficPicker() {
@@ -100,6 +103,17 @@ window.T551M = (() => {
     const navDefaults = [0,1,2,3,7];
     let navKey = '';
     let appliedKey = '';
+    function pageOrder() {
+        return [...new Set(navDefaults.map((fallback, i) => {
+            const value = config['nav_slot' + (i+1)];
+            return value != null && /^[0-8]$/.test(String(value)) ? +value : fallback;
+        }).concat(titles.map((_, i) => i)))];
+    }
+    function position(index) { return pageOrder().indexOf(index); }
+    function step(delta) {
+        const order = pageOrder();
+        navigate(order[(order.indexOf(page) + delta + order.length) % order.length]);
+    }
     function navigation() {
         const items = navDefaults.map((fallback, i) => {
             const value = config['nav_slot' + (i+1)];
@@ -109,6 +123,14 @@ window.T551M = (() => {
         if (key === navKey) return;
         navKey = key;
         el('mobile-nav').innerHTML = items.map(i => `<button data-page="${i}">${svg(pageIcons[i])}<span data-page-label="${i}">${label(i)}</span></button>`).join('');
+        // CSS ordering preserves live iframe/DOM state and makes the existing
+        // lightweight slide animation follow the same order as the buttons.
+        const order = pageOrder();
+        order.forEach((id, index) => { pages[id].style.order = index; });
+        el('pages').style.transform = `translateX(${-100 * position(page)}%)`;
+        el('mobile-menu').querySelectorAll('.mobile-grid [data-page]').forEach(node => {
+            node.style.order = position(+node.dataset.page);
+        });
     }
 
     function menu(on, immediate=false) {
@@ -349,7 +371,6 @@ window.T551M = (() => {
     });
     function status(data) {
         if (!mounted) return;
-        syncTrafficPicker();
         const first = !Object.keys(config).length;
         const lockWasEnabled = config.lock_enabled !== false;
         config = data.screen || {};
@@ -373,16 +394,19 @@ window.T551M = (() => {
         // Polling/data delivery keeps its original cadence while the display
         // is dark. Paint the newest snapshot on wake, not invisible DOM now.
         if (dark) return;
+        syncTrafficPicker();
         apply();
         clock();
         const boot = data.boot || {};
-        el('home-boot').hidden = boot.temporary !== true;
+        const bootHidden = boot.temporary !== true;
+        if (el('home-boot').hidden !== bootHidden) el('home-boot').hidden = bootHidden;
         setText('home-boot-title', words('当前为临时启动 OpenWrt', 'OpenWrt was booted temporarily'));
         setText('home-boot-note', boot.can_set_default
             ? words('是否设为默认启动？不会立即重启或断网。', 'Make it the default? No reboot or network interruption.')
             : words('当前启动镜像不支持设置默认启动', 'This boot image cannot set a default boot'));
         setText('home-boot-default', words('设为默认启动', 'Make default boot'));
-        el('home-boot-default').disabled = bootBusy || boot.can_set_default !== true;
+        const bootDisabled = bootBusy || boot.can_set_default !== true;
+        if (el('home-boot-default').disabled !== bootDisabled) el('home-boot-default').disabled = bootDisabled;
         setText('hero-uptime-label', words('本次运行时长', 'Uptime'));
         setText('hero-uptime', data.system?.uptime == null ? '—' : fmtDuration(data.system.uptime));
         const usb = data.usb || {}, attached = usb.devices || [];
@@ -479,6 +503,7 @@ window.T551M = (() => {
         resetGesture();
         resetIdle();
         if (last) render(last);
+        stRefreshVisible();
     }
     function unlock(velocity=0) {
         if (animation != null) return;
@@ -743,5 +768,5 @@ window.T551M = (() => {
             row.classList.toggle('has-value', !!row.querySelector('.sv')?.textContent.trim());
         }
     }
-    return {boot, status, power, page:pageChanged, isLocked:lockedNow, operator, amount, speed, app, appClosed, settings, attachKeys, refreshUsage};
+    return {boot, status, power, page:pageChanged, position, step, isLocked:lockedNow, operator, amount, speed, app, appClosed, settings, attachKeys, refreshUsage};
 })();

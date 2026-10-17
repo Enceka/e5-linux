@@ -21,6 +21,7 @@ def main():
     args=ap.parse_args()
     fixtures=json.loads(args.fixtures.read_text(encoding='utf-8'))
     posts=[]
+    gets=[]
     power_reply={'ok':True}
     fixtures['/api/status']['screen']['idle']=0
     fixtures['/api/status']['screen']['ui_size']='standard'
@@ -33,6 +34,7 @@ def main():
         def log_message(self,*args):pass
         def do_GET(self):
             path=urlsplit(self.path).path
+            gets.append(path)
             if path=='/api/qr':
                 qr=args.fixtures.with_name('screen-wifi.svg')
                 self.send_response(200);self.send_header('Content-Type','image/svg+xml');self.end_headers();self.wfile.write(qr.read_bytes());return
@@ -237,6 +239,23 @@ def main():
         for index in [5,6,2,3,7]:
             page.locator(f'#mobile-nav [data-page="{index}"]').tap(); page.wait_for_timeout(300)
             assert page.evaluate('page')==index
+        # Physical arrows and visual ordering follow the customized navigation.
+        page.evaluate('showPage(5)')
+        for key, target in [('ArrowRight',6),('ArrowRight',2),('ArrowLeft',6)]:
+            page.keyboard.press(key); page.wait_for_timeout(300)
+            assert page.evaluate('page')==target
+            assert abs(page.evaluate('pages[page].getBoundingClientRect().left')) < 2
+        # Unlock refreshes only the visible category, not an unsaved editor.
+        fixtures['/api/settings/charge']={'items':[{'id':'power_on','label':'Wake test','type':'toggle','value':True}]}
+        page.evaluate("showPage(P.settings);st=[{view:'menu'},{view:'cat',cat:{id:'charge',label:'Charge'},items:[]}];stRender();setBlank(true);setBlank(false)")
+        before=gets.count('/api/settings/charge')
+        page.wait_for_timeout(500);swipe();page.wait_for_function("stTop().items[0]?.id === 'power_on'")
+        assert gets.count('/api/settings/charge')==before+1
+        page.evaluate("st.push({view:'edit',cat:stTop().cat,item:{id:'x',label:'Unsaved',type:'number',value:7},parent:stTop()});stRender();setBlank(true);setBlank(false)")
+        page.wait_for_timeout(500);swipe();page.wait_for_timeout(400)
+        assert page.evaluate("stTop().view === 'edit' && stTop().item.value === 7")
+        assert gets.count('/api/settings/charge')==before+1
+        page.evaluate("st=[{view:'menu'}];stRender()")
         # Display size changes actual type and control height; no page overflows.
         sizes=[]
         for size in ['small','standard','large','extra']:

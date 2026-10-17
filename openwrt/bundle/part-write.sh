@@ -56,11 +56,12 @@ echo '2/4 checking and growing filesystem'
 tools e2fsck -f -p "$dev" || { rc=$?; [ "$rc" = 1 ] || exit "$rc"; }
 if [ "$grow" = 1 ]; then
     tools resize2fs "$dev" "$((sectors / 8))"
-    [ "$(od -An -tu4 -j 1048 -N 4 "$dev" | tr -d ' \n')" = 2 ]
-    [ "$(od -An -tu4 -j 1028 -N 4 "$dev" | tr -d ' \n')" = "$((sectors / 8))" ]
-    [ "$(od -An -tu4 -j 1360 -N 4 "$dev" | tr -d ' \n')" = 0 ]
 fi
 tools e2fsck -f -n "$dev"
+if [ "$grow" = 1 ]; then
+    . "$stage/ext4-geometry.sh"
+    ext4_verify_grown "$dev" "$sectors" || { echo 'filesystem geometry does not fill target' >&2; exit 1; }
+fi
 echo '3/4 installing device firmware and settings'
 mount -t ext4 "$dev" "$stage/view"; mounted=1
 tar -xf /data/local/tmp/e5-device-files.tar -C "$stage/view"

@@ -8,6 +8,7 @@ let ctx={run:()=>1,uci:()=>({get:(c,s,k)=>k=='control_slot'?selected:null}),
     ubus:(object,method,args)=>{
         push(calls,{object,method,args});
         if (method=='lock_get') return state;
+        if (method=='sim_radio_get') return {ok:1,enabled:[true,true]};
         if (method=='cells') return {cell:{neigh:[{rat:'lte',arfcn:3740,pci:36}]}};
         return fail ? {ok:0,error:'Unsupported band requested'} : {ok:1,started:1,id:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'};
     }};

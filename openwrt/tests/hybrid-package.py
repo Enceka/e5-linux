@@ -58,6 +58,13 @@ class Package(unittest.TestCase):
         # An architecture fixture, deliberately never executed.
         elf = bytearray(64); elf[:6] = b'\x7fELF\x02\x01'; elf[18:20] = b'\xb7\x00'
         (root / 'bootctl').write_bytes(elf)
+        # Static ARM64 ELF header fixture, deliberately never executed.
+        import struct
+        elf[6] = 1
+        struct.pack_into('<HH', elf, 16, 2, 183)
+        struct.pack_into('<Q', elf, 32, 64)
+        struct.pack_into('<HH', elf, 54, 56, 1)
+        (files / 'busybox').write_bytes(elf + struct.pack('<IIQQQQQQ', 1, 5, 0, 0, 0, 120, 120, 4096))
         return package
 
     def test_three_profiles_share_one_payload_and_keep_only_public_files_on_top(self):
@@ -68,6 +75,7 @@ class Package(unittest.TestCase):
                 self.assertEqual({p.name for p in package.iterdir() if p.is_file()},
                                  {'OpenWrt-Installer.py', 'START-HERE.md', 'customize.sh', 'module.prop', 'skip_mount'})
                 self.assertEqual(len(list(package.rglob('*.ext4.gz'))), 1)
+                self.assertIn('files/busybox', hashes)
                 self.assertTrue(all(p.name.isascii() for p in package.rglob('*')))
                 self.assertNotIn('@MODEL@', (package / 'START-HERE.md').read_text(encoding='utf-8'))
                 self.assertIn(f'ANDROID_MODEL=', (package / 'files/tf-install.env').read_text())
@@ -93,12 +101,14 @@ class Package(unittest.TestCase):
                 self.assertIn('FAILED', result.stdout)
 
     def test_finalize_rejects_wrong_architecture_profile_and_modified_boot(self):
-        for damage in ('arch', 'profile', 'boot'):
+        for damage in ('arch', 'profile', 'boot', 'busybox', 'missing-busybox'):
             with self.subTest(damage=damage), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder); package = self.fixture(root, 'e5')
                 if damage == 'arch': (root / 'bootctl').write_bytes(b'not ARM64')
                 elif damage == 'profile': (package / 'files/device-profile.json').write_text('{}')
-                else: (package / 'files/boot.img').write_bytes(b'different boot')
+                elif damage == 'boot': (package / 'files/boot.img').write_bytes(b'different boot')
+                elif damage == 'busybox': (package / 'files/busybox').write_bytes(b'not static ARM64')
+                else: (package / 'files/busybox').unlink()
                 with self.assertRaises(ValueError): finish['finalize'](package, 'e5', root / 'bootctl')
                 self.assertFalse((package / 'customize.sh').exists())
 

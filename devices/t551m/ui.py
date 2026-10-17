@@ -67,6 +67,14 @@ def stage(root, profile='t551m'):
             if srcdir == 'root' and src.relative_to(plugin / srcdir).as_posix() == 'etc/config/unisoc_apn':
                 target.chmod(0o600)
     # Fresh archive roots only receive the modem config in the loop above.
+    cipher_patch = TOP / 'devices/wifi-ciphers.py'
+    target = root / 'usr/libexec/e5-wifi-cipher-ui'
+    target.write_bytes(source_bytes(cipher_patch))
+    target.chmod(0o755)
+    runpy.run_path(str(cipher_patch))['patch'](root)
+    target = root / 'etc/uci-defaults/99-e5-wifi-ciphers'
+    target.write_text('#!/bin/sh\nexec /usr/libexec/e5-wifi-cipher-ui --root /\n', encoding='utf-8')
+    target.chmod(0o755)
     # Apply the profile defaults there too, not only to existing installations.
     runpy.run_path(str(Path(__file__).with_name('network-startup.py')))['patch_root'](root, profile)
     cache = Path(os.environ.get('E5_UI_CACHE', str(TOP / 'work/t551m/aurora')))

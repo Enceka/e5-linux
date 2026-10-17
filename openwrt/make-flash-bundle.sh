@@ -43,6 +43,11 @@ KERNEL=${E5_KERNEL:-$TOP/work/Image-bt2}
 STOCK_BOOT=${E5_STOCK_BOOT:-$TOP/dumps/boot_b.img}
 MISC_HEAD=${E5_MISC_HEAD:-$TOP/dumps/misc-head.bin}
 BUSYBOX=${E5_BUSYBOX:-$TOP/work/busybox/ext/usr/bin/busybox}
+python3 - "$TOP" "$BUSYBOX" <<'PY'
+from pathlib import Path
+import runpy, sys
+runpy.run_path(str(Path(sys.argv[1]) / 'openwrt/bundle/flash.py'))['validate_installer_busybox'](sys.argv[2])
+PY
 GIT=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
 # CI sets the epoch before compiling; local builds capture the package start.
 # POSIX TZ uses the opposite sign: CST-8 is fixed UTC+8, without daylight saving.
@@ -129,6 +134,8 @@ S=$(mktemp -d)
 trap 'rm -rf "$S0" "$S"' EXIT
 P=$S/$NAME
 mkdir -p "$P/files" "$P/scripts/tools"
+cp "$BUSYBOX" "$P/files/busybox"
+chmod 0755 "$P/files/busybox"
 if [ -n "$MAINLINE" ]; then
     python3 "$TOP/upstream/check-container-support.py" "$KOUT"
     cp "$KOUT/config" "$P/files/kernel.config"
@@ -138,6 +145,9 @@ fi
 python3 "$HERE/bundle/install-entrypoints.py" "$P"
 cp "$HERE/bundle/part-write.sh" "$P/files/"
 test -f "$OUT/ext4-tools.tar" || { echo 'Missing ext4-tools.tar: openwrt/prepare-ext4-tools.py --root CLEAN_ARM64_ROOT --out out/openwrt/ext4-tools.tar' >&2; exit 1; }
+tar -tf "$OUT/ext4-tools.tar" | grep -qx 'ext4-geometry.sh' || {
+    echo 'ext4-tools.tar is stale: rebuild it with openwrt/prepare-ext4-tools.py before packaging' >&2; exit 1;
+}
 cp "$OUT/ext4-tools.tar" "$P/files/"
 cp "$TOP/LICENSE" "$P/docs/LICENSE"
 cp "$IMG" "$P/files/openwrt.ext4.gz"

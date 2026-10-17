@@ -63,6 +63,7 @@ class TF(unittest.TestCase):
             tools=root/'tools'; (tools/'lib').mkdir(parents=True); (tools/'usr/sbin').mkdir(parents=True)
             loader=tools/'lib/ld-musl-aarch64.so.1'
             loader.write_text('#!/bin/sh\nshift 2\nexec "$@"\n'); loader.chmod(0o755)
+            shutil.copyfile(TOP/'openwrt/bundle/ext4-geometry.sh', tools/'ext4-geometry.sh')
             for name in ('e2fsck','resize2fs'): shutil.copyfile(shutil.which(name),tools/'usr/sbin'/name); (tools/'usr/sbin'/name).chmod(0o755)
             files=[p for p in tools.rglob('*') if p.is_file()]
             (tools/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.relative_to(tools).as_posix()+'\n' for p in files))
@@ -78,6 +79,29 @@ class TF(unittest.TestCase):
             self.assertEqual(blocks*4096,64<<30)
             data=subprocess.check_output(['debugfs','-R','cat /proof',str(disk)],stderr=subprocess.DEVNULL)
             self.assertEqual(data,b'preserved TF firmware')
+
+    def test_tiny_tail_and_partial_group_are_both_supported(self):
+        checker = TOP/'openwrt/bundle/ext4-geometry.sh'
+        with tempfile.TemporaryDirectory() as folder:
+            disk = Path(folder)/'geometry.ext4'
+            subprocess.run(['mke2fs','-q','-t','ext4','-b','4096',str(disk),'128M'],
+                           check=True, stderr=subprocess.DEVNULL)
+            for wanted, expected in ((65787,65536),(81920,81920)):
+                with self.subTest(wanted=wanted):
+                    with disk.open('r+b') as stream: stream.truncate(wanted*4096)
+                    subprocess.run(['resize2fs',str(disk)],check=True,capture_output=True)
+                    subprocess.run(['e2fsck','-fn',str(disk)],check=True,capture_output=True)
+                    with disk.open('rb') as stream:
+                        stream.seek(1028); self.assertEqual(int.from_bytes(stream.read(4),'little'),expected)
+                    result=subprocess.run(['busybox','ash','-c',
+                        '. "$1"; ext4_verify_grown "$2" "$3"','verify',str(checker),str(disk),str(wanted*8)],
+                        capture_output=True,text=True)
+                    self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            for sectors in (32768*8, 10*32768*8):
+                result=subprocess.run(['busybox','ash','-c',
+                    '. "$1"; ext4_verify_grown "$2" "$3"','verify',str(checker),str(disk),str(sectors)],
+                    capture_output=True,text=True)
+                self.assertNotEqual(result.returncode,0,'must reject overflow and substantial undergrowth')
 
 
 class BootProbe(unittest.TestCase):

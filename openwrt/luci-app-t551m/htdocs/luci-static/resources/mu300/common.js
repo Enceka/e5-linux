@@ -735,6 +735,8 @@ var DASH_I18N = {
 	"临时充满后，自动恢复原来的充电上限。": ["The original charge limit resumes automatically after reaching full charge.", "Tam şarjdan sonra önceki şarj sınırı otomatik geri yüklenir."],
 	"充电阈值必须是范围内的整数": ["Charge thresholds must be whole numbers within range", "Şarj eşikleri belirtilen aralıkta tam sayı olmalıdır"],
 	"恢复充电阈值必须低于停止阈值": ["The resume threshold must be lower than the stop threshold", "Devam eşiği durdurma eşiğinden düşük olmalıdır"],
+	"插电直接启动 OpenWrt": ["Boot OpenWrt when plugged in", "Güç bağlandığında OpenWrt'yi başlat"],
+	"关机后插电，跳过充电动画并启动系统。关闭此选项保留关机充电；下次启动生效。": ["After shutdown, plug in to skip the charging screen and boot. Turn this off to keep charging mode. Takes effect on the next boot.", "Kapatıldıktan sonra güç bağlandığında şarj ekranını atlayıp başlatır. Şarj modunu korumak için kapatın. Sonraki açılışta uygulanır."],
 	"当前设备的充电控制暂不可用": ["Charging controls are currently unavailable on this device", "Bu cihazda şarj denetimi şu anda kullanılamıyor"],
 	"充电设置保存失败": ["Failed to save charging settings", "Şarj ayarları kaydedilemedi"],
 	"充电设置已保存，但服务应用失败，请重试": ["Charging settings were saved, but the service could not apply them. Please retry.", "Şarj ayarları kaydedildi ancak hizmet uygulayamadı. Yeniden deneyin."],

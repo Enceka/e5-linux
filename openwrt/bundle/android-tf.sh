@@ -37,12 +37,10 @@ case ${1:-} in
         case $rc in 0|1) ;; *) tf_fail 'filesystem check failed';; esac
         "$loader" --library-path "$libs" "$work/usr/sbin/resize2fs" "$dev"
         "$loader" --library-path "$libs" "$work/usr/sbin/e2fsck" -fn "$dev"
-        # Compare 4 KiB block counts, avoiding Android's 32-bit byte arithmetic.
+        # Keep geometry checks shared with the internal-partition installer.
         sectors=$(blockdev --getsz "$dev")
-        blocks=$(od -An -tu4 -j 1028 -N 4 "$dev" | tr -d ' \n')
-        high=$(od -An -tu4 -j 1360 -N 4 "$dev" | tr -d ' \n')
-        shift=$(od -An -tu4 -j 1048 -N 4 "$dev" | tr -d ' \n')
-        [ "$shift" = 2 ] && [ "$high" = 0 ] && [ "$blocks" = "$((sectors / 8))" ] || tf_fail 'filesystem did not fill target'
+        . "$work/ext4-geometry.sh"
+        ext4_verify_grown "$dev" "$sectors" || tf_fail 'filesystem geometry does not fill target'
         ;;
     *) tf_fail 'expected target or grow';;
 esac

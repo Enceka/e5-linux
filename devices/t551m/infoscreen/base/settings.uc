@@ -208,6 +208,9 @@ function uci_category(id, label, defs, extra_items, extra_set) {
 }
 
 const charge = uci_category('charge', L('充电', 'Charging'), [
+	{ id: 'power_on', type:'toggle', uci:'e5-charge.main.power_on', default:'0',
+	  label:L('插电直接启动','Start when plugged in'),
+	  note:L('关机后插电跳过充电动画，下次启动生效','Skip the charging screen on the next charger boot') },
 	{ id: 'enabled', type: 'toggle', uci: 'e5-charge.main.enabled', default: '0',
 	  label: L('充电上限', 'Charge limit'), apply: '/etc/init.d/e5-charge reload',
 	  note: L('到上限停止充电，降到下限再充', 'Stop at the upper limit, charge again at the lower') },

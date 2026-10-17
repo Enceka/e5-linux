@@ -198,6 +198,7 @@ class TwoStage(unittest.TestCase):
                     chain.append(mode)
                     if fault=='chain':raise SystemExit('injected boot-chain failure')
                 g=dict(F=str(files),TMP='/data/local/tmp',adb=lambda *a,**k:'SERIAL',
+                       android_shell=lambda script,args: 'sh '+script+' '+args,
                        sh=lambda *a,**k:'T551M',sha256=lambda *a:'f'*64,
                        busy=lambda *a:contextlib.nullcontext(),su_checked=checked,
                        install_preflight=lambda:None,bootchain=sync_chain,

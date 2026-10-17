@@ -748,7 +748,7 @@ function keyLock(power, star) {
 function showPage(n) {
 	page = (n + pages.length) % pages.length;
 	pages.forEach((node, index) => node.classList.toggle('is-current', index == page));
-	$('pages').style.transform = `translateX(${-100 * page}%)`;
+	$('pages').style.transform = `translateX(${-100 * T551M.position(page)}%)`;
 	$('dots').innerHTML = pages.map((_, i) => `<i class="${i == page ? 'on' : ''}"></i>`).join('');
 	$('foot-title').textContent = t(pages[page].dataset.title);
 	if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -881,8 +881,8 @@ document.addEventListener('keydown', (e) => {
 	}
 	if (page == P.settings && stKey(kind)) return;
 	switch (kind) {
-	case 'left': showPage(page - 1); break;
-	case 'right': showPage(page + 1); break;
+	case 'left': T551M.step(-1); break;
+	case 'right': T551M.step(1); break;
 	case 'up': moveFocus(-1); break;
 	case 'down': moveFocus(1); break;
 	case 'ok':
@@ -951,7 +951,7 @@ document.addEventListener('touchend', (e) => {
 	const p = e.changedTouches[0];
 	const dx = p.clientX - touch.x, dy = p.clientY - touch.y;
 	if (Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy) && Date.now() - touch.t < 800)
-		showPage(page + (dx < 0 ? 1 : -1));
+		T551M.step(dx < 0 ? 1 : -1);
 	touch = null;
 }, true);
 
@@ -1244,6 +1244,31 @@ let stArmed = null;               // { key, timer }: the row waiting for its sec
 const lbl = (l) => errorText((l && typeof l == 'object') ? (l[lang] ?? l.zh ?? '') : (l ?? ''), lang);
 
 function stTop() { return st[st.length - 1]; }
+
+let stWakeRequest = null, stWakeGeneration = 0;
+function stRefreshVisible() {
+	const generation = ++stWakeGeneration;
+	const v = stTop();
+	const visible = () => !blank && page == P.settings && !T551M.isLocked() && stTop() === v && v?.view == 'cat' && !v.saving;
+	if (!visible()) return;
+	if (stWakeRequest) {
+		// Several wake events may arrive during a slow read. Only the latest
+		// event gets one new read after it; do not display an older snapshot.
+		return stWakeRequest.then(() => {
+			if (generation === stWakeGeneration && visible()) return stRefreshVisible();
+		});
+	}
+	const path = '/api/settings/' + v.cat.id;
+	stWakeRequest = (async () => {
+		// A request started before sleep may contain an old snapshot. Finish
+		// it first, then make one fresh read; never replace an open editor.
+		await pageRequests.get(P.settings + ':' + path)?.catch(() => {});
+		if (!visible() || generation !== stWakeGeneration) return;
+		const r = await pageRead(path, P.settings).catch(() => null);
+		if (r && visible() && generation === stWakeGeneration) { v.items = r.items ?? []; stRender(); }
+	})().finally(() => { stWakeRequest = null; });
+	return stWakeRequest;
+}
 
 async function stOpen() {
 	if (!st.length) st = [{ view: 'menu' }];

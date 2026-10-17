@@ -1,0 +1,6 @@
+{
+  "luci-mod-network-config": {
+    "description": "Read wireless cipher capabilities",
+    "read": {"file": {"/usr/libexec/e5-wifi-ciphers": ["exec"]}}
+  }
+}

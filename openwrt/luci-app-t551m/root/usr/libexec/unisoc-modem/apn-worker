@@ -14,6 +14,8 @@ if(action=='resolve') {
         let s=apn.automatic(identity.imsi);
         if(s)result={ok:1,source:'auto',settings:s};
     }
+} else if(action=='status') {
+    result=apn.status(c,identity);
 } else if(action=='get') {
     result=apn.get(c,identity);
     let bus=connect(null,2), status=result.ok?bus?.call('network.interface.'+iface,'status',{}):null;

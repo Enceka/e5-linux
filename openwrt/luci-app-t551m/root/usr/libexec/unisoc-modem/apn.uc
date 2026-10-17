@@ -90,6 +90,17 @@ export function get(c,identity) {
     return {ok:1,iface,current:publicCurrent,profiles,data_sim:identity?.slot=='1'?1:identity?.slot=='0'?0:null,
         remembered:!!selected,mode:selected?.mode || 'global',identity_ready:!!valid_identity(identity),source:resolved.source || 'error'};
 };
+export function status(c,identity) {
+    let state=get(c,identity);
+    // Mirror the legacy dial resolver without overriding a per-SIM choice.
+    if(state.ok && state.source=='network' && c.get('network',state.iface,'apn_auto')=='1') {
+        let automaticSettings=automatic(identity?.imsi);
+        if(automaticSettings) {state.current=automaticSettings;state.source='auto';}
+    }
+    // Dashboard polling only needs public selection fields, never credentials.
+    return state.ok ? {ok:1,apn:state.current.apn,source:state.source,data_sim:state.data_sim}
+        : {ok:0,error:state.error};
+};
 export function change(c,action,p,reload,identity) {
     let state=get(c,identity);
     if(!state.ok)return state;

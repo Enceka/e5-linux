@@ -38,6 +38,8 @@ def invoke(action, who, payload=None):
         dict(identity=who, payload=payload or {})), text=True,
         stderr=subprocess.DEVNULL, timeout=20)
     result = json.loads(raw)
+    if action == 'status':
+        return result
     capable = auth_supported()
     if action == 'get':
         result['auth_supported'] = capable
@@ -61,16 +63,18 @@ def auth_supported():
 
 
 def main(action, payload=None, device='unisoc-sipc'):
-    if action not in ('get', 'resolve', 'save', 'delete', 'apply', 'auto'):
+    if action not in ('get', 'status', 'resolve', 'save', 'delete', 'apply', 'auto'):
         return dict(ok=0, error='apn_invalid')
     RUN.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Same flock as data-sim: an APN save/apply must not race a SIM switch.
     # The private dial resolver is invoked *during* a SIM switch, so it must
     # not recursively acquire that lock. netifd supplies the active modem.
-    if action in ('get', 'resolve'):
+    if action in ('get', 'status', 'resolve'):
         try:
             who = identity(device)
         except (OSError, ValueError, subprocess.SubprocessError):
+            if action == 'status':
+                return dict(ok=0, error='apn_identity')
             who = {}
         return invoke(action, who)
     with (RUN / 'switch.lock').open('a') as lock:
@@ -108,7 +112,7 @@ if __name__ == '__main__':
     try:
         action = sys.argv[1] if len(sys.argv) > 1 else 'get'
         payload = None
-        if action not in ('get', 'resolve'):
+        if action not in ('get', 'status', 'resolve'):
             raw = sys.stdin.read(4097)
             if len(raw) > 4096:
                 raise ValueError('request too large')

@@ -85,6 +85,24 @@ class APN(unittest.TestCase):
             self.assertTrue(apn.main('resolve')['ok'])
             worker.assert_called_once_with('resolve', self.who)
 
+    def test_status_is_read_only_and_does_not_take_the_switch_lock(self):
+        with patch.object(apn,'identity',return_value=self.who),patch.object(apn,'invoke',return_value={'ok':1,'apn':'CMIOT5G'}) as worker,patch.object(apn.fcntl,'flock',side_effect=AssertionError('status must not lock')):
+            self.assertEqual(apn.main('status')['apn'],'CMIOT5G')
+            worker.assert_called_once_with('status',self.who)
+
+    def test_status_has_no_binary_capability_scan(self):
+        public=dict(ok=1,apn='CMIOT5G',source='sim',data_sim=1)
+        with patch.object(apn.subprocess,'check_output',return_value=json.dumps(public)),patch.object(apn,'auth_supported',side_effect=AssertionError('hot path binary scan')):
+            self.assertEqual(apn.invoke('status',self.who),public)
+
+    def test_status_identity_failure_is_unknown_without_changing_get_fallback(self):
+        for error in (OSError('missing card'), ValueError('card changed'), subprocess.TimeoutExpired('mmcli',4)):
+            with patch.object(apn,'identity',side_effect=error),patch.object(apn,'invoke',return_value={'ok':1}) as worker:
+                self.assertEqual(apn.main('status'),{'ok':0,'error':'apn_identity'})
+                worker.assert_not_called()
+                self.assertEqual(apn.main('get'),{'ok':1})
+                worker.assert_called_once_with('get',{})
+
     def test_global_apply_without_iccid_cannot_bypass_binding(self):
         with patch.object(apn, 'identity', return_value={'slot':'1'}), patch.object(apn, 'auth_supported', return_value=True), patch.object(apn, 'invoke') as worker:
             self.assertEqual(apn.main('apply', {'id':'automatic','remember':False})['error'], 'apn_identity')
@@ -145,6 +163,7 @@ class APN(unittest.TestCase):
 \t}
 }
 proto_modemmanager_setup() {
+\t# always cleanup before attempting a new connection, just in case
 \t\t\tproto_notify_error "${interface}" MM_FAILED_REASON_SIM_MISSING
 \t\t\tproto_block_restart "${interface}"
 \t# set initial eps bearer settings
@@ -157,7 +176,9 @@ proto_modemmanager_setup() {
 \t\treturn 1
 \t}
 }
-proto_modemmanager_teardown() { :; }
+proto_modemmanager_teardown() {
+\tlocal disable="$(uci_get network "$interface" disable_modem "1")"
+}
 '''
         for profile in ('e5', 't551m', 'm8'):
             root = self.root / profile
@@ -193,7 +214,7 @@ proto_modemmanager_teardown() { :; }
             for model in ('e5', 't551m', 'm8'):
                 root = self.root / ('stage-' + model)
                 ui(root, profile=model)
-                for file in ('usr/libexec/unisoc-modem/apn','usr/libexec/unisoc-modem/apn-worker','usr/libexec/unisoc-modem/apn.uc','www/luci-static/resources/view/mu300/apn.js','etc/config/unisoc_apn'):
+                for file in ('usr/libexec/unisoc-modem/apn','usr/libexec/unisoc-modem/apn-worker','usr/libexec/unisoc-modem/apn.uc','usr/libexec/unisoc-modem/dashboard-network.sh','www/luci-static/resources/view/mu300/apn.js','etc/config/unisoc_apn'):
                     self.assertTrue((root/file).is_file(), model + ':' + file)
                 config = root / 'etc/config/unisoc_apn'
                 config.write_text("config profile 'user'\n option name 'Keep me'\n")

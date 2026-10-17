@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from test_dashboard_data import JSONFILTER_STUB
 
 COLLECTOR = Path(__file__).resolve().parents[2] / 'openwrt/luci-app-t551m/root/usr/libexec/unisoc-modem/cell'
 ADAPTER = '''#!/usr/bin/env python3
@@ -18,7 +19,7 @@ from pathlib import Path
 root = Path(os.environ['TEST_CELL_ROOT'])
 cmd = sys.argv[-1]
 with (root / 'commands').open('a') as f: f.write(cmd + '\\n')
-gate = {'AT+SPENGMD=0,6,0':'engineering', 'AT+SPENGMD=0,6,6':'neighbors', 'AT+CGEQOSRDP=1':'identity'}.get(cmd)
+gate = {'AT+SPENGMD=0,6,0':'engineering', 'AT+SPENGMD=0,6,6':'neighbors', 'AT+CGEQOSRDP=4':'identity'}.get(cmd)
 if gate:
     (root / (gate + '.waiting')).touch()
     until = time.monotonic() + 10
@@ -56,7 +57,12 @@ class ProgressiveCollector(unittest.TestCase):
                 root = Path(tmp)
                 at = root / 'at'
                 at.write_text(ADAPTER); at.chmod(0o755)
+                bins=root/'bin';bins.mkdir()
+                for name,body in (('jsonfilter',JSONFILTER_STUB),('ubus','#!/bin/sh\nprintf \'%s\\n\' "$TEST_WAN"\n')):
+                    path=bins/name;path.write_text(body);path.chmod(0o755)
                 env = dict(os.environ, MU300_SIM_SLOT=slot, MU300_AT=str(at),
+                           PATH=str(bins)+os.pathsep+os.environ['PATH'],
+                           TEST_WAN=json.dumps({'up':True,'l3_device':'sipa_eth3' if slot=='0' else 'sipa_eth11','uptime':42}),
                            MU300_DASH_DIR=str(root / 'cache'), MU300_DASH_IDENT_DIR=str(root / 'ident'),
                            MU300_DASH_POOL_DIR=str(root / 'pool'), TEST_CELL_ROOT=str(root))
                 proc = subprocess.Popen(['sh', str(COLLECTOR)], env=env, start_new_session=True)

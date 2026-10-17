@@ -24,6 +24,9 @@
 
 export PATH="$PATH:/opt/mu300/bin:/opt/mu300/busybox-bin:/usr/libexec/unisoc-modem:/usr/sbin:/sbin"
 
+DASH_NET_BIN=${MU300_DASH_BIN:-${0%/*}}
+. "$DASH_NET_BIN/dashboard-network.sh"
+
 BB=/opt/mu300/bin/busybox
 [ -x "$BB" ] || BB=busybox
 t3() { timeout -s KILL 3 "$@" 2>/dev/null; }   # OpenWrt uses standalone timeout.
@@ -105,9 +108,7 @@ DATA_IFACE=$(cfg data_interface); DATA_IFACE=${DATA_IFACE:-wan}
 DATA_IFACE6=$(cfg data_interface_v6); DATA_IFACE6=${DATA_IFACE6:-wan6}
 WANJSON=$(t3 ubus call "network.interface.$DATA_IFACE" status)
 WAN6JSON=$(t3 ubus call "network.interface.$DATA_IFACE6" status)
-DATA_DEVICE=$(cfg data_device)
-[ -n "$DATA_DEVICE" ] || DATA_DEVICE=$(jval "$WANJSON" l3_device)
-[ -n "$DATA_DEVICE" ] || DATA_DEVICE=sipa_eth0
+DATA_DEVICE=$(dash_data_device "$WANJSON" "$(cfg data_device)")
 VIEW_DATA=1
 case ${MU300_SIM_SLOT:-} in
     0|1)
@@ -133,17 +134,16 @@ wan_dns_servers() {
     done | awk 'NF && !seen[$0]++ { printf "%s%s", sep, $0; sep=", " }'
 }
 
-wan_up=$(jval "$WANJSON" up)
+wan_up=$(dash_json "$WANJSON" '@.up')
 [ "$wan_up" = "true" ] && wan_up=1 || wan_up=0
-wan_uptime=$(jval "$WANJSON" uptime)
-wan_proto=$(jval "$WANJSON" proto)
+wan_uptime=$(dash_json "$WANJSON" '@.uptime')
+wan_proto=$(dash_json "$WANJSON" '@.proto')
 wan_ip4=$(jaddr4 "$WANJSON")
-wan6_up=$(jval "$WAN6JSON" up)
+wan6_up=$(dash_json "$WAN6JSON" '@.up')
 [ "$wan6_up" = "true" ] && wan6_up=1 || wan6_up=0
 wan6_ip=$(t2 ip -6 addr show "$DATA_DEVICE" 2>/dev/null | awk '/inet6 [23]/{split($2,s,"/"); print s[1]; exit}')
 wan_dns=$(wan_dns_servers "$WANJSON" "$WAN6JSON")
-apn=$(t3 uci -q get "network.$DATA_IFACE.apn")
-[ -n "$apn" ] || apn="(SIM default)"
+apn=$(dash_apn "$DASH_NET_BIN/apn" "${MU300_SIM_SLOT:-}")
 if [ "$VIEW_DATA" = 0 ]; then
     wan_up=0; wan_uptime=0; wan_proto=; wan_ip4=; wan6_ip=; wan_dns=; apn=
 fi
@@ -204,6 +204,7 @@ P_I=$(n_or_null "$(awk -v v="$P_I" 'BEGIN{if(v!="")printf "%d",v}')")
 
 # ------------------------------------------------------- interface counters
 net_obj() {  # net_obj IFACE -> {"rx":N,"tx":N,"up":0|1} or null
+    case "$1" in ''|*[!a-zA-Z0-9_.:-]*|.|..) echo null; return ;; esac
     local d=/sys/class/net/$1
     [ -d "$d" ] || { echo null; return; }
     local rx tx up
@@ -391,8 +392,8 @@ printf '"power":{"present":%d,"capacity":%s,"status":%s,"volt":%s,"ua":%s,"usb":
 MOBILE_NET=$(net_obj "$DATA_DEVICE")
 printf '"net":{"mobile":%s,"sipa_eth0":%s,"brlan":%s,"wlan0":%s,"usb0":%s},' \
     "$MOBILE_NET" "$MOBILE_NET" "$(net_obj "$LAN_DEVICE")" "$(net_obj "$WIFI_DEVICE")" "$(net_obj "$USB_DEVICE")"
-printf '"wan":{"up":%d,"uptime":%s,"proto":%s,"apn":%s,"ip4":%s,"ip6":%s,"dns":%s},' \
-    "$wan_up" "$(n_or_null "$wan_uptime")" "$(qs "$wan_proto")" "$(qs "$apn")" "$(qs "$wan_ip4")" "$(qs "$wan6_ip")" "$(qs "$wan_dns")"
+printf '"wan":{"up":%d,"uptime":%s,"proto":%s,"device":%s,"apn":%s,"ip4":%s,"ip6":%s,"dns":%s},' \
+    "$wan_up" "$(n_or_null "$wan_uptime")" "$(qs "$wan_proto")" "$(qs "$DATA_DEVICE")" "$(qs "$apn")" "$(qs "$wan_ip4")" "$(qs "$wan6_ip")" "$(qs "$wan_dns")"
 printf '"wifi":{"up":%d,"ssid":%s,"channel":%s,"band":%s,"width":%s,"country":%s,"enc":%s,"hidden":%s,"hostapd":%d,"clients":[%s],"clients_n":%s},' \
     "$W_UP" "$(qs "$W_SSID")" "$(qs "$W_CH")" "$(qs "$W_BAND")" "$(qs "$W_WIDTH")" "$(qs "$W_COUNTRY")" "$(qs "$W_ENC")" "$(n_or_null "$W_HIDDEN")" "$W_HOSTAPD" "${W_CLIST:-}" "$W_CN"
 printf '"lan":{"leases":%s,"ip":%s,"list":[%s]},' "$(n_or_null "$LAN_LEASES")" "$(qs "$LAN_IP")" "${LEASES:-}"

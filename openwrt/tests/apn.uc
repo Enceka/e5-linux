@@ -105,3 +105,16 @@ c=cursor(dir,dir+'/delta');
 check(a.resolve(c,otherLetterCard,{}).settings.apn=='cmnet','letter auto binding survives reload');
 check(a.resolve(c,letterCard,{}).settings.apn=='letter.apn','other letter binding unchanged');
 printf('alphanumeric APN identities: %d checks passed\n',n);
+
+// Dashboard status follows the per-SIM selection, without public credentials.
+let summary=a.status(c,letterCard);
+check(summary.ok && summary.apn=='letter.apn' && summary.source=='sim','dashboard follows remembered profile');
+check(!('username' in summary) && !('password' in summary) && !('profiles' in summary) && !('identity' in summary),'dashboard status exposes no credentials or SIM identity');
+check(a.status(c,otherLetterCard).apn=='cmnet','dashboard follows automatic profile for the other SIM');
+check(c.get('network','wan','apn')!='letter.apn','dashboard read does not rewrite global WAN APN');
+printf('dashboard APN selection: %d checks passed\n',n);
+c.set('network','wan','apn_auto','1');
+check(a.status(c,letterCard).apn=='letter.apn','legacy automatic flag does not override per-SIM selection');
+let legacySummary=a.status(c,{iccid:'89860001234567890000',imsi:'460001234567890'});
+check(legacySummary.apn=='cmnet' && legacySummary.source=='auto','dashboard mirrors legacy automatic dial selection');
+printf('legacy dashboard APN selection: %d checks passed\n',n);

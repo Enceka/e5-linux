@@ -80,8 +80,11 @@ APP 使用 ad-hoc 签名，尚未配置 Developer ID 公证。正式本地组包
 [installer/README.md](../installer/README.md)。
 
 构建使用 GitHub 原生 `ubuntu-24.04-arm` runner，编译主线发行内核、打过补丁的
-ModemManager/BlueZ 和通用 OpenWrt 镜像。主线镜像只装入本次内核的音频/WWAN 模块，
-不要求再构建 5.15。补丁 APK 按 OpenWrt 版本和补丁内容缓存；首次构建耗时较长。
+ModemManager/BlueZ、Wi-Fi APK 和通用 OpenWrt 镜像。主线镜像只装入本次内核的音频/WWAN
+模块，不要求再构建 5.15。ModemManager、BlueZ 和 hostapd 共用同一个 OpenWrt 构建树，
+容器使用 runner 自身架构（构建树里的 host 工具只适用于该架构）；hostapd 在树未准备时
+会自行构建 host 工具和交叉工具链。三者与 Wi-Fi APK 一起按 OpenWrt 版本和源码缓存，
+首次构建耗时较长。
 checkout 会递归恢复设备与信息屏 submodule；OpenWrt common 的软件包清单包含 `openssl-util`，
 镜像构建执行 Base64/HMAC-SHA256 自检，发布校验要求 `/usr/bin/openssl` 存在。
 ModemManager 构建结束后会生成 `out/openwrt/e5-modemmanager-build.json`，记录构建脚本、
@@ -110,7 +113,7 @@ x86 Ubuntu 22.04 容器中错误拒绝合法密钥；不关闭签名校验。
 
 工作流的 tag 指向 release 仓库的提交；固件源码提交取自单独检出的 e5-linux，两者在构建说明中独立记录。旧源码仓库中的历史 Releases 保留。
 
-CI 同时检查长短信持久化、充电事件、APN、三机型干净根组装和 Android 启动链。ModemManager/BlueZ 补丁来自固定的 `device/debian_device_common/patches`；认证拨号版本为 ModemManager r923 或更高。防误探测的 block-mount APK 使用校验固定的 x86_64 SDK，ARM runner 启用 QEMU，并单独缓存 APK、构建来源标识和 SHA-256。根镜像同时导出 ext4 与早期 F2FS 工具；发布前拒绝来源不匹配、不可执行的信息屏脚本或未包含 guarded block-mount 的镜像。工作流保留递归子模块、UTC+8 编译时间及 release 仓库自己的 tag target。
+CI 同时检查长短信持久化、充电事件、APN、三机型干净根组装和 Android 启动链。ModemManager/BlueZ 补丁来自固定的 `device/debian_device_common/patches`；认证拨号版本为 ModemManager r923 或更高。防误探测的 block-mount APK 使用校验固定的 x86_64 SDK，ARM runner 启用 QEMU；该步骤在模拟环境里最慢，APK、构建来源标识和 SHA-256 在构建成功后立即单独保存，后续步骤失败也不会丢弃。根镜像同时导出 ext4 与早期 F2FS 工具；发布前拒绝来源不匹配、不可执行的信息屏脚本或未包含 guarded block-mount 的镜像。工作流保留递归子模块、UTC+8 编译时间及 release 仓库自己的 tag target。
 
 ## 新版安装包目录与验证
 

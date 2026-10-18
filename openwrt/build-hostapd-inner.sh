@@ -27,6 +27,12 @@ printf '%s\n' 'CONFIG_PACKAGE_wpad-basic-mbedtls=m' 'CONFIG_PACKAGE_hostapd-comm
     'CONFIG_PACKAGE_wifi-scripts=m' 'CONFIG_WIFI_SCRIPTS_UCODE=y' \
     'CONFIG_SIGNED_PACKAGES=n' >> .config
 make defconfig
+# A fresh tree - a new volume, or a run that restored the package cache and so skipped
+# build-modemmanager.sh/build-bluez.sh - has neither the host tools nor the cross toolchain the
+# package targets below need (the signing key runs host openssl, unpacking runs libdeflate-gzip).
+# Building them here is the slow path; a tree prepared by ModemManager/BlueZ in this volume is reused.
+ls staging_dir/host/bin/openssl >/dev/null 2>&1 || make -j"${JOBS:-4}" tools/install
+ls staging_dir/toolchain-*/bin/*-gcc >/dev/null 2>&1 || make -j"${JOBS:-4}" toolchain/install
 # Out-of-tree Unisoc modules do not select OpenWrt kmod-mac80211 options.
 # Preserve the official daemon's AC/AX/BE config parser and PHY support.
 hostapd_make() {

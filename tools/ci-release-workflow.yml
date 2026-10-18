@@ -223,19 +223,22 @@ jobs:
         env:
           E5_RELEASE: '1'
         run: bash upstream/build.sh
-      - name: Restore patched OpenWrt packages
+      - name: Restore patched OpenWrt packages and Wi-Fi APKs
         id: packages
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             e5-linux/out/openwrt/*.apk
             e5-linux/out/openwrt/e5-modemmanager-build.json
-          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('e5-linux/tools/openwrt-package-state.py', 'e5-linux/device/openwrt_device_common/tests/voice-identity.py', 'e5-linux/device/openwrt_device_common/tests/sim-power.py', 'e5-linux/openwrt/build-modemmanager.sh', 'e5-linux/openwrt/build-bluez.sh', 'e5-linux/openwrt/patches/**', 'e5-linux/device/debian_device_common/patches/modemmanager-*.patch', 'e5-linux/device/debian_device_common/patches/bluez-*.patch') }}
-      - name: Compile patched ModemManager and BlueZ
+            e5-linux/work/wifi-sae
+          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('e5-linux/tools/openwrt-package-state.py', 'e5-linux/device/openwrt_device_common/tests/voice-identity.py', 'e5-linux/device/openwrt_device_common/tests/sim-power.py', 'e5-linux/openwrt/build-modemmanager.sh', 'e5-linux/openwrt/build-bluez.sh', 'e5-linux/openwrt/build-hostapd*', 'e5-linux/openwrt/hostapd-*', 'e5-linux/openwrt/wifi-sae-state.py', 'e5-linux/openwrt/patch-hostapd-sae.py', 'e5-linux/openwrt/patches/**', 'e5-linux/device/debian_device_common/patches/modemmanager-*.patch', 'e5-linux/device/debian_device_common/patches/bluez-*.patch') }}
+      - name: Compile patched ModemManager, BlueZ and the Wi-Fi APKs
         if: steps.packages.outputs.cache-hit != 'true'
         run: |
           bash openwrt/build-modemmanager.sh
           bash openwrt/build-bluez.sh
+          # Same e5-openwrt-src tree, so the host tools and cross toolchain built above are reused.
+          bash openwrt/build-hostapd.sh
           # This volume belongs to this ephemeral runner. Free it before image assembly.
           docker volume rm e5-openwrt-src
       - name: Save patched packages before image assembly
@@ -245,9 +248,11 @@ jobs:
           path: |
             e5-linux/out/openwrt/*.apk
             e5-linux/out/openwrt/e5-modemmanager-build.json
+            e5-linux/work/wifi-sae
           key: ${{ steps.packages.outputs.cache-primary-key }}
-      - name: Cache guarded block-mount APK
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Restore guarded block-mount APK
+        id: blockmount
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: e5-linux/out/openwrt/block-mount-guarded.apk*
           key: guarded-block-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('e5-linux/openwrt/build-block-mount*.sh', 'e5-linux/openwrt/block-mount.Dockerfile', 'e5-linux/openwrt/block-probe-guard.h', 'e5-linux/openwrt/patches/fstools-probe-device-types.patch') }}
@@ -256,6 +261,14 @@ jobs:
           sh openwrt/build-block-mount.sh
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" E5_TEST_BLOCK_APK="$PWD/out/openwrt/block-mount-guarded.apk" python3 device/openwrt_device_common/tests/block-probe.py
           docker run --rm -v "$PWD:/src:ro" "e5-openwrt-base:$E5_WRT_VER" sh -ec 'apk add -q ucode-mod-uci; ucode -L "/src/device/openwrt_device_common/luci-app-t551m/root/usr/libexec/unisoc-modem/*.uc" /src/device/openwrt_device_common/tests/apn.uc'
+      # Save right after the build: the SDK build is the longest step and an emulated one, so a later
+      # failure must not discard it (actions/cache's own post step is skipped for failed jobs).
+      - name: Save guarded block-mount APK
+        if: steps.blockmount.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: e5-linux/out/openwrt/block-mount-guarded.apk*
+          key: ${{ steps.blockmount.outputs.cache-primary-key }}
       - name: Validate screen and LuCI browser flows
         env:
           MU300_BROWSER_TESTS: '1'

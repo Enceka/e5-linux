@@ -20,9 +20,14 @@ if [ -s "$OUT/build-id" ] && [ "$(cat "$OUT/build-id")" = "$stamp" ] &&
     echo 'Unisoc WPA3: verified APK cache'
     exit 0
 fi
-docker build --platform linux/amd64 -t unisoc-hostapd-build \
+# The buildroot compiles its own host tools and cross toolchain, so the container runs the host's
+# architecture, like build-modemmanager.sh's.  It shares the e5-openwrt-src tree with ModemManager and
+# BlueZ, and a tree prepared there has host tools for that architecture only: an x86_64 container on
+# an arm64 host would find arm64 tools it cannot run (and an emulated rebuild is far slower).
+case "$(uname -m)" in x86_64) PLAT=linux/amd64;; *) PLAT=linux/arm64;; esac
+docker build --platform "$PLAT" -t unisoc-hostapd-build \
     -f "$TOP/openwrt/hostapd.Dockerfile" "$TOP/openwrt"
-docker run --rm --platform linux/amd64 \
+docker run --rm --platform "$PLAT" \
     -v "${UNISOC_WRT_CACHE:-e5-openwrt-src}:/build" \
     -v "$TOP/openwrt:/src:ro" -v "$OUT:/out" \
     -e "VER=$VER" -e "BUILD_ID=$stamp" -e "JOBS=${UNISOC_JOBS:-4}" \

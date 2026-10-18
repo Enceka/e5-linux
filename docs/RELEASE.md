@@ -87,6 +87,9 @@ checkout 会递归恢复设备与信息屏 submodule；OpenWrt common 的软件�
 ModemManager 构建结束后会生成 `out/openwrt/e5-modemmanager-build.json`，记录构建脚本、
 源码补丁和 APK 的 SHA-256。镜像组装前会核对这些信息；没有记录、源码发生变化或 APK
 被替换时直接停止，并提示重编译，避免新镜像混入旧的单卡插件。CI 缓存包含这份记录。
+ARM runner 使用固定摘要的 QEMU 9.2.2 注册 x86 SDK 容器，并在编译内核前实际构建
+SDK 容器验证 APT 签名与工具链可执行性。Ubuntu runner 自带的 QEMU 8.2.2 曾在
+x86 Ubuntu 22.04 容器中错误拒绝合法密钥；不关闭签名校验。
 运行环境见 [GitHub runner 文档](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
 
 每个 Release 提供：

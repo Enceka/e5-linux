@@ -123,8 +123,17 @@ jobs:
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y lz4 e2fsprogs binutils busybox python3 python3-venv libglib2.0-0t64 qemu-user-static binfmt-support
-          sudo update-binfmts --enable qemu-x86_64
+          sudo apt-get install -y lz4 e2fsprogs binutils busybox python3 python3-venv libglib2.0-0t64
+      - name: Set up pinned x86 container emulation
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt:qemu-v9.2.2@sha256:1b804311fe87047a4c96d38b4b3ef6f62fca8cd125265917a9e3dc3c996c39e6
+          platforms: amd64
+          reset: true
+      - name: Prepare and verify the x86 SDK container
+        run: |
+          docker build --platform linux/amd64 -t e5-block-sdk-build -f openwrt/block-mount.Dockerfile openwrt
+          docker run --rm --platform linux/amd64 e5-block-sdk-build sh -ec 'test "$(uname -m)" = x86_64; cc --version; python3 --version'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

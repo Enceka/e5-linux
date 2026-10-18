@@ -46,7 +46,10 @@ if [ -n "${E5_RELEASE:-}" ]; then
     echo "   (release: no e5.openwrt=, into out-release/)"
 fi
 make O="$O" ARCH=arm64 allnoconfig >/dev/null
-./scripts/kconfig/merge_config.sh -m -O "$O" "$O/.config" "$CFG" >/dev/null
+# merge_config.sh creates its scratch files in the current directory, which is the read-only source; run it in the
+# writable output directory (every argument above and below is an absolute path).
+kernel_merge_config="$PWD/scripts/kconfig/merge_config.sh"
+(cd "$O" && "$kernel_merge_config" -m -O "$O" "$O/.config" "$CFG" >/dev/null)
 # PR #228: NFSv4.1 is a separate prerequisite only on kernels exposing it.
 if grep -q '^config NFS_V4_1$' fs/nfs/Kconfig; then
     scripts/config --file "$O/.config" --enable NFS_V4_1

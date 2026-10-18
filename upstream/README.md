@@ -5,10 +5,19 @@ directory brings up **mainline Linux 6.18.y** (the current longterm series) inst
 features: the modelled layout and most of the method are mu300-linux's (`mu300-linux/upstream`, mainline 6.18
 on the ZTE MU300, UMS9620 -- the E5's UMS9621 is the "lite" member of the same qogirn6 family).
 
-* **Kernel:** `linux-lts-e5/`, a repository of its own (https://github.com/Enceka/linux-lts-e5), branch
+* **Kernel:** `linux-lts-e5/`, a repository of its own (https://github.com/sprd-linux-devs/linux), branch
   `e5-6.18` on top of the stable tag (`v6.18.54`, remote `stable` = kernel.org's stable tree). The port is
   commits there, not a patch series here: a vendor driver comes in as one commit, a fix to it as another.
 * **This directory:** how it is built, configured, booted and checked.
+
+Shared build-time fixes are committed on the existing `e5-6.18` branch; the minimum
+revision is recorded in `kernel-source.json`. Both generic build entries verify it
+and build from read-only/unchanged sources. E5's model preparation uses the same
+branch and applies only its device differences. Versions are the base kernel
+version plus `-e5` (or the existing `-e5-mobile4` profile suffix), with
+`CONFIG_LOCALVERSION_AUTO=n` and explicit empty `LOCALVERSION` to suppress SCM
+suffixes. Exact source commits remain in build metadata. See
+[the migration notes](../docs/KERNEL-SOURCE.md).
 
 | file | what |
 |---|---|

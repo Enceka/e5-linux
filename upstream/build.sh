@@ -11,38 +11,32 @@
 #                 boot; into upstream/out-release/, so that the trial scripts (upstream/out/) never take it
 # The objects stay in the docker volume e5-mainline-out (a bind mount would be slower), per kernel release.
 set -eo pipefail
+# An explicit empty value suppresses the SCM fallback + when AUTO is disabled.
+export LOCALVERSION=
 if [ -z "${E5_IN_CONTAINER:-}" ]; then
     HERE="$(cd "$(dirname "$0")" && pwd)"
     K="${E5_KERNEL_TREE:-$HERE/../linux-lts-e5}"
     K="$(cd "$K" && pwd)"
+    KERNEL_MOUNTS=(-v "$K:/src/linux:ro")
+    if [ -f "$K/.git" ]; then
+        kernel_common_git=$(git -C "$K" rev-parse --path-format=absolute --git-common-dir)
+        KERNEL_MOUNTS+=(-v "$kernel_common_git:$kernel_common_git:ro")
+    fi
     exec docker run --rm -e E5_IN_CONTAINER=1 -e E5_RELEASE="${E5_RELEASE:-}" \
         -e TZ=CST-8 -e KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-}" \
         -e E5_OUTPUT_UID="$(id -u)" -e E5_OUTPUT_GID="$(id -g)" \
-        -v "$K":/src/linux -v e5-mainline-out:/out -v "$HERE":/work \
-        -v "$HERE/../device/linux_device_common/kernel":/policy:ro \
+        "${KERNEL_MOUNTS[@]}" -v e5-mainline-out:/out -v "$HERE":/work \
         e5-mainline-build bash /work/build.sh "$@"
 fi
 
 # An empty variable overrides kbuild's default, so unset it for local builds.
 [ -n "${KBUILD_BUILD_TIMESTAMP:-}" ] || unset KBUILD_BUILD_TIMESTAMP
 cd /src/linux
-python3 /policy/display.py .
-python3 /policy/power.py .
-python3 /policy/charger-capabilities.py .
-python3 /policy/emmc.py .
-python3 /policy/sd-power.py .
-python3 /policy/eic.py .
-python3 /policy/thermal.py .
-python3 /policy/sipa.py .
-python3 /policy/wifi-tx.py .
-python3 /policy/fuel-gauge.py .
-python3 /policy/wifi-sae.py .
-python3 /policy/wifi-stations.py .
+python3 /work/check-kernel-source.py .
 KV=$(make -s kernelversion)
 O=/out/$KV
 mkdir -p "$O"
 echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
-[ -z "$(git status --porcelain --untracked-files=no)" ] || echo "   (the tree has uncommitted changes: the release gets -dirty)"
 
 CFG=/work/e5-mainline.config DEST=/work/out
 if [ -n "${E5_RELEASE:-}" ]; then
@@ -85,10 +79,12 @@ cp "$O/arch/arm64/boot/Image" "$O/System.map" "$O/modules.builtin" "$O/modules.b
 cp "$O/.config" $DEST/config
 python3 /work/wrap-image.py $DEST/Image $DEST/Image.lk
 cat "$O/include/config/kernel.release" > $DEST/kernel.release
+python3 /work/check-kernel-source.py . --release-file "$DEST/kernel.release"
 # the modules: flat for the boot image (boot/build-boot-image.py --modules), and as lib/modules/<release> for
 # a root filesystem
 rm -rf "$O/mod" $DEST/modules && mkdir -p $DEST/modules
 make -s O="$O" ARCH=arm64 INSTALL_MOD_PATH="$O/mod" INSTALL_MOD_STRIP=1 modules_install
+python3 /work/check-kernel-source.py .
 find "$O/mod/lib/modules" -name '*.ko' -exec cp {} $DEST/modules/ \;
 tar -C "$O/mod" -cf $DEST/modules.tar lib/modules
 python3 /work/check-container-support.py "$DEST" --record

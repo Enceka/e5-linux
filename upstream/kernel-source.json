@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/sprd-linux-devs/linux.git",
+  "base_revision": "020b970e351eee3887e6caaf2d653926e7086e44",
+  "branch": "e5-6.18",
+  "minimum_revision": "b93bbc3a36fd3c1acae0e44b93d909f7fe942182",
+  "policy_sources": {
+    "linux_device_common": "90d418efe480c9adcbc110251657e0e0b7503982"
+  }
+}

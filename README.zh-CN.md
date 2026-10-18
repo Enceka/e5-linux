@@ -43,7 +43,10 @@ python3 tools/device-layout.py list
 git clone --branch e5-6.18 https://github.com/sprd-linux-devs/linux.git linux-lts-e5
 ```
 
-各设备适配器可能要求固定内核提交，应以设备 README 和脚本的校验为准。
+通用构建要求包含 `upstream/kernel-source.json` 中的已提交修复；E5 专用构建共用
+`e5-6.18` 分支，只应用机型差异。版本字符串保留内核版本和设备标识，去掉 Git/dirty
+后缀；发布元数据另行记录实际提交。详见[内核源码说明](docs/KERNEL-SOURCE.md)。
+其他机型仍以设备 README 和脚本的固定版本校验为准。
 
 ## 仓库分层
 

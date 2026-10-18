@@ -169,6 +169,8 @@ def audit_root(info):
             raise ValueError('guarded block-mount payload missing: ' + name)
     kernel_out = Path(os.environ.get('E5_UPSTREAM_OUT', TOP / 'upstream/out-release'))
     kernel = (kernel_out / 'kernel.release').read_text().strip()
+    if kernel.endswith('-dirty'):
+        raise ValueError('Release kernel has a dirty suffix; use the fixed build version')
     if modules != {kernel}:
         raise ValueError('root modules do not all match the release kernel')
     if int(versions['etc/e5/build-time']) != info['build_epoch']:

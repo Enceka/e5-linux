@@ -109,6 +109,8 @@ jobs:
         run: |
           python3 tools/device-layout.py check --system openwrt --model e5
           python3 tools/tests/device-layout.py
+          python3 upstream/check-kernel-source.py linux-lts-e5
+          python3 upstream/tests/test_kernel_source.py
       - name: Record sources and UTC+8 compile start
         id: start
         env:

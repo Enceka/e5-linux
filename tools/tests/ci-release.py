@@ -73,12 +73,12 @@ class Bootstrap(unittest.TestCase):
 
 
 class RootAudit(unittest.TestCase):
-    def audit(self, files, staged_vendor=None, kernel_out=None, nonexec=()):
+    def audit(self, files, staged_vendor=None, kernel_out=None, nonexec=(), kernel_release='6.18-e5'):
         with tempfile.TemporaryDirectory() as temp:
             top = Path(temp)
             (top / 'work/openwrt').mkdir(parents=True)
             (top / 'upstream/out-release').mkdir(parents=True)
-            (top / 'upstream/out-release/kernel.release').write_text('6.18-e5\n')
+            (top / 'upstream/out-release/kernel.release').write_text(kernel_release + '\n')
             (top / 'device/linux_device_common/overlay/opt/e5').mkdir(parents=True)
             for name in release.BLOCK_SOURCES:
                 target = top / 'openwrt' / name
@@ -132,6 +132,12 @@ class RootAudit(unittest.TestCase):
 
     def test_same_release_and_epoch_pass(self):
         self.assertEqual(self.audit(self.files())['phone_version'], '1.4')
+
+    def test_dirty_kernel_is_rejected_with_matching_modules(self):
+        files = self.files()
+        files['lib/modules/6.18-e5-dirty/modem/sipc_wwan.ko'] = files.pop('lib/modules/6.18-e5/modem/sipc_wwan.ko')
+        with self.assertRaisesRegex(ValueError, 'dirty suffix'):
+            self.audit(files, kernel_release='6.18-e5-dirty')
 
     def test_nonexecutable_screen_start_rejected(self):
         with self.assertRaisesRegex(ValueError, 'not executable.*e5-infoscreen'):

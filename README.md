@@ -39,7 +39,11 @@ The full kernel source is a separate checkout:
 git clone --branch e5-6.18 https://github.com/sprd-linux-devs/linux.git linux-lts-e5
 ```
 
-Device adapters can require a specific kernel commit; their scripts check it before changing sources.
+Generic builds require the committed shared fixes listed in `upstream/kernel-source.json`.
+E5 model builds use the same `e5-6.18` branch and apply only their model differences.
+Build versions retain the kernel version and device suffix without Git/dirty suffixes;
+release metadata records the exact source commits. See [kernel sources](docs/KERNEL-SOURCE.md).
+Other device adapters can require a specific kernel commit; follow their checks.
 
 ## Repository layout
 

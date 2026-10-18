@@ -24,3 +24,10 @@ Git 仍会显示源码修改；通用构建不会应用这些差异。
 E5 专用输出另存 `source-commit`。改动驱动后一起重建内核和模块，并保留包内哈希校验。
 验证包括真实 Git 历史检查、旧适配器幂等校验、驱动 C 回归及 Actions 整包构建；
 这些离线检查不代表实机充电、Wi-Fi 或蜂窝验证。
+
+在 macOS 上本地跑完整容器构建时，`check-container-support.py` 会报
+`Root module differs from boot build: xt_RATEEST.ko`。这不是构建错误：内核同时提供
+`net/netfilter/xt_RATEEST.c`（target）和 `xt_rateest.c`（match），两个模块只差大小写；
+扁平暂存到宿主的 `out-release/modules/` 时，不区分大小写的 APFS 让一个覆盖另一个，
+而归档 `modules.tar` 里两个都在。同一份产物在大小写敏感的 Linux 语义下（容器内或 CI）
+校验通过，共 253 个模块。本地复验请在容器内或 CI 上做这一步。

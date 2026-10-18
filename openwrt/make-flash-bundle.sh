@@ -165,10 +165,18 @@ printf "e5-openwrt-flash %s (OpenWrt %s, e5-linux %s, kernel %s)\n" \
 
 # One ZIP, usable both from Magisk and after extraction on a computer. Keep
 # the native E5 TF partition/update layout and share the same compressed image.
-docker run --rm --platform linux/arm64 -v "$P/files":/out \
+# Compile as the user running this script: with the image default (root) the
+# binary belongs to root, and the packaging step below can no longer chmod it
+# ("Operation not permitted") when the build runs on a normal, non-root host.
+docker run --rm --platform linux/arm64 --user "$(id -u):$(id -g)" -v "$P/files":/out \
     -v "$TOP/magisk/e5-linux-switch/bootctl.c":/src.c:ro \
     "${E5_MAGISK_BUILD_IMAGE:-e5-mainline-build}" \
     sh -ec 'gcc -static -Os -s -Wall -Wextra -Werror -o /out/e5-bootctl /src.c'
+# Fail here, where the cause is obvious, rather than inside the packaging step.
+if [ ! -O "$P/files/e5-bootctl" ]; then
+    echo "make-flash-bundle: e5-bootctl is not owned by $(id -u); the container must run as --user" >&2
+    exit 1
+fi
 printf '%s\n' '{"profile":"e5","android_models":["E5"]}' > "$P/files/device-profile.json"
 python3 "$HERE/bundle/finalize-package.py" "$P" --profile e5 --bootctl "$P/files/e5-bootctl"
 

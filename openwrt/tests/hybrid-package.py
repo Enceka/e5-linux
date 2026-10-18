@@ -26,6 +26,14 @@ firmware = runpy.run_path(str(BUNDLE / 'magisk-firmware.py'))
 
 
 class Package(unittest.TestCase):
+    def test_flash_bundle_builds_the_helper_as_the_packaging_user(self):
+        # The build image runs as root, so a root-owned files/e5-bootctl cannot
+        # be chmod(0755) by finalize() on a non-root build host (EPERM).
+        script = (TOP / 'openwrt/make-flash-bundle.sh').read_text(encoding='utf-8')
+        helper = script.split('docker run --rm --platform linux/arm64', 1)[1].split('/src.c', 1)[0]
+        self.assertIn('--user "$(id -u):$(id -g)"', helper)
+        self.assertIn('[ ! -O "$P/files/e5-bootctl" ]', script)
+
     def test_switcher_apk_is_in_extras_and_stale_apk_is_rejected(self):
         add = finish['add_android_switcher']
         with tempfile.TemporaryDirectory() as folder:

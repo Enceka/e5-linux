@@ -11,13 +11,13 @@ on:
         description: OpenWrt release
         default: '25.12.5'
         required: true
+      source_ref:
+        description: e5-linux branch, tag or commit
+        default: main
+        required: true
       kernel_ref:
         description: linux-lts-e5 branch, tag or commit
         default: e5-6.18
-        required: true
-      source_ref:
-        description: e5-linux branch, tag or commit (including pinned components)
-        default: main
         required: true
       publish:
         description: Publish a GitHub Release after validation
@@ -37,25 +37,45 @@ concurrency:
 
 env:
   TZ: CST-8
+  E5_SOURCE_REPOSITORY: sprd-linux-devs/e5-linux
   E5_WRT_VER: ${{ inputs.openwrt_version || '25.12.5' }}
 
 jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sprd-linux-devs/e5-linux
+          ref: ${{ inputs.source_ref || vars.E5_SOURCE_REF || 'main' }}
+          persist-credentials: false
+      - name: Resolve the firmware source once for all platforms
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   gui:
-    uses: sprd-linux-devs/e5-linux/.github/workflows/gui.yml@main
+    needs: resolve
+    uses: sprd-linux-devs/e5-linux/.github/workflows/gui.yml@68593473435f1206b454752f42ff2f895c5d2771
     with:
       source_repository: sprd-linux-devs/e5-linux
-      source_ref: ${{ inputs.source_ref || vars.E5_SOURCE_REF || 'main' }}
+      source_ref: ${{ needs.resolve.outputs.source_sha }}
 
   gui_macos:
-    uses: sprd-linux-devs/e5-linux/.github/workflows/gui-macos.yml@main
+    needs: resolve
+    uses: sprd-linux-devs/e5-linux/.github/workflows/gui-macos.yml@68593473435f1206b454752f42ff2f895c5d2771
     with:
       source_repository: sprd-linux-devs/e5-linux
-      source_ref: ${{ inputs.source_ref || vars.E5_SOURCE_REF || 'main' }}
+      source_ref: ${{ needs.resolve.outputs.source_sha }}
 
   build:
-    needs: [gui, gui_macos]
+    needs: [resolve, gui, gui_macos]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: e5-linux
     outputs:
       tag: ${{ steps.start.outputs.release_tag }}
       title: ${{ steps.verify.outputs.release_title }}
@@ -66,9 +86,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: sprd-linux-devs/e5-linux
-          ref: ${{ inputs.source_ref || vars.E5_SOURCE_REF || 'main' }}
-          submodules: recursive
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: e5-linux
           fetch-depth: 0
+          submodules: recursive
           persist-credentials: false
       - name: Check bootstrap configuration
         env:
@@ -81,9 +102,13 @@ jobs:
         with:
           repository: sprd-linux-devs/linux
           ref: ${{ inputs.kernel_ref || vars.E5_KERNEL_REF || 'e5-6.18' }}
-          path: linux-lts-e5
+          path: e5-linux/linux-lts-e5
           fetch-depth: 128
           persist-credentials: false
+      - name: Validate device repositories
+        run: |
+          python3 tools/device-layout.py check --system openwrt --model e5
+          python3 tools/tests/device-layout.py
       - name: Record sources and UTC+8 compile start
         id: start
         env:
@@ -92,13 +117,15 @@ jobs:
         run: python3 tools/ci-release.py prepare
       - name: Record e5-linux commit
         id: source
-        run: echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y lz4 e2fsprogs binutils python3 qemu-user-static binfmt-support
-          # The checksum-pinned OpenWrt SDK is x86_64; the runner is ARM64.
+          sudo apt-get install -y lz4 e2fsprogs binutils busybox python3 python3-venv libglib2.0-0t64 qemu-user-static binfmt-support
           sudo update-binfmts --enable qemu-x86_64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Restore and verify bootstrap inputs
         env:
           INPUTS_URL: ${{ vars.E5_CI_INPUTS_URL }}
@@ -107,11 +134,19 @@ jobs:
           curl --fail --location --retry 5 --proto '=https' --proto-redir '=https' \
             --output "$RUNNER_TEMP/ci-inputs.tar.gz" "$INPUTS_URL"
           python3 tools/ci-inputs.py restore "$RUNNER_TEMP/ci-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
+      - name: Prepare isolated installer tests and the shipped BusyBox
+        run: |
+          python3 -m venv "$RUNNER_TEMP/release-tests"
+          "$RUNNER_TEMP/release-tests/bin/pip" install -r installer/requirements-build.txt
+          echo "$RUNNER_TEMP/release-tests/bin" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/release-tools"
+          ln -s "$PWD/work/busybox/ext/usr/bin/busybox" "$RUNNER_TEMP/release-tools/busybox"
+          echo "$RUNNER_TEMP/release-tools" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/release-tools/busybox" sh -c 'sha256sum /dev/null >/dev/null'
       - name: Check installer and audio logic
         env:
           OPENWRT_GUI_OPTIONAL: '1'
         run: |
-          python3 device/linux_device_common/test_emmc_dma.py linux-lts-e5
           bash -n openwrt/make-flash-bundle.sh openwrt/build-rootfs.sh upstream/build.sh
           # The GPT and bounded-write tests need a disposable OpenWrt userspace.
           mkdir -p work/openwrt
@@ -123,15 +158,37 @@ jobs:
           [ -n "$checksum" ] || { echo '::error::No checksum for OpenWrt rootfs'; exit 1; }
           printf '%s  %s\n' "$checksum" "work/openwrt/$file" | sha256sum --check
           docker import --platform linux/arm64 "work/openwrt/$file" "e5-openwrt-base:$E5_WRT_VER"
-          python3 device/openwrt_device_common/tests/flash-diagnostics.py
-          python3 openwrt/tests/install-entrypoints.py
-          python3 openwrt/tests/hybrid-package.py
-          python3 device/linux_device_common/test_upstream_20261014.py
           python3 tools/tests/android-bootchain.py
           python3 device/openwrt_device_common/tests/block-probe.py
-          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 device/openwrt_device_common/tests/gpt-plan.py
+          python3 -m unittest discover -s installer/tests -p 'test_*.py'
+          python3 boot/tests/installer-runtime.py
+          python3 boot/tests/part-install.py
+          python3 boot/tests/part-update.py
+          python3 openwrt/tests/android-loop.py
+          python3 openwrt/tests/android-root-tools.py
+          python3 openwrt/tests/flash-diagnostics.py
+          python3 openwrt/tests/install-entrypoints.py
+          python3 openwrt/tests/hybrid-package.py
+          python3 openwrt/tests/image-keep-config.py
+          python3 openwrt/tests/native-tf-preflight.py
+          python3 openwrt/tests/part-root-boot.py
+          python3 openwrt/tests/part-two-stage.py
+          python3 openwrt/tests/test_image_update_capacity.py
+          python3 openwrt/tests/tf-single-root.py
+          python3 openwrt/tests/update-ssh-host-key.py
+          python3 openwrt/tests/userdata-size.py
+          node openwrt/tests/system-switch-plugin.cjs
+          E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 openwrt/tests/gpt-plan.py
           python3 device/openwrt_device_common/tests/voice-audio.py
           python3 device/openwrt_device_common/tests/dual-sms.py
+          python3 device/openwrt_device_common/tests/sms-multipart.py
+          python3 device/openwrt_device_common/tests/power-events.py
+          python3 device/openwrt_device_common/tests/test_apn.py
+          python3 device/openwrt_device_common/tests/modem-port-discovery.py
+          python3 device/openwrt_device_common/tests/prepare-profiles.py
+          python3 ci/infoscreen/tests/device/test_screen_apn.py
+          python3 ci/infoscreen/tests/device/test_screen_session_startup.py
+          node ci/infoscreen/tests/device/test_calls_transport.cjs
           python3 device/openwrt_device_common/tests/dual-sms-send.py
           python3 device/openwrt_device_common/tests/sim-probe.py
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" python3 device/openwrt_device_common/tests/sim-lock.py
@@ -160,9 +217,9 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            out/openwrt/*.apk
-            out/openwrt/e5-modemmanager-build.json
-          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('tools/openwrt-package-state.py', 'device/openwrt_device_common/tests/voice-identity.py', 'device/openwrt_device_common/tests/sim-power.py', 'openwrt/build-modemmanager.sh', 'openwrt/build-bluez.sh', 'openwrt/patches/**', 'device/debian_device_common/patches/modemmanager-*.patch', 'device/debian_device_common/patches/bluez-*.patch') }}
+            e5-linux/out/openwrt/*.apk
+            e5-linux/out/openwrt/e5-modemmanager-build.json
+          key: patched-apk-${{ runner.os }}-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('e5-linux/tools/openwrt-package-state.py', 'e5-linux/device/openwrt_device_common/tests/voice-identity.py', 'e5-linux/device/openwrt_device_common/tests/sim-power.py', 'e5-linux/openwrt/build-modemmanager.sh', 'e5-linux/openwrt/build-bluez.sh', 'e5-linux/openwrt/patches/**', 'e5-linux/device/debian_device_common/patches/modemmanager-*.patch', 'e5-linux/device/debian_device_common/patches/bluez-*.patch') }}
       - name: Compile patched ModemManager and BlueZ
         if: steps.packages.outputs.cache-hit != 'true'
         run: |
@@ -175,39 +232,61 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            out/openwrt/*.apk
-            out/openwrt/e5-modemmanager-build.json
+            e5-linux/out/openwrt/*.apk
+            e5-linux/out/openwrt/e5-modemmanager-build.json
           key: ${{ steps.packages.outputs.cache-primary-key }}
       - name: Cache guarded block-mount APK
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: out/openwrt/block-mount-guarded.apk*
-          key: guarded-block-${{ env.E5_WRT_VER }}-${{ hashFiles('openwrt/build-block-mount*.sh', 'openwrt/block-mount.Dockerfile', 'openwrt/block-probe-guard.h', 'openwrt/patches/fstools-probe-device-types.patch') }}
+          path: e5-linux/out/openwrt/block-mount-guarded.apk*
+          key: guarded-block-${{ runner.arch }}-${{ env.E5_WRT_VER }}-${{ hashFiles('e5-linux/openwrt/build-block-mount*.sh', 'e5-linux/openwrt/block-mount.Dockerfile', 'e5-linux/openwrt/block-probe-guard.h', 'e5-linux/openwrt/patches/fstools-probe-device-types.patch') }}
       - name: Build and test guarded block-mount
         run: |
           sh openwrt/build-block-mount.sh
           E5_TEST_IMAGE="e5-openwrt-base:$E5_WRT_VER" E5_TEST_BLOCK_APK="$PWD/out/openwrt/block-mount-guarded.apk" python3 device/openwrt_device_common/tests/block-probe.py
-      - uses: actions/download-artifact@v4
+          docker run --rm -v "$PWD:/src:ro" "e5-openwrt-base:$E5_WRT_VER" sh -ec 'apk add -q ucode-mod-uci; ucode -L "/src/device/openwrt_device_common/luci-app-t551m/root/usr/libexec/unisoc-modem/*.uc" /src/device/openwrt_device_common/tests/apn.uc'
+      - name: Validate screen and LuCI browser flows
+        env:
+          MU300_BROWSER_TESTS: '1'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/browser-tests"
+          "$RUNNER_TEMP/browser-tests/bin/pip" install playwright==1.60.0
+          "$RUNNER_TEMP/browser-tests/bin/playwright" install --with-deps chromium
+          "$RUNNER_TEMP/browser-tests/bin/python" device/openwrt_device_common/tests/test_apn_browser.py
+          "$RUNNER_TEMP/browser-tests/bin/python" ci/infoscreen/tests/device/test_screen_apn_browser.py
+          "$RUNNER_TEMP/browser-tests/bin/python" device/openwrt_device_common/tests/screen-rpc.py
+          "$RUNNER_TEMP/browser-tests/bin/python" ci/infoscreen/tests/device/test_screen_charger_wake.py --fixtures ci/infoscreen/tests/fixtures/browser-status.json --webroot ci/infoscreen/root/usr/share/e5-infoscreen/www
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: openwrt-installer-windows
-          path: installer/artifacts/windows
-      - uses: actions/download-artifact@v4
+          path: e5-linux/installer/artifacts/windows
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: openwrt-installer-macos-arm64
           path: ${{ runner.temp }}/installer-macos
-      - name: Restore native macOS artifact
+      - name: Restore and verify desktop installer artifacts
         run: |
           mkdir -p installer/artifacts/macos-arm64
           tar -xzf "$RUNNER_TEMP/installer-macos/openwrt-installer-macos-arm64.tar.gz" -C installer/artifacts/macos-arm64
-          echo "OPENWRT_GUI_MACOS_ARTIFACT=$GITHUB_WORKSPACE/installer/artifacts/macos-arm64" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'installer')
+          from package_gui import sources, validate_artifact
+          source = sources()
+          validate_artifact(Path('installer/artifacts/windows'), 'windows-x64', source)
+          validate_artifact(Path('installer/artifacts/macos-arm64'), 'macos-arm64', source)
+          PY
+          echo "OPENWRT_GUI_ARTIFACT=$PWD/installer/artifacts/windows" >> "$GITHUB_ENV"
+          echo "OPENWRT_GUI_MACOS_ARTIFACT=$PWD/installer/artifacts/macos-arm64" >> "$GITHUB_ENV"
       - name: Assemble the generic mainline flash bundles
         env:
           E5_MAINLINE: '1'
           E5_TOOLS_BUILD_IMAGE: e5-mainline-build
         run: |
           set -o pipefail
-          export E5_INFOSCREEN="$GITHUB_WORKSPACE/ci/infoscreen"
-          export E5_INFOSCREEN_PLUGINS="$GITHUB_WORKSPACE/ci/infoscreen-plugins"
+          export E5_INFOSCREEN="$GITHUB_WORKSPACE/e5-linux/ci/infoscreen"
+          export E5_INFOSCREEN_PLUGINS="$GITHUB_WORKSPACE/e5-linux/ci/infoscreen-plugins"
           bash openwrt/make-flash-bundle.sh 2>&1 | tee out/release/bundle-build.log
       - name: Package Android to Linux Magisk module
         run: bash magisk/build.sh
@@ -219,11 +298,11 @@ jobs:
         with:
           name: flash-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            out/release/*.tar.gz
-            out/release/*.zip
-            out/release/SHA256SUMS
-            out/release/build.json
-            out/release/release-notes.md
+            e5-linux/out/release/*.tar.gz
+            e5-linux/out/release/*.zip
+            e5-linux/out/release/SHA256SUMS
+            e5-linux/out/release/build.json
+            e5-linux/out/release/release-notes.md
           compression-level: 0
           if-no-files-found: error
       - name: Upload build diagnostics
@@ -232,9 +311,9 @@ jobs:
         with:
           name: build-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            out/release/*.log
-            out/release/build.json
-            upstream/out-release/config
+            e5-linux/out/release/*.log
+            e5-linux/out/release/build.json
+            e5-linux/upstream/out-release/config
           if-no-files-found: ignore
 
   publish:
@@ -256,6 +335,7 @@ jobs:
           AUTO_TAG: ${{ needs.build.outputs.tag }}
           TITLE: ${{ needs.build.outputs.title }}
           SOURCE: ${{ needs.build.outputs.source }}
+          RELEASE_COMMIT: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           PRERELEASE: ${{ inputs.prerelease || false }}
@@ -267,7 +347,7 @@ jobs:
           if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
             [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true ] || { echo '::error::Release already published; use a new tag or a manual build.'; exit 1; }
           else
-            gh release create "$tag" --target "$SOURCE" --title "$TITLE" --notes-file release-notes.md --draft
+            gh release create "$tag" --target "$RELEASE_COMMIT" --title "$TITLE" --notes-file release-notes.md --draft
           fi
           gh release upload "$tag" ./*.tar.gz ./*.zip SHA256SUMS build.json --clobber
           args=(--draft=false --title "$TITLE" --notes-file release-notes.md)

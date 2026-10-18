@@ -10,7 +10,8 @@
 
 本仓库的 [tools/ci-release-workflow.yml](../tools/ci-release-workflow.yml) 保存完整的发布流程模板，
 包含远程新增的 Windows/macOS 构建、artifact 合入和安装器检查，并使用固定子模块路径。
-它供 release 仓库同步，不会在源码仓库触发发布。本次仅整理 e5-linux，没有改动 release 仓库的在线 workflow。
+它与 release 仓库工作流同步保存，不会在源码仓库触发发布。工作流先解析唯一源码提交，
+再让 Windows、macOS 和固件构建使用同一个提交；正式组包前校验两端完整来源与文件哈希。
 
 手动构建的 Release tag 为 `build-YYYYMMDD-HHMMSS-<commit>`。包名的时间戳、
 `files/VERSION`、`build.json`、内核编译时间和 Release 说明都使用同一个构建开始时间，

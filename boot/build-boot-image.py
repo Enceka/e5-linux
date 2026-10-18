@@ -47,7 +47,7 @@ MISC_BC_OFFSET = 0x800
 PERSIST_LOG_OFFSET = 56 << 20
 
 BOOT_CMDLINE = (
-    b'console=tty0 console=ttyGS0,115200 loglevel=7 '
+    b'console=tty0 console=ttyGS0,115200 loglevel=7 e5.part_v=2 '
     b'selinux=0 androidboot.selinux=permissive enforcing=0 '
     # CONFIG_PANIC_ON_OOPS=y in this kernel, and the E5 has a pre-existing
     # vsprintf/uevent oops about 25 s into every boot, so panic=10 alone turns
@@ -157,6 +157,8 @@ def main():
     slot_a_bc, slot_b_bc = bootloader_control(a.misc_head.read_bytes())
     print('misc: slot_a=%s slot_b_trial=%s' % (slot_a_bc.hex(), slot_b_bc.hex()))
 
+    if 'e5.part_v=2' not in a.cmdline.split():
+        a.cmdline = (a.cmdline + ' e5.part_v=2').strip()
     cmdline = a.cmdline.encode()
     if len(cmdline) >= 1536:
         sys.exit('command line too long for a boot header v4 (max 1535 bytes)')
@@ -174,8 +176,11 @@ def main():
     if not (a.f2fs_tools / 'manifest.json').is_file():
         sys.exit('Missing early F2FS tools; run boot/prepare-f2fs-tools.py --root ARM64_OPENWRT_ROOT')
     repair_manifest = json.loads((a.f2fs_tools / 'manifest.json').read_text())
-    repair_names = ('sbin/fsck.f2fs', 'lib/ld-musl-aarch64.so.1', 'lib/libf2fs.so.10',
-                    'lib/libuuid.so.1', 'lib/libgcc_s.so.1')
+    repair_names = ('sbin/fsck.f2fs', 'sbin/resize.f2fs', 'lib/ld-musl-aarch64.so.1',
+                    'lib/libf2fs.so.10', 'lib/libuuid.so.1', 'lib/libgcc_s.so.1',
+                    'usr/bin/ucode', 'lib/libucode.so.20230711', 'lib/libjson-c.so.5',
+                    'usr/lib/ucode/fs.so',
+                    'usr/sbin/resize2fs', 'lib/libe2p.so.2', 'lib/libext2fs.so.2', 'lib/libcom_err.so.0')
     for name in repair_names:
         payload = (a.f2fs_tools / name).read_bytes()
         if hashlib.sha256(payload).hexdigest() != repair_manifest['sha256'].get(name):
@@ -183,7 +188,21 @@ def main():
         files['repair/'+name] = (payload, stat.S_IFREG | 0o755)
     files['repair/lib/libc.so'] = (b'ld-musl-aarch64.so.1', stat.S_IFLNK | 0o777)
     files['repair/manifest.json'] = ((a.f2fs_tools / 'manifest.json').read_bytes(), stat.S_IFREG | 0o644)
-    dirs.update({'repair', 'repair/sbin', 'repair/lib'})
+    dirs.update({'repair', 'repair/sbin', 'repair/lib', 'repair/usr', 'repair/usr/bin', 'repair/usr/lib',
+                 'repair/usr/lib/ucode', 'repair/usr/sbin'})
+    # The internal-partition installer (boot/install-part.sh) runs the tools
+    # the way a normal system does, from the standard paths: ucode resolves
+    # its modules at the compiled-in /usr/lib/ucode, and the loader finds
+    # libucode/libc beside it, so no private library path is involved.
+    for name in repair_names:
+        files[name] = ((a.f2fs_tools / name).read_bytes(), stat.S_IFREG | 0o755)
+    files['etc/install-part.sh'] = ((HERE / 'install-part.sh').read_bytes(), stat.S_IFREG | 0o644)
+    files['etc/part-progress.sh'] = ((HERE / 'part-progress.sh').read_bytes(), stat.S_IFREG | 0o644)
+    files['etc/part-prepare.sh'] = ((HERE / 'part-prepare.sh').read_bytes(), stat.S_IFREG | 0o644)
+    files['etc/part-update.sh'] = ((HERE / 'part-update.sh').read_bytes(), stat.S_IFREG | 0o644)
+    files['usr/share/e5-gpt'] = ((HERE / 'installer-runtime/openwrt/usr/libexec/e5-gpt').read_bytes(),
+                                 stat.S_IFREG | 0o755)
+    dirs.update({'usr', 'usr/bin', 'usr/lib', 'usr/lib/ucode', 'usr/share', 'usr/sbin'})
 
     order = []
     if a.module_order.exists():
@@ -279,6 +298,11 @@ def main():
         'f2fs_repair': {'policy': 'userdata-mount-failure-only', 'tf_boot': 'skip',
                         'tools': repair_manifest['sha256'],
                         'script_sha256': hashlib.sha256((HERE / 'f2fs-repair.sh').read_bytes()).hexdigest()},
+        'part_install': {'trigger': 'e5linux/part-install.conf on userdata (flash.py --part)',
+                         'script_sha256': hashlib.sha256((HERE / 'install-part.sh').read_bytes()).hexdigest()},
+        'tf_update': {'version': 1, 'layout': 'single-root; PC installer; no GPT changes'},
+        'part_update': {'version': 1, 'trigger': '/.e5-update/request on internal e5root or TF root; offline initramfs',
+                        'script_sha256': hashlib.sha256((HERE / 'part-update.sh').read_bytes()).hexdigest()},
     }
     a.out.with_suffix('.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(json.dumps(manifest, indent=2))

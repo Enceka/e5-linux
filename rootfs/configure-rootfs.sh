@@ -33,6 +33,8 @@ for entry in "$OVERLAY"/*; do
     fi
 done
 
+python3 "$TOP/boot/stage-installer.py" --system debian --root "$ROOT"
+
 # Windows checkouts may not retain the new helper's executable bit.
 chmod 755 "$ROOT/opt/e5/e5-data-priority"
 

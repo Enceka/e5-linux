@@ -4,3 +4,8 @@ device/linux_device_m8/port/** -text -whitespace
 
 # Patch context carries upstream indentation and blank-line markers.
 *.patch -whitespace
+
+# Shared installer fingerprints use the same bytes on each host.
+installer/** text=auto eol=lf
+installer/ui/src-tauri/icons/*.ico binary
+installer/screenshots/*.png binary

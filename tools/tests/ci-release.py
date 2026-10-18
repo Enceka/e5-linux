@@ -80,9 +80,15 @@ class RootAudit(unittest.TestCase):
             (top / 'upstream/out-release').mkdir(parents=True)
             (top / 'upstream/out-release/kernel.release').write_text('6.18-e5\n')
             (top / 'device/linux_device_common/overlay/opt/e5').mkdir(parents=True)
+            for name in release.BLOCK_SOURCES:
+                target = top / 'openwrt' / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((TOP / 'openwrt' / name).read_bytes())
             for name in ('vendor-start.sh', 'e5-modem-coldboot'):
                 (top / 'device/linux_device_common/overlay/opt/e5' / name).write_bytes(b'startup fixture')
                 files = {**files, 'opt/e5/' + name: b'startup fixture'}
+            for name in ('hostapd-unisoc.sh', 'hostapd-unisoc.uc'):
+                (top / 'openwrt' / name).write_bytes(b'SAE fixture')
             if staged_vendor is not None:
                 files.update({'etc/e5/feature-port.json': b'{"profile":"e5"}',
                               'opt/e5/vendor-start.sh': staged_vendor})
@@ -103,7 +109,7 @@ class RootAudit(unittest.TestCase):
                 (root / 'opt/e5/vendor-start.sh').write_bytes(b'isolated NV fixture')
             env = {'E5_UPSTREAM_OUT': str(top / kernel_out)} if kernel_out else {}
             with patch.object(release, 'TOP', top), patch.object(release.subprocess, 'check_output', return_value=''), \
-                 patch.object(release.runpy, 'run_path', return_value={'stage_nv': stage_nv}), \
+                 patch.object(release.runpy, 'run_path', return_value={'stage_nv': stage_nv, 'build_id': lambda: 'fixture-wifi-build'}), \
                  patch.object(release, 'block_build_id', return_value='fixture-block-build'), \
                  patch.dict(release.os.environ, env):
                 release.audit_root(info)
@@ -111,6 +117,9 @@ class RootAudit(unittest.TestCase):
 
     def files(self):
         return {'etc/e5/block-mount.build-id': b'fixture-block-build\n',
+                'etc/e5/wifi-sae.build-id': b'fixture-wifi-build\n',
+                'lib/netifd/hostapd-unisoc.sh': b'SAE fixture',
+                'usr/share/ucode/wifi/unisoc-sae.uc': b'SAE fixture',
                 'sbin/block': b'block fixture', 'lib/libblkid-tiny.so': b'probe fixture',
                 'etc/init.d/fstab': b'fstab fixture',
                 'etc/init.d/e5-infoscreen': b'#!/bin/sh\n',
@@ -135,6 +144,16 @@ class RootAudit(unittest.TestCase):
     def test_stale_block_mount_build_rejected(self):
         files = self.files(); files['etc/e5/block-mount.build-id'] = b'stale\n'
         with self.assertRaisesRegex(ValueError, 'block-mount'):
+            self.audit(files)
+
+    def test_stale_wifi_build_rejected(self):
+        files = self.files(); files['etc/e5/wifi-sae.build-id'] = b'stale\n'
+        with self.assertRaisesRegex(ValueError, 'wifi-sae'):
+            self.audit(files)
+
+    def test_stale_wifi_bridge_rejected(self):
+        files = self.files(); files['lib/netifd/hostapd-unisoc.sh'] = b'stale bridge'
+        with self.assertRaisesRegex(ValueError, 'hostapd-unisoc'):
             self.audit(files)
 
     def test_missing_block_mount_payload_rejected(self):
@@ -171,6 +190,18 @@ class RootAudit(unittest.TestCase):
     def test_device_firmware_rejected(self):
         files = self.files(); files['lib/firmware/wcnmodem.bin'] = b'device firmware'
         with self.assertRaisesRegex(ValueError, 'device-specific'):
+            self.audit(files)
+
+    def test_unguarded_mount_package_rejected(self):
+        files = self.files()
+        files['etc/e5/block-mount.build-id'] = b'old-package\n'
+        with self.assertRaisesRegex(ValueError, 'source mismatch'):
+            self.audit(files)
+
+    def test_missing_mount_package_payload_rejected(self):
+        files = self.files()
+        del files['sbin/block']
+        with self.assertRaisesRegex(ValueError, 'block-mount payload missing'):
             self.audit(files)
 
 

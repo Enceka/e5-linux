@@ -108,6 +108,8 @@ ANDROID=${E5_ANDROID_SUBSET:-$TOP/work/android-subset}
 KBUILD=${E5_KBUILD:-$TOP/out_linux}
 mkdir -p "$WORK" "$OUT"
 python3 "$TOP/tools/openwrt-package-state.py" check "$VER"
+# /dev/sd* also matches Unisoc communication channels. Install only the APK
+# whose probe filters device types before opening them (shared by all boards).
 BLOCK_APK="$OUT/block-mount-guarded.apk"
 E5_WRT_VER="$VER" sh "$HERE/build-block-mount.sh" "$BLOCK_APK"
 WIFI_APKS="$TOP/work/wifi-sae"
@@ -324,6 +326,8 @@ command -v openssl >/dev/null
 openssl version
 [ "$(printf abc | openssl base64 -A)" = YWJj ]
 [ "$(printf abc | openssl dgst -sha256 -hmac test -binary | openssl base64 -A)" = "15ZXmu0SPnt0PMr1sVCv+hIj4x7LqLiMnanM961eBZQ=" ]
+# Cipher capabilities require the full iw Supported Ciphers section.
+apk add iw-full >/dev/null
 # Bluetooth audio: PulseAudio built with BlueZ (the -avahi variant carries
 # the bluetooth modules), run by /etc/init.d/e5-pulseaudio, not by its own
 # init script (which forbids loading the modules a connecting device needs)
@@ -491,6 +495,7 @@ if [ "$E5_FEATURES" = 1 ]; then
 elif [ -n "$screen" ]; then
     python3 /in/feature-source/device/openwrt_device_common/shared/ui.py --root $R --profile e5
 fi
+python3 /in/feature-source/boot/stage-installer.py --system openwrt --root $R
 if [ -f $R/usr/libexec/unisoc-modem/disable-channel-analysis ]; then
     ucode $R/usr/libexec/unisoc-modem/disable-channel-analysis $R
 fi
@@ -506,9 +511,11 @@ mkdir -p "$TOP/out/boot"
 docker run --rm --platform linux/arm64 -v "$WORK":/w -v "$OUT":/out \
     -v "$HERE/prepare-ext4-tools.py":/prepare-ext4-tools.py:ro \
     -v "$TOP/boot/prepare-f2fs-tools.py":/prepare-f2fs-tools.py:ro -v "$TOP/out/boot":/boot-out \
+    -v "$HERE/bundle/ext4-geometry.sh":/bundle/ext4-geometry.sh:ro \
     -e NAME="$NAME" -e IMG="$IMG" -e MB="$IMAGE_MB" alpine:3.22 sh -euc '
 apk add -q e2fsprogs python3 binutils >/dev/null
 rm -rf /tmp/r && mkdir /tmp/r && tar -xzf /w/$NAME -C /tmp/r
+python3 /prepare-ext4-tools.py --root /tmp/r --out /out/ext4-tools.tar
 rm -f /w/$IMG
 python3 /prepare-ext4-tools.py --root /tmp/r --out /out/ext4-tools.tar
 python3 /prepare-f2fs-tools.py --root /tmp/r --out /boot-out/f2fs-tools

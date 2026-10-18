@@ -25,7 +25,11 @@ BC_B=/run/e5linux/misc-bc-slot-b-trial.bin
 
 echo "== writing boot_b ($BOOTB)"
 T=/tmp/e5-boot-head.img
-wget -q -O "$T" "$URL"
+case "$URL" in
+    http://*|https://*) wget -q -O "$T" "$URL" ;;
+    /*) cp "$URL" "$T" ;;
+    *) echo 'boot source must be an absolute file or HTTP URL' >&2; exit 1 ;;
+esac
 [ "$(sha256sum "$T" | cut -d' ' -f1)" = "$WANT" ] || { rm -f "$T"; echo "download hash mismatch" >&2; exit 1; }
 dd if="$T" of="$BOOTB" bs=1M conv=fsync 2>/dev/null
 rm -f "$T"

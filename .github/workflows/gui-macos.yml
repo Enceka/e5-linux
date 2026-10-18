@@ -1,0 +1,56 @@
+name: Apple Silicon installer
+
+on:
+  workflow_call:
+    inputs:
+      source_repository:
+        type: string
+        required: false
+      source_ref:
+        type: string
+        required: false
+  workflow_dispatch:
+  push:
+    branches: ['build/macos-*']
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.source_repository || github.repository }}
+          ref: ${{ inputs.source_ref || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: installer/ui/package-lock.json
+      - name: Native ARM toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          rustup toolchain install 1.90.0 --profile minimal
+          python -m pip install pyinstaller paramiko lz4
+      - name: Installer tests (no device writes)
+        run: python -m unittest discover -s installer/tests -v
+      - name: Build native portable installer
+        run: python installer/build.py
+      - name: Frozen ARM64 backend and ADB smoke
+        run: python installer/tests/macos_frozen_smoke.py
+      - name: Preserve executable permissions and framework links
+        run: tar -czf openwrt-installer-macos-arm64.tar.gz -C installer/artifacts/macos-arm64 .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-installer-macos-arm64
+          path: openwrt-installer-macos-arm64.tar.gz
+          if-no-files-found: error

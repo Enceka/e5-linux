@@ -43,8 +43,12 @@ def main():
     for name in ('base', 'defaults', 'kernel', 'stock-boot', 'misc-head', 'busybox', 'work', 'output', 'block-apk'):
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--apk-image', default='e5-openwrt-base:25.12.5')
+    p.add_argument('--wifi-apks', type=Path, default=TOP / 'work/wifi-sae')
     p.add_argument('--cc', default='aarch64-linux-gnu-gcc')
     a = p.parse_args()
+    runpy.run_path(str(TOP / 'openwrt/bundle/flash.py'))['validate_installer_busybox'](a.busybox)
+    wifi_build = runpy.run_path(str(TOP / 'openwrt/wifi-sae-state.py'))['inspect'](a.wifi_apks)
+    wifi_args = ' '.join('/wifi-sae/' + n for n in sorted(wifi_build['apks']))
     if os.geteuid() != 0 or a.work.exists():
         p.error('Run as root with a new work directory')
     expected_id = runpy.run_path(str(TOP / 'tools/ci-release.py'))['block_build_id']()
@@ -52,6 +56,17 @@ def main():
         raise ValueError('block-mount is not built from the current probe guard')
     if Path(str(a.block_apk) + '.sha256').read_text().split()[0] != digest(a.block_apk):
         raise ValueError('block-mount APK checksum mismatch')
+    # A sanitized prebuilt base may carry an older daemon. Refresh it from
+    # the source-verified APKs so a userspace fix cannot disappear in a repack.
+    modem_state = runpy.run_path(str(TOP / 'tools/openwrt-package-state.py'))
+    modem_build = modem_state['inspect']('25.12.5')
+    if json.loads(modem_state['STATE'].read_text()) != modem_build:
+        raise ValueError('ModemManager APKs are stale; rebuild them before packaging')
+    modem_names = sorted(modem_build['apks'])
+    if len(modem_names) != 2 or not all(re.fullmatch(r'modemmanager(?:-rpcd)?-1\.24\.0-r\d+\.apk', n) for n in modem_names):
+        raise ValueError('Unexpected ModemManager package set')
+    modem_args = ' '.join('/modem/' + n for n in modem_names)
+    modem_daemon = next(n for n in modem_names if n.startswith('modemmanager-1'))
     a.work.mkdir(parents=True)
     root = a.work / 'root'
     release = runpy.run_path(str(TOP / 'upstream/check-container-support.py'))['check'](a.kernel)
@@ -61,15 +76,11 @@ def main():
         raise ValueError('Trial kernel forces userdata boot; rebuild without e5.openwrt= for TF')
     prepare = runpy.run_path(str(TOP / 'device/openwrt_device_common/shared/prepare-root.py'))['prepare']
     prepare(a.base, root, a.defaults, profile=a.profile)
-    run('python3', TOP / 'tools/openwrt-package-state.py', 'check', '25.12.5')
-    # Install the fingerprint-verified daemon/RPC packages, even when the clean
-    # base predates APN authentication support. Target scripts never run here.
-    modem_packages = sorted((TOP / 'out/openwrt').glob('modemmanager*.apk'))
-    run('docker', 'run', '--rm', '--platform', 'linux/arm64',
-        '-v', f'{root}:/target', '-v', f'{TOP / "out/openwrt"}:/packages:ro',
-        '--entrypoint', '/bin/sh', a.apk_image, '-ec',
-        'apk --root /target --no-scripts add --allow-untrusted ' +
-        ' '.join('/packages/' + p.name for p in modem_packages))
+    runpy.run_path(str(TOP / 'boot/stage-installer.py'))['stage'](root, 'openwrt')
+    for name in ('S22e5-modemd', 'K09e5-modemd'):
+        link = root / 'etc/rc.d' / name
+        if not link.is_symlink() or os.readlink(link) != '../init.d/e5-modemd' or not link.is_file():
+            raise ValueError('CP assert recovery service is not enabled: ' + name)
     helpers = {}
     for n, target in (('logdw', 'opt/e5/bin/logdw'), ('e5-vibrate', 'usr/bin/e5-vibrate'),
                       ('e5-ctl-raw', 'opt/e5/e5-ctl-raw'), ('e5-modemd', 'usr/sbin/e5-modemd'),
@@ -90,13 +101,29 @@ def main():
     # apk handles the package database/dependencies; never copy just /sbin/block.
     run('docker', 'run', '--rm', '--platform', 'linux/arm64',
         '-v', f'{root}:/target', '-v', f'{a.block_apk.resolve()}:/input/block.apk:ro',
+        '-v', f'{TOP / "out/openwrt"}:/modem:ro',
+        '-v', f'{a.wifi_apks.resolve()}:/wifi-sae:ro',
         '--entrypoint', '/bin/sh', a.apk_image, '-ec',
-        'apk --root /target --no-scripts --no-network add --allow-untrusted /input/block.apk')
+        'apk --root /target --no-scripts --no-network add --allow-untrusted /input/block.apk ' + modem_args + ' ' + wifi_args + ' && '
+        'mkdir /tmp/modem-verify && apk extract --allow-untrusted --destination /tmp/modem-verify /modem/' + modem_daemon + ' && '
+        'cmp /target/usr/sbin/ModemManager /tmp/modem-verify/usr/sbin/ModemManager && '
+        'ucode /target/usr/libexec/unisoc-modem/disable-channel-analysis /target && '
+        # Incremental builds must also add newly mandatory packages to old bases.
+        'apk --root /target update >/dev/null && '
+        'apk --root /target --no-scripts add ttyd luci-app-ttyd luci-i18n-ttyd-zh-cn luci-i18n-ttyd-tr && '
+        'sh /target/usr/libexec/e5-ttyd-bind /target && '
+        'ln -sf ../init.d/ttyd /target/etc/rc.d/S99ttyd && '
+        'ln -sf ../init.d/ttyd /target/etc/rc.d/K50ttyd')
+    runpy.run_path(str(TOP / 'device/openwrt_device_common/shared/network-startup.py'))['patch_root'](root, a.profile)
     # The SMS forward signs DingTalk webhooks with the openssl CLI and sends SMTP
     # through msmtp; the clean base carries the backend files without the packages.
+    # (downloads.openwrt.org interrupts mid-index often enough that the same
+    #  retry loop mu300-linux's builder uses belongs here too)
     run('docker', 'run', '--rm', '--platform', 'linux/arm64',
         '-v', f'{root}:/target', '--entrypoint', '/bin/sh', a.apk_image, '-ec',
-        'apk --root /target --no-scripts add openssl-util msmtp e2fsprogs resize2fs f2fs-tools')
+        'ok=; for n in 1 2 3; do apk --root /target --no-scripts add openssl-util msmtp e2fsprogs resize2fs f2fs-tools iw-full && '
+        '{ ok=1; break; }; echo "apk download interrupted (attempt $n), retrying" >&2; sleep 3; done; '
+        '[ -n "$ok" ]')
     forward = {}
     for pkg in ('openssl-util', 'msmtp'):
         match = re.search(rf'^P:{pkg}$\n^V:(\S+)$', (root / 'lib/apk/db/installed').read_text(), re.M)
@@ -104,6 +131,8 @@ def main():
             raise ValueError(f'the TF image has no {pkg}: the SMS forward needs it')
         forward[pkg] = match.group(1)
     (root / 'etc/e5/block-mount.build-id').write_bytes(Path(str(a.block_apk) + '.build-id').read_bytes())
+    (root / 'etc/e5/wifi-sae.build-id').write_text(wifi_build['build_id'] + '\n')
+    (root / 'etc/e5/wifi-sae.source-info').write_bytes((a.wifi_apks / 'source-info').read_bytes())
     # Do not execute target init scripts on the build host.
     fstab = (root / 'etc/init.d/fstab').read_text()
     for action, prefix in (('START', 'S'), ('STOP', 'K')):
@@ -139,6 +168,10 @@ def main():
     package = a.work / name
     files = package / 'files'
     files.mkdir(parents=True)
+    shutil.copyfile(a.busybox, files / 'busybox')
+    (files / 'busybox').chmod(0o755)
+    shutil.copyfile(a.kernel / 'config', files / 'kernel.config')
+    shutil.copyfile(a.kernel / 'modules.in-tree', files / 'modules.in-tree')
     init = a.work / 'init'
     init.write_bytes((TOP / 'boot/init').read_bytes().replace(b'\r\n', b'\n'))
     run('python3', TOP / 'boot/build-boot-image.py', '--stock-boot', a.stock_boot,
@@ -146,18 +179,19 @@ def main():
         '--modules', a.kernel / 'modules', '--module-order', a.kernel / 'module-order.txt' if (a.kernel / 'module-order.txt').is_file() else TOP / 'upstream/module-order.txt',
         '--busybox', a.busybox, '--init', init, '--cmdline', '', '--out', files / 'boot.img')
     boot = json.loads((files / 'boot.json').read_text())
-    assert boot['overlay_files'] == 0 and boot['cmdline'] == ''
+    assert boot['overlay_files'] == 0 and boot['cmdline'] == 'e5.part_v=2'
     (files / 'boot.misc-slot-b-trial.bin').rename(files / 'boot-misc-slot-b.bin')
     sources = {}
+    # Record each pinned repository and include local source edits in the hash.
     source_revisions = {}
     checkouts = [('e5-linux', TOP), ('infoscreen', TOP / 'ci/infoscreen'),
                  ('plugins', TOP / 'ci/infoscreen-plugins')]
     checkouts += [(p.name, p) for p in sorted((TOP / 'device').glob('*_device_*'))]
     for key, checkout in checkouts:
-        source_revisions[key] = subprocess.check_output(['git','-C',str(checkout),'rev-parse','HEAD'],text=True).strip()
-        names = subprocess.check_output(['git','-C',str(checkout),'ls-files','--cached','--others','--exclude-standard','-z']).decode().split('\0')
+        source_revisions[key] = subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], text=True).strip()
+        names = subprocess.check_output(['git', '-C', str(checkout), 'ls-files', '--cached', '--others', '--exclude-standard', '-z']).decode().split('\0')
         for n in sorted(set(names)):
-            if key == 'e5-linux' and not n.startswith(('boot/', 'openwrt/', 'rootfs/', 'tools/', 'upstream/')):
+            if key == 'e5-linux' and not n.startswith(('boot/', 'installer/', 'magisk/', 'openwrt/', 'rootfs/', 'tools/', 'upstream/')):
                 continue
             file = checkout / n
             if n and file.is_file() and not file.is_symlink():
@@ -167,13 +201,15 @@ def main():
             'build_type': 'incremental assembly; tested package binaries, current sources, rebuilt initramfs',
             'docker_preinstalled': False, 'root_image_bytes': 2147483648,
             'boot_sha256': boot['sha256'], 'block_mount_sha256': digest(a.block_apk),
+            'wifi_sae_packages': wifi_build,
             'forward_packages': forward,
             'hardware_validation': 'TF installer and final image not flashed; offline checks only',
             'kernel_manifest': json.loads((a.kernel / 'container-support.json').read_text()),
             'compiled_helpers': helpers,
             'modemmanager_sha256': digest(root / 'usr/sbin/ModemManager'),
+            'modemmanager_packages': modem_build['apks'],
             'sources': sources, 'source_revisions': source_revisions}
-    for dest in (root / 'etc/e5/build.json', package / 'BUILD.json'):
+    for dest in (root / 'etc/e5/build.json', files / 'BUILD.json'):
         dest.write_text(json.dumps(info, ensure_ascii=False, indent=2) + '\n')
     (root / 'etc/e5/image-version').write_text(name + '\n')
     (root / 'etc/e5/build-time').write_text(str(epoch) + '\n')
@@ -189,55 +225,40 @@ def main():
     with (files / 'openwrt.ext4.gz').open('wb') as out:
         run('gzip', '-1', '-c', image, stdout=out)
     runpy.run_path(str(TOP / 'openwrt/prepare-ext4-tools.py'))['build'](root, files / 'ext4-tools.tar')
-    for n in ('flash.py', 'flash.cmd', 'flash.sh', 'install-userdata.cmd', 'install-userdata.sh', 'README.md', 'README.zh-CN.md'):
-        shutil.copy2(TOP / 'openwrt/bundle' / n, package / n)
-    for n in ('device-install-image.sh', 'device-flash-boot.sh'):
+    runpy.run_path(str(TOP / 'openwrt/bundle/install-entrypoints.py'))['assemble'](package)
+    extras = package / 'extras'; extras.mkdir()
+    shutil.copy2(TOP / 'openwrt/bundle/【插件】mu300系统切换器.js', extras / 'openwrt-system-switch-plugin.js')
+    for n in ('device-install-image.sh', 'device-flash-boot.sh', 'device-install-part.sh', 'device-stage-part-update.sh'):
         shutil.copy2(TOP / 'openwrt' / n, files / n)
-    for src in ('openwrt/bundle/collect-device-files.sh', 'device/openwrt_device_common/overlay/usr/libexec/e5-gpt', 'tools/android-bootchain.sh'):
+    (files / 'part-write.sh').write_bytes((TOP / 'openwrt/bundle/part-write.sh').read_bytes().replace(b'\r\n', b'\n'))
+    for src in ('openwrt/bundle/collect-device-files.sh', 'boot/installer-runtime/openwrt/usr/libexec/e5-gpt', 'tools/android-bootchain.sh'):
         target = files / Path(src).name
         target.write_bytes((TOP / src).read_bytes().replace(b'\r\n', b'\n'))
         target.chmod(0o755)
-    (files / 'userdata-image.sh').write_bytes((TOP / 'openwrt/bundle/userdata-image.sh').read_bytes().replace(b'\r\n', b'\n'))
     tools = package / 'scripts/tools'
     tools.mkdir(parents=True)
-    for n in ('e5-telnet.py', 'sprd-bt-config.py'):
+    for n in ('e5-telnet.py', 'e5-update.py', 'sprd-bt-config.py'):
         shutil.copy2(TOP / 'tools' / n, tools / n)
     shutil.copytree(TOP / 'tools/vbc-profile', tools / 'vbc-profile', ignore=shutil.ignore_patterns('__pycache__'))
-    shutil.copy2(TOP / 'LICENSE', package / 'LICENSE')
+    shutil.copy2(TOP / 'LICENSE', package / 'docs/LICENSE')
     (files / 'device-profile.json').write_text(json.dumps({'profile': a.profile, 'android_models': MODELS[a.profile]}) + '\n')
     (files / 'VERSION').write_text(name + ' (' + release + ')\n')
-    (package / 'START-HERE.zh-CN.md').write_text(f'''# {MODELS[a.profile][0]} TF 卡安装包
-
-仅用于 {MODELS[a.profile][0]}，不要跨机型刷入。解压后，在电脑运行 flash.cmd（Windows）或 bash flash.sh。
-需要 Python 3.8+、ADB、已解锁且已 root 的 Android A 槽、Magisk BusyBox。
-首次安装会重新分区并清空整张 TF 卡：至少 4 GB，建议 8 GB 以上。
-系统分区约 2 GiB，其余容量留作后续扩展/升级；不是使用已有分区全容量的安装方式。
-先检查包和启动链、提取本机固件，再释放卡、备份同步有差异的 B 槽启动链、写系统并只读校验，最后写 boot_b 和切槽。
-安装器不会自动重启；成功后自行重启进入 OpenWrt。Android A 的启动分区不覆盖。
-此包不包含私有固件、NV、用户配置、主机密钥；安装时从目标机提取固件。
-首次登录 192.168.9.1，账号 root，密码 root；进入后修改密码。
-保留 Docker/KVM 内核支持，不预装 Docker。
-已完成离线文件系统、模块/内核匹配、包校验；这份完整 TF 包尚未实机安装测试。
-详细步骤见 README.zh-CN.md。
-''', encoding='utf-8')
-    checks = {p.relative_to(package).as_posix(): digest(p) for p in sorted(package.rglob('*')) if p.is_file()}
-    (package / 'SHA256SUMS').write_text(''.join(v + '  ' + k + '\n' for k, v in checks.items()))
-    spec = importlib.util.spec_from_file_location('packaged_flash', package / 'flash.py')
+    run(a.cc, '-static', '-Os', '-s', '-Wall', '-Wextra', '-Werror',
+        '-o', files / 'e5-bootctl', TOP / 'magisk/e5-linux-switch/bootctl.c')
+    checks = runpy.run_path(str(TOP / 'openwrt/bundle/finalize-package.py'))['finalize'](
+        package, a.profile, files / 'e5-bootctl')
+    spec = importlib.util.spec_from_file_location('packaged_flash', package / 'OpenWrt-Installer.py')
     flash = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(flash)
     flash.check_package()
     assert flash.gz_usize(str(files / 'openwrt.ext4.gz')) == 2147483648
     a.output.mkdir(parents=True, exist_ok=True)
     archive = a.work / (name + '.zip')
-    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
-        for src in sorted(package.rglob('*')):
-            if src.is_file() and '__pycache__' not in src.parts:
-                z.write(src, name + '/' + src.relative_to(package).as_posix(),
-                        compress_type=zipfile.ZIP_STORED if src.suffix == '.gz' else zipfile.ZIP_DEFLATED)
+    runpy.run_path(str(TOP / 'openwrt/bundle/finalize-package.py'))['write_zip'](package, archive)
     with zipfile.ZipFile(archive) as z:
         assert z.testzip() is None
         for n, want in checks.items():
-            with z.open(name + '/' + n) as stream:
+            with z.open(n) as stream:
                 h = hashlib.sha256()
                 while chunk := stream.read(1024 * 1024):
                     h.update(chunk)
@@ -246,7 +267,7 @@ def main():
     shutil.copyfile(archive, target)
     assert digest(target) == digest(archive)
     (a.output / (archive.name + '.sha256')).write_text(digest(target) + '  ' + target.name + '\n')
-    shutil.copyfile(package / 'BUILD.json', a.output / (name + '.json'))
+    shutil.copyfile(files / 'BUILD.json', a.output / (name + '.json'))
     print('RELEASE:', target, target.stat().st_size, flush=True)
 
 
@@ -263,8 +284,10 @@ def audit(root, profile, release):
     assert (root / 'etc/shadow').read_text().startswith('root::')
     assert (root / 'etc/machine-id').read_text() == ''
     for name in ('sbin/block', 'lib/libblkid-tiny.so', 'etc/init.d/fstab',
+                 'lib/netifd/hostapd-unisoc.sh', 'usr/share/ucode/wifi/unisoc-sae.uc',
+                 'etc/e5/wifi-sae.build-id',
                  'usr/sbin/ModemManager', 'usr/libexec/e5-infoscreen/session',
-                 'usr/bin/openssl', 'usr/bin/msmtp'):
+                 'usr/bin/openssl', 'usr/bin/msmtp', 'usr/bin/python3'):
         assert (root / name).stat().st_size, name
     modem = (root / 'etc/config/unisoc_modem').read_text()
     assert ('auto_work_mode' in modem) == (profile == 't551m')

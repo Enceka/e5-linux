@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""荣悦 E5 OpenWrt 一键刷入 / one-click flash of OpenWrt on the Rongyue E5.
+"""OpenWrt Installer / 安装与维护助手。
 
-  flash.py                  first install onto the **SD card**, from rooted
-                            Android over adb: the card is partitioned and
-                            formatted, OpenWrt goes onto it
-  flash.py --data           the same onto the phone's storage (userdata), the
-                            form before the SD card; it asks three times
-  flash.py --update         update, from the running e5-linux over the USB LAN
-                            (OpenWrt's settings and installed apps kept)
-  flash.py --boot-openwrt   from Android back to the installed OpenWrt (adb)
-  flash.py --check          the checks and the device's files, from Android, and
+  OpenWrt-Installer         choose the installation or maintenance action
+  OpenWrt-Installer --tf    first install onto the **SD card**, from rooted
+                            Android over adb: the first partition (or raw card) is
+                            formatted and fully used for OpenWrt
+  OpenWrt-Installer --data  EXPERIMENTAL userdata image; may damage Android F2FS
+  OpenWrt-Installer --part  first install onto an internal eMMC partition,
+                            without an SD card: the next boot shrinks userdata,
+                            creates the partition and writes OpenWrt into it
+  OpenWrt-Installer --update update, from the running e5-linux over the USB LAN
+                            (OpenWrt settings kept; extra packages not migrated)
+  OpenWrt-Installer --boot-openwrt from Android back to installed OpenWrt (adb)
+  OpenWrt-Installer --check the checks and the device's files, from Android, and
                             nothing written (a dry run of the first install)
 
 Options for the first install (asked for when not given):
@@ -19,7 +22,7 @@ Options for the first install (asked for when not given):
   -y                   no questions: the defaults, and yes to erasing the card
 
 Runs on Windows, macOS and Linux with Python 3.8+ and adb (Android
-platform-tools).  flash.cmd (Windows) and flash.sh start it.  See README.md.
+platform-tools). start-installer.cmd/sh starts it. See README.md.
 """
 import argparse
 import gzip
@@ -29,7 +32,9 @@ import json
 import os
 import random
 import re
+import runpy
 import shutil
+import shlex
 import socket
 import string
 import subprocess
@@ -40,13 +45,16 @@ import threading
 import time
 import struct
 import zlib
+import uuid  # also bundled for the runtime two-stage installer in flash.exe
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
-B = os.path.dirname(os.path.abspath(__file__))
+B = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
 F = os.path.join(B, 'files')
 SCRIPTS = os.path.join(B, 'scripts')
 D = '/data/e5linux'
 TMP = '/data/local/tmp'
+GUI = None  # Structured observer; CLI remains independent.
+SERIAL = None
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -113,6 +121,8 @@ class busy:
 
 
 def die(msg):
+    if GUI:
+        raise ValueError(msg)
     print('\n错误 / error: ' + msg, file=sys.stderr, flush=True)
     sys.exit(1)
 
@@ -125,18 +135,25 @@ def sha256(path):
     return h.hexdigest()
 
 
-def gz_usize(path):
-    """Check gzip integrity and count its real size (ISIZE wraps at 4 GiB)."""
+def gz_metadata(path):
+    """Check gzip CRC and obtain size/hash of the complete unpacked image."""
     size = 0
+    digest = hashlib.sha256()
     try:
         with gzip.open(path, 'rb') as f:
             for chunk in iter(lambda: f.read(1 << 20), b''):
                 size += len(chunk)
+                digest.update(chunk)
     except (OSError, EOFError) as error:
         die(f'cannot decompress {os.path.basename(path)}: {error}')
     if not size:
         die(f'{os.path.basename(path)} contains an empty image')
-    return size
+    return size, digest.hexdigest()
+
+
+def gz_usize(path):
+    """Count the real gzip size; ISIZE wraps at 4 GiB."""
+    return gz_metadata(path)[0]
 
 
 def boot_json():
@@ -165,7 +182,7 @@ def default_hotspot_name():
 def check_package():
     say('检查刷机包 / checking the package')
     bad = None
-    with busy('校验文件 / verifying the files'), open(os.path.join(B, 'SHA256SUMS')) as f:
+    with busy('校验文件 / verifying the files'), open(checksum_path()) as f:
         for line in f:
             want, name = line.split(None, 1)
             name = name.strip()
@@ -178,16 +195,80 @@ def check_package():
         print('   ' + f.read().strip())
 
 
+def checksum_path():
+    modern = os.path.join(F, 'SHA256SUMS')
+    return modern if os.path.isfile(modern) else os.path.join(B, 'SHA256SUMS')
+
+
 # ------------------------------------------------------------------ adb
 
 ADB = None
 SU = None
+ANDROID_BUSYBOX = None
+
+
+def validate_installer_busybox(path):
+    """The installer runs before OpenWrt: Android must need no ELF loader."""
+    with open(path, 'rb') as stream:
+        header = stream.read(64)
+        if (len(header) != 64 or header[:7] != b'\x7fELF\x02\x01\x01'
+                or struct.unpack_from('<HH', header, 16) != (2, 183)):
+            raise ValueError('Installer BusyBox must be a static ARM64 ELF executable')
+        offset = struct.unpack_from('<Q', header, 32)[0]
+        entry_size, count = struct.unpack_from('<HH', header, 54)
+        if entry_size != 56 or not 1 <= count <= 128 or offset < 64:
+            raise ValueError('Invalid installer BusyBox program headers')
+        stream.seek(offset)
+        headers = stream.read(entry_size * count)
+        if len(headers) != entry_size * count:
+            raise ValueError('Truncated installer BusyBox program headers')
+        types = [struct.unpack_from('<I', headers, n * entry_size)[0] for n in range(count)]
+        if 1 not in types or any(t in (2, 3) for t in types):
+            raise ValueError('Installer BusyBox must be static (no dynamic loader or libraries)')
+
+
+def android_shell(script, arguments=''):
+    if not ANDROID_BUSYBOX or not re.fullmatch(re.escape(TMP) + r'/e5-tools-[0-9a-f]{32}/busybox', ANDROID_BUSYBOX):
+        raise ValueError('Android installer BusyBox has not been validated')
+    return f'ASH_STANDALONE=1 {ANDROID_BUSYBOX} sh {script}' + (' ' + arguments if arguments else '')
+
+
+def android_tools():
+    """Stage the package's tools, independently of the Android root manager."""
+    global ANDROID_BUSYBOX
+    ANDROID_BUSYBOX = None
+    local = os.path.join(F, 'busybox')
+    try:
+        validate_installer_busybox(local)
+    except (OSError, ValueError) as error:
+        die(f'{error}; download a complete installer package. Nothing was installed.')
+    directory = f'{TMP}/e5-tools-{uuid.uuid4().hex}'
+    path = directory + '/busybox'
+    # adb uploads as shell; the random private directory becomes root-owned
+    # before execution. Never chmod or execute another manager's tool directory.
+    adb('shell', f'umask 077; mkdir {directory}', check=True)
+    adb('push', local, path, check=True)
+    want = sha256(local)
+    probe = (f'for tool in sh chroot nsenter timeout sha256sum dd od blockdev '
+             f'tar gzip losetup mount umount mktemp stat readlink; do '
+             f'{path} --list | {path} grep -qx "$tool" || exit 1; done; '
+             f'PATH=/nonexistent; hash=$(sha256sum {path}); '
+             f'[ "${{hash%% *}}" = {want} ] || exit 1; echo E5_BUSYBOX_OK')
+    out = su_checked('准备随包安装工具 / preparing bundled installer tools',
+                     f'chown 0:0 {directory} {path}; chmod 700 {directory} {path}; '
+                     f'[ "$(sha256sum {path} | cut -d " " -f1)" = {want} ]; '
+                     f'ASH_STANDALONE=1 {path} sh -c ' + shlex.quote(probe))
+    if 'E5_BUSYBOX_OK' not in out.splitlines():
+        die('Bundled installer BusyBox is incompatible; no system or partition was installed.')
+    ANDROID_BUSYBOX = path
 
 
 def find_adb():
     global ADB
-    for c in (shutil.which('adb'), os.path.join(B, 'platform-tools', 'adb.exe'),
-              os.path.join(B, 'platform-tools', 'adb')):
+    names = ('tools/adb.exe', 'platform-tools/adb.exe') if sys.platform == 'win32' else (
+        'tools/macos/adb', 'tools/adb', 'platform-tools/adb') if sys.platform == 'darwin' else (
+        'tools/adb', 'platform-tools/adb')
+    for c in (*[os.path.join(B, name) for name in names], shutil.which('adb')):
         if c and os.path.isfile(c):
             ADB = c
             return
@@ -196,10 +277,13 @@ def find_adb():
 
 
 def adb(*args, check=False, capture=True, timeout=600):
-    r = subprocess.run([ADB, *args], stdout=subprocess.PIPE if capture else None,
-                       stderr=subprocess.STDOUT if capture else None, timeout=timeout)
+    selected = ['-s', SERIAL] if SERIAL and args[0] != 'devices' else []
+    if GUI and args[0] == 'reboot': GUI.reboot()
+    r = subprocess.run([ADB, *selected, *args], stdout=subprocess.PIPE if capture else None,
+                       stderr=subprocess.STDOUT if capture else None, timeout=timeout,
+                       **({'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}))
     out = r.stdout.decode('utf-8', 'replace').replace('\r', '') if capture else ''
-    if check and r.returncode != 0:
+    if check and r.returncode != 0 and not (GUI and args[0] == 'reboot'):
         die(f'adb {" ".join(args[:2])} failed: {out.strip()[-300:]}')
     return out
 
@@ -209,17 +293,22 @@ def sh(cmd, timeout=600):
 
 
 def su(cmd, timeout=600):
-    # one argument for adb, one single-quoted string for su: cmd has no '
-    assert "'" not in cmd
-    return adb('shell', f"{SU} -c '{cmd}'", timeout=timeout)
+    # Root authorization and applet selection are independent. Explicit
+    # standalone ash keeps Android toybox and manager PATH out of installation.
+    if ANDROID_BUSYBOX:
+        cmd = android_shell('-c', shlex.quote(cmd))
+    return adb('shell', f'{SU} -c ' + shlex.quote(cmd) if SU else cmd, timeout=timeout)
 
 
-def su_checked(stage, cmd, timeout=600):
+def su_checked(stage, cmd, timeout=600, effect=None):
     """Fail at the actual remote stage; adb success alone is insufficient.
 
     Do not print the command: settings commands can contain private values.
     The subshell's set -e catches earlier failures in a sequence too.
     """
+    if GUI and effect:
+        GUI.stage('transfer_install' if effect.startswith('root') else 'prepare')
+        return GUI.action(effect, lambda: su_checked(stage, cmd, timeout))
     marker = '__E5_STAGE_STATUS__='
     wrapped = f'(set -e; {cmd}); e5_stage_rc=$?; echo {marker}$e5_stage_rc'
     try:
@@ -247,6 +336,9 @@ def su_checked(stage, cmd, timeout=600):
 
 def push(local, remote, label):
     """In pieces, each checked: adb push has no resume."""
+    if GUI:
+        return GUI.push(lambda *args: adb(*args, check=True),
+                        lambda cmd: su_checked('Transfer / 传输', cmd), local, remote)
     size = os.path.getsize(local)
     want = sha256(local)
     su(f'rm -f {remote}')
@@ -287,6 +379,11 @@ def od_hex(path_or_cmd):
 
 
 def arm_slot_b():
+    if GUI: return GUI.action('misc-trial', _arm_slot_b)
+    return _arm_slot_b()
+
+
+def _arm_slot_b():
     # Derive metadata from this device, not the package author's misc snapshot.
     before = read_boot_control()
     trial = bytearray(before)
@@ -336,14 +433,19 @@ def read_boot_control():
 
 
 def bootchain(mode):
+    if GUI and mode == 'sync': return GUI.action('bootchain-sync', lambda: _bootchain(mode))
+    return _bootchain(mode)
+
+
+def _bootchain(mode):
     if mode not in ('check', 'sync'):
         raise ValueError(mode)
     script = f'{TMP}/e5-android-bootchain.sh'
     push(os.path.join(F, 'android-bootchain.sh'), script, 'boot-chain checks')
-    # Absolute BusyBox path avoids Android toybox differences and Magisk PATH.
+    # Absolute validated path avoids Android toybox and root-manager PATH differences.
     result = su_checked('检查启动链 / checking boot chain' if mode == 'check' else
                         '备份并同步启动链 / backing up and syncing boot chain',
-                        f'ASH_STANDALONE=1 /data/adb/magisk/busybox sh {script} {mode}', timeout=600)
+                        android_shell(script, mode), timeout=600)
     print(result)
 
 
@@ -358,17 +460,26 @@ def install_preflight():
 
 
 def android_checks():
-    global SU
+    global SU, SERIAL, ANDROID_BUSYBOX
+    SU = ANDROID_BUSYBOX = None
     say('连接设备 / looking for Android (USB debugging on)')
     devs = [l for l in adb('devices').splitlines()[1:] if l.strip().endswith('\tdevice')]
+    if not SERIAL and len(devs) > 1 and sys.stdin.isatty() and not GUI:
+        for index, line in enumerate(devs, 1):
+            print(f'   {index}. device / 设备 ••••{line.split()[0][-4:]}')
+        selected = ask('Select device number / 选择设备编号: ')
+        if not selected.isdigit() or not 1 <= int(selected) <= len(devs):
+            die('invalid device selection; use --serial SERIAL / 请选择有效设备，或使用 --serial 指定')
+        SERIAL = devs[int(selected)-1].split()[0]
+    if SERIAL: devs = [line for line in devs if line.split()[0] == SERIAL]
     if len(devs) != 1:
-        die(f'need exactly one device in "adb devices" (found {len(devs)}; allow USB debugging on the phone)')
+        die(f'need one selected device (found {len(devs)}); use --serial SERIAL and allow USB debugging / 请用 --serial 指定设备，并允许调试')
     for s in ('su', '/debug_ramdisk/su', '/sbin/su'):
         if 'uid=0' in sh(f'{s} -c id'):
             SU = s
             break
     if not SU:
-        die('no root: install Magisk and grant Shell superuser access')
+        die('no root: grant Shell superuser access in Magisk or KernelSU/KSUNext')
     profile = package_profile()
     if profile:
         model = sh('getprop ro.product.model').strip()
@@ -380,7 +491,7 @@ def android_checks():
         die('the bootloader is locked (verifiedbootstate is not orange)')
     if 'ok' not in su('[ -e /dev/block/by-name/boot_b ] && [ -e /dev/block/by-name/l_agdsp_a ] && echo ok'):
         die('no boot_b or l_agdsp_a partition: not an E5?')
-    su_checked('检查 Magisk 工具 / checking Magisk tools', 'test -x /data/adb/magisk/busybox')
+    android_tools()
     print(f'   ok ({sh("getprop ro.product.model").strip()}, root via {SU})')
 
 
@@ -391,6 +502,7 @@ def pull_device_files(work, out=None):
     and everything packed on the device (collect-device-files.sh), into out
     (the install's device-files.tar by default)."""
     out = out or f'{D}/device-files.tar'
+    if GUI:GUI.stage('firmware_extract')
     say('从这台设备提取固件和基带文件 / the firmware and baseband files of this device')
     st = f'{TMP}/e5pull'
     su(f'rm -rf {st}; mkdir -p {st}')
@@ -432,12 +544,16 @@ def pull_device_files(work, out=None):
                 (n.startswith('wifi_board_config') and n.endswith('.ini')):
             shutil.copy(os.path.join(raw, n), fw)
     tools = os.path.join(SCRIPTS, 'tools')
-    subprocess.run([sys.executable, os.path.join(tools, 'sprd-bt-config.py'),
-                    os.path.join(raw, 'bt_configure_pskey.xpe.ini'), os.path.join(raw, 'bt_configure_rf.xpe.ini'),
-                    os.path.join(raw, 'btmac.txt'), os.path.join(fw, 'sprd')], check=True)
-    subprocess.run([sys.executable, os.path.join(tools, 'vbc-profile', 'vbc-profile.py'),
-                    os.path.join(raw, 'dsp_vbc.xml'), os.path.join(raw, 'audio_structure.xml'),
-                    os.path.join(raw, 'cvs.xml'), '-o', fw], check=True, stdout=subprocess.DEVNULL)
+    bt = (os.path.join(tools, 'sprd-bt-config.py'), os.path.join(raw, 'bt_configure_pskey.xpe.ini'),
+          os.path.join(raw, 'bt_configure_rf.xpe.ini'), os.path.join(raw, 'btmac.txt'), os.path.join(fw, 'sprd'))
+    vbc = (os.path.join(tools, 'vbc-profile', 'vbc-profile.py'), os.path.join(raw, 'dsp_vbc.xml'),
+           os.path.join(raw, 'audio_structure.xml'), os.path.join(raw, 'cvs.xml'), '-o', fw)
+    if GUI:
+        GUI.run_tool(*bt)
+        GUI.run_tool(*vbc)
+    else:
+        subprocess.run(python_tool(*bt), check=True)
+        subprocess.run(python_tool(*vbc), check=True, stdout=subprocess.DEVNULL)
     for n in ('sprd/marlin3lite_pskey.bin', 'sprd/marlin3lite_rf.bin', 'audio_structure', 'dsp_vbc', 'cvs'):
         if not os.path.isfile(os.path.join(fw, *n.split('/'))):
             die(f'converting the firmware made no {n}')
@@ -461,6 +577,18 @@ def pull_device_files(work, out=None):
 
 # ------------------------------------------------------------------ modes
 
+def python_tool(*argv):
+    """A command that runs one of the package's helper scripts.
+
+    Frozen (flash.exe) there is no Python on the machine, so the executable
+    re-enters itself: --run-tool executes the bundled script with its own
+    interpreter and passes the remaining arguments through.
+    """
+    if getattr(sys, 'frozen', False):
+        return [sys.executable, '--run-tool', *argv]
+    return [sys.executable, argv[0], *argv[1:]]
+
+
 def ask(prompt, default=''):
     try:
         v = input(prompt).strip()
@@ -476,6 +604,35 @@ def confirm(prompt, word='yes'):
     except EOFError:
         v = ''
     return v.lower() == word
+
+
+def choose_install_action(a):
+    print('''
+OpenWrt Installer / 安装助手
+  1. Install to TF card / TF 卡首次安装（清空第一分区，无分区则整卡）
+  2. Install to internal storage / 缩容 userdata 安装
+  3. Reinstall internal system / 覆盖重装已有内置系统
+  4. Resume internal installation / 继续加密 data 的两阶段安装
+  5. Boot OpenWrt once / 从 Android 临时启动已安装的 OpenWrt（仅修改 misc）
+  6. Update OpenWrt / 更新已运行的 OpenWrt
+  7. Install to userdata image [EXPERIMENTAL] / userdata 镜像安装【实验性：可能损坏 Android F2FS，仅未加密 data】
+  0. Exit / 退出
+''')
+    choice = ask('Choose / 请选择 [0]: ', '0')
+    modes = {'1': 'tf', '2': 'part', '3': 'reinstall_part',
+             '5': 'boot_openwrt', '6': 'update', '7': 'data'}
+    if choice == '0':
+        return False
+    if choice == '4':
+        path = ask('Transaction JSON / 续装 transaction.json 路径: ').strip('"')
+        if not path:
+            return False
+        a.resume_part = path
+    elif choice in modes:
+        setattr(a, modes[choice], True)
+    else:
+        die('unknown menu choice / 无效选项')
+    return True
 
 
 def device_sd():
@@ -541,31 +698,40 @@ def unmount_android_sd(dev):
         die(f'{dev} is still mounted at {", ".join(remaining)}. '
             'Unmount the SD volume in Android storage settings (leave the card inserted) '
             'and retry. The partition table was not changed.')
+    name = dev.rsplit('/', 1)[-1]
+    holders = su_checked('检查 SD 映射占用 / checking SD device-mapper holders',
+                         f'for p in /sys/class/block/{name}/holders/* /sys/class/block/{name}p*/holders/*; do '
+                         '[ ! -e "$p" ] || echo "$p"; done; true').strip()
+    if holders:
+        die(f'{dev} still has active mapped devices: {holders}. No partition was changed.')
 
 
 def install_sd(a):
     """The default first install: OpenWrt onto the SD card.
 
-    The card is partitioned (GPT, one Linux partition) and the generic OpenWrt
-    image is written onto the partition -- the partition *is* the filesystem, so
-    boot/init mounts it directly (the marked card, /etc/e5/sd-root) instead of a
-    file on userdata.  The device's own firmware is unpacked into it, so the
-    card carries the whole system and userdata is not the root's home. The
-    differing B-slot boot chain is backed up and synchronized from Android A;
-    boot_b and the boot target/control are committed after root verification."""
+    The existing first partition is used in full; an unpartitioned card uses
+    its whole device. No GPT changes or alternate OTA roots are made. Only the
+    selected target is erased. Firmware and root readback precede boot writes.
+    """
     steps(9)
     find_adb()
     android_checks()
     bj = boot_json()
     install_preflight()
     sd = device_sd()
-    capacity = device_size(sd)
+    push(os.path.join(F, 'android-tf.sh'), f'{TMP}/e5-android-tf.sh', 'TF helper')
+    part = su_checked('选择 TF 目标 / selecting TF target',
+                      f'sh {TMP}/e5-android-tf.sh target {sd}').strip()
+    if part not in (sd, sd + 'p1'):
+        die('unexpected TF target: ' + part)
+    capacity = device_size(part)
+    if GUI: GUI.validate_plan(part, capacity=capacity)
     img = os.path.join(F, 'openwrt.ext4.gz')
-    raw_size = gz_usize(img)
-    needed = raw_size + (2 << 20) + 34 * 512
+    raw_size, raw_sha = gz_metadata(img)
+    needed = raw_size
     if capacity < max(needed, 2 << 30):
         die(f'SD capacity is insufficient: {sd} has {capacity / (1 << 20):.1f} MiB; '
-            f'image/GPT/alignment require {needed / (1 << 20):.1f} MiB '
+            f'the image requires {needed / (1 << 20):.1f} MiB '
             '(minimum supported card: 2048 MiB). Nothing was written.')
     readonly = su_checked('检查 SD 只读状态 / checking card write protection',
                           f'cat /sys/class/block/{sd.rsplit("/", 1)[-1]}/ro').strip()
@@ -586,10 +752,10 @@ def install_sd(a):
         die("the hotspot key must have 8-63 characters, and no ' anywhere")
 
     say(f'准备 SD 卡 / preparing the card ({sd})')
-    print(f'   {sd}  {device_size(sd) >> 30} GiB')
+    print(f'   {part}  {capacity / (1 << 30):.2f} GiB; no OTA space reserved')
     if not a.y:
-        print('   OpenWrt 会装到这张卡上，卡上现有的数据会全部丢失。')
-        print('   OpenWrt goes onto this card and everything on it is erased.')
+        print('   OpenWrt 会清空所选 TF 目标并使用其全部容量；不修改分区表。')
+        print('   All data on the selected TF target is erased; its partition table is unchanged.')
         if not confirm('   输入 yes 继续 / type yes to continue: '):
             die('aborted: nothing was written, the card is untouched')
 
@@ -599,45 +765,34 @@ def install_sd(a):
         size = pull_device_files(work, f'{TMP}/e5-device-files.tar')
         push(img, f'{TMP}/openwrt.ext4.gz', 'openwrt.ext4.gz')
         push(os.path.join(F, 'boot.img'), f'{TMP}/e5-boot.img', 'boot.img')
-        su_checked('检查 SD 分区工具 / checking partition tools',
-                   'command -v sgdisk >/dev/null; command -v blockdev >/dev/null')
-        say(f'分区并格式化 / partitioning and formatting the card')
+        push(os.path.join(F, 'ext4-tools.tar'), f'{TMP}/e5-tf-ext4-tools.tar', 'ext4 tools')
+        su_checked('检查 TF 工具 / checking TF tools', 'command -v blockdev >/dev/null')
         unmount_android_sd(sd)
         bootchain('sync')
-        # The root partition is only as large as the image: the rest of the card
-        # stays free, for more systems (another partition the initramfs can be
-        # pointed at) and a persistent store of its own.  So the filesystem is
-        # not grown to the card -- it fills the partition exactly as built.
-        sec = (raw_size + 511) // 512 + 2048       # a MiB of slack past it
-        su_checked('清理 GPT / clearing partition table', f'sgdisk --zap-all {sd}')
-        su_checked('建立 SD 根分区 / creating root partition',
-                   f'sgdisk --new=1:0:+{sec} --typecode=1:8300 --change-name=1:e5root {sd}')
-        su_checked('刷新 SD 分区表 / refreshing kernel partition table', f'blockdev --rereadpt {sd}')
-        part = sd + 'p1'
-        for _ in range(20):
-            if 'ok' in su(f'[ -b {part} ] && echo ok'):
-                break
-            time.sleep(1)
-        else:
-            details = su(f'ls -l {sd}*; cat /proc/partitions; dmesg | grep -iE "mmc|sdhci|error|crc" | tail -15')
-            die(f'{part} did not appear within 20 seconds after partitioning.\n{details}')
-        actual_size = device_size(part)
-        if actual_size < raw_size or actual_size != sec * 512:
-            die(f'{part} has an unexpected size: {actual_size} bytes; expected {sec * 512}. '
-                'The kernel may still hold the old partition table; no image was written.')
+        # Revalidate selection and geometry after vold releases the card.
+        selected = su_checked('重新检查 TF / rechecking TF target',
+                              f'sh {TMP}/e5-android-tf.sh target {sd}').strip()
+        if selected != part or device_size(part) != capacity:
+            die('TF target changed after preflight; no image was written')
 
         say('写入 OpenWrt / OpenWrt -> the card')
         with busy('解压到 SD 卡 / unpacking onto the card'):
             su_checked('解压并写入 SD / decompressing image onto card',
-                       f'gzip -dc {TMP}/openwrt.ext4.gz > {part}; sync', timeout=1800)
+                       f'gzip -dc {TMP}/openwrt.ext4.gz > {part}; sync', timeout=1800, **({'effect': 'root-tf-write'} if GUI else {}))
+        with busy('回读校验完整 SD 镜像 / verifying complete SD image'):
+            su_checked('SD 镜像回读校验 / SD image readback verification',
+                       f'blockdev --flushbufs {part}; '
+                       f'[ "$(head -c {raw_size} {part} | sha256sum | cut -d " " -f1)" = {raw_sha} ]',
+                       timeout=900)
         su(f'rm -f {TMP}/openwrt.ext4.gz')
-        # (no e2fsck here: the image is built by a newer e2fsprogs than the
-        # device's, whose feature set -- metadata_csum_seed, orphan_file -- the
-        # device's e2fsck calls an error.  The mount below is the check.)
+        with busy('检查并扩容到 TF 目标全部容量 / checking and growing TF filesystem'):
+            su_checked('扩容 TF / growing TF filesystem',
+                       f'sh {TMP}/e5-android-tf.sh grow {part} {TMP}/e5-tf-ext4-tools.tar '
+                       f'{TMP}/e5-tf-tools-{uuid.uuid4().hex}', timeout=1800, **({'effect': 'root-tf-grow'} if GUI else {}))
 
         say('这台设备的文件和首次启动设置 / this device\'s files and the first boot\'s settings')
         conf = os.path.join(work, 'install.conf')
-        with open(conf, 'w', newline='\n') as f:
+        with open(conf, 'w', encoding='utf-8', newline='\n') as f:
             f.write('# the flash package (flash.py), for OpenWrt\'s first boot\n'
                     f"E5_APN='{apn}'\nE5_WIFI_SSID='{ssid}'\nE5_WIFI_KEY='{key}'\n"
                     "E5_WIFI_CHANNEL='149'\nE5_DEFAULT_BOOT='linux'\n")
@@ -688,14 +843,12 @@ def install_sd(a):
         su_checked('卸载并同步 SD / unmounting card', f'sync; umount {m}')
         su(f'rm -f {TMP}/e5-device-files.tar {checksums}')
         print(f'   OpenWrt and {size} bytes of device files are on the card')
-        free = device_size(sd) - device_size(part)
-        print(f'   {free >> 30}.{(free % (1 << 30)) * 10 // (1 << 30)} GiB of the card '
-              'are left free, for more partitions (systems, a store)')
+        print(f'   TF filesystem uses {capacity / (1 << 30):.2f} GiB; updates use the PC installer')
 
         say('写入启动镜像 / boot image -> boot_b')
         with busy('写入并校验 boot_b / writing and verifying boot_b'):
             su_checked('写入 boot_b / writing boot_b',
-                       f'dd if={TMP}/e5-boot.img of=/dev/block/by-name/boot_b bs=4M; sync')
+                       f'dd if={TMP}/e5-boot.img of=/dev/block/by-name/boot_b bs=4M; sync', **({'effect': 'boot-image'} if GUI else {}))
             ok = su('sha256sum /dev/block/by-name/boot_b').split()[0:1] == [bj['sha256']]
         if not ok:
             die('boot_b did not verify; Android stays as it is')
@@ -712,7 +865,7 @@ def install_sd(a):
     say('安装完成，请手动重启进入 OpenWrt / installed; reboot manually to enter OpenWrt')
     print(f'''
   第一次启动约 2 分钟 / the first boot takes about 2 minutes.
-  OpenWrt 在 SD 卡上 / OpenWrt is on the SD card ({sd}p1).
+  OpenWrt 在 SD 卡上 / OpenWrt is on the SD card ({part}).
   热点 / hotspot:  {ssid}   密码 / key:  {key}
   管理 / admin:    http://192.168.9.1  (LuCI, root / root -- 请改密码 / change it)
   回 Android:      屏幕 高级 -> 系统 -> 下次启动 Android, or: e5-next-boot android; reboot
@@ -773,9 +926,11 @@ def stage_userdata_image(raw_size, selected):
     if not 0 < raw_mib <= selected_mib <= 2147483647:
         die('userdata image size is outside the supported MiB range')
     script = os.path.join(F, 'userdata-image.sh')
+    push(os.path.join(F, 'android-loop.sh'), f'{TMP}/e5-android-loop.sh', 'android-loop.sh')
     push(script, f'{TMP}/e5-userdata-image.sh', 'userdata-image.sh')
     su_checked('扩容和只读检查 userdata 镜像 / resizing and verifying userdata image',
-               f'sh {TMP}/e5-userdata-image.sh {raw_size} {selected} {raw_mib} {selected_mib}', timeout=1800)
+               f'sh {TMP}/e5-userdata-image.sh {raw_size} {selected} {raw_mib} {selected_mib}', timeout=1800,
+               **({'effect':'root-userdata-image'} if GUI else {}))
 
 
 def install(a):
@@ -783,6 +938,7 @@ def install(a):
     steps(6)
     find_adb()
     android_checks()
+    check_userdata_image_source()
     bj = boot_json()
     install_preflight()
     img = os.path.join(F, 'openwrt.ext4.gz')
@@ -801,9 +957,8 @@ def install(a):
         print(f'   OpenWrt 镜像 / image: {selected / (1 << 30):.2f} GiB, /data/e5linux/openwrt.ext4')
         print('   不格式化 userdata；安装完成后手动重启。已有镜像会保留为备份。')
         print('   userdata is not formatted; an existing image is kept as a backup. Reboot manually.')
-        for n in (1, 2, 3):
-            if not confirm(f'   确认 {n}/3 -- 输入 yes 继续 / type yes to continue: '):
-                die('aborted: nothing was written')
+        if not confirm('   确认上述计划，输入 yes 继续 / confirm this plan, type yes to continue: '):
+            die('aborted: nothing was written')
 
     apn, ssid, key = a.apn, a.ssid if a.ssid is not None else default_hotspot_name(), a.wifi_key
     if not a.y:
@@ -838,7 +993,7 @@ def install(a):
 
         say('首次启动设置 / the first boot\'s settings')
         conf = os.path.join(work, 'install.conf')
-        with open(conf, 'w', newline='\n') as f:
+        with open(conf, 'w', encoding='utf-8', newline='\n') as f:
             f.write('# the flash package (flash.py), for OpenWrt\'s first boot\n'
                     f"E5_APN='{apn}'\nE5_WIFI_SSID='{ssid}'\nE5_WIFI_KEY='{key}'\n"
                     "E5_WIFI_CHANNEL='149'\nE5_DEFAULT_BOOT='linux'\n")
@@ -857,7 +1012,8 @@ def install(a):
     say('写入启动镜像 / boot image -> boot_b')
     with busy('写入并校验 boot_b / writing and verifying boot_b'):
         su_checked('写入 boot_b / writing boot_b',
-                   f'dd if={TMP}/e5-boot.img of=/dev/block/by-name/boot_b bs=4M conv=fsync; sync')
+                   f'dd if={TMP}/e5-boot.img of=/dev/block/by-name/boot_b bs=4M conv=fsync; sync',
+                   **({'effect':'boot-image'} if GUI else {}))
         ok = su('sha256sum /dev/block/by-name/boot_b').split()[0:1] == [bj['sha256']]
     if not ok:
         die('boot_b did not verify; Android stays as it is')
@@ -876,6 +1032,221 @@ def install(a):
   If the boot fails, the E5 falls back to Android after two tries.''')
 
 
+def check_userdata_image_source():
+    """Android can read decrypted /data while initramfs cannot. Refuse early."""
+    state = sh('getprop ro.crypto.state').strip()
+    kind = sh('getprop ro.crypto.type').strip()
+    mounts = su_checked('检查 userdata 镜像的启动条件 / checking plaintext userdata', 'cat /proc/mounts')
+    source = next((line.split()[0] for line in mounts.splitlines()
+                   if len(line.split()) > 2 and line.split()[1] == '/data'), '')
+    if (state != 'unencrypted' or kind in ('file', 'block') or not source.startswith('/dev/block/')
+            or source.startswith(('/dev/block/dm-', '/dev/mapper/'))):
+        die('userdata image requires confirmed unencrypted, unmapped /data; '
+            'use TF or independent internal installation instead. No image or boot was written.')
+
+
+def part_userdata_policy(a):
+    """A requested wipe must be explicit, and encryption never implies consent."""
+    state = sh('getprop ro.crypto.state').strip()
+    kind = sh('getprop ro.crypto.type').strip()
+    mounts = su_checked('检查 data 加密 / checking data encryption', 'cat /proc/mounts')
+    data_source = next((line.split()[0] for line in mounts.splitlines()
+                        if len(line.split()) > 2 and line.split()[1] == '/data'), '')
+    encrypted = state == 'encrypted' or kind in ('file', 'block')
+    metadata = data_source.startswith(('/dev/block/dm-', '/dev/mapper/'))
+    encrypted = encrypted or metadata
+    wipe = bool(getattr(a, 'format_userdata', False)) or encrypted
+    if encrypted:
+        print(f'   检测到 data 加密 / data encryption: {kind or state or "mapped block device"}; '
+              '本次安装必须格式化 userdata / formatting userdata is required.')
+    elif not a.y and not wipe:
+        wipe = confirm('   是否格式化 userdata？这会清空 Android 所有用户数据 / '
+                       'format userdata and erase ALL Android user data [no]: ', word='yes')
+    if wipe:
+        print('   警告 / WARNING: Android 应用、账号、照片及内部存储文件将被清空。')
+        print('   ALL Android apps, accounts, photos and internal storage files will be erased.')
+        # -y is the existing unattended installer confirmation, not permission
+        # for a newly detected destructive operation.
+        if a.y and not getattr(a, 'format_userdata', False):
+            die('encrypted userdata requires --format-userdata as explicit erase consent; -y alone is insufficient')
+    if wipe:
+        print('   两阶段安装：重建分区 → 原厂 recovery 清空数据 → Android 重新授权 → 安装 OpenWrt。')
+    a.format_userdata = wipe
+    return wipe
+
+
+def part_target(a, raw_size):
+    """The userdata node and the sizes an internal-partition install wants."""
+    probe = su_checked('读取分区 / reading the partition table',
+                       'for u in /sys/class/block/mmcblk*p*/uevent; do '
+                       'n=$(basename "$(dirname "$u")"); '
+                       'grep -qx PARTNAME=userdata "$u" 2>/dev/null && echo "data $n $(cat /sys/class/block/$n/size)"; '
+                       'grep -qx PARTNAME=e5root "$u" 2>/dev/null && echo "part $n"; '
+                       'done; df -k /data | tail -1')
+    node = data_sectors = ''
+    existing = None
+    used_mib = 0
+    for line in probe.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[0] == 'data':
+            node, data_sectors = fields[1], fields[2]
+        elif len(fields) >= 2 and fields[0] == 'part':
+            existing = fields[1]
+        elif len(fields) >= 4 and fields[3].isdigit():
+            used_mib = int(fields[2]) // 1024
+    if existing:
+        die(f'the internal partition {existing} (e5root) already exists; run this installer with '
+            '--reinstall-part to write a new system into it (userdata and the partition table stay, '
+            'nothing is erased)')
+    if not node or not data_sectors.isdigit() or int(data_sectors) == 0:
+        die('userdata is not in the partition table of this device')
+    udata_mib = int(data_sectors) // 2048
+    image_mib = (raw_size + (1 << 20) - 1) // (1 << 20)
+    minimum = image_mib + 256
+    maximum = udata_mib - (0 if getattr(a, 'format_userdata', False) else used_mib) - 2048
+    if maximum < minimum:
+        die(f'not enough room: userdata is {udata_mib} MiB with {used_mib} MiB used, '
+            f'the image needs a {minimum} MiB partition')
+    value = getattr(a, 'part_size', None)
+    if value is None and not a.y:
+        value = ask(f'内置分区大小（GiB）/ partition size [{((image_mib + 1024) / 1024):.2f}, '
+                    f'max {maximum / 1024:.2f}]: ', f'{(image_mib + 1024) / 1024:.2f}')
+    if value is None:
+        part_mib = min(maximum, ((image_mib + 1024 + 1023) // 1024) * 1024)
+    else:
+        try:
+            amount = Decimal(str(value))
+            if not amount.is_finite() or amount <= 0:
+                raise ValueError()
+            part_mib = int((amount * (1 << 30) / (1 << 20)).to_integral_value(rounding=ROUND_CEILING))
+        except (InvalidOperation, ValueError, OverflowError):
+            die('the partition size must be a positive number in GiB, for example 4 or 6.5')
+    if not minimum <= part_mib <= maximum:
+        die(f'partition size outside the permitted range ({minimum / 1024:.2f}–{maximum / 1024:.2f} GiB)')
+    return node, udata_mib, used_mib, part_mib
+
+
+def install_part(a):
+    """Install OpenWrt onto its own eMMC partition, in space taken from
+    userdata -- without an SD card.  This side only chooses the sizes, stages
+    the payloads and arms the boot: the F2FS shrink and the partition table
+    change happen on the next boot (boot/install-part.sh in the initramfs),
+    where userdata is unmounted and only raw tools touch it."""
+    steps(6)
+    find_adb()
+    android_checks()
+    bj = boot_json()
+    install_preflight()
+    img = os.path.join(F, 'openwrt.ext4.gz')
+    raw_size = gz_usize(img)
+    wipe = part_userdata_policy(a)
+    node, udata_mib, used_mib, part_mib = part_target(a, raw_size)
+    if GUI: GUI.validate_plan('userdata shrink', wipe=wipe, capacity=part_mib*(1 << 20))
+    data_mib = udata_mib - part_mib
+    grow = int(a.grow_fs is not False)
+    if not a.y:
+        say("安装到内置分区 / installing to an internal partition")
+        print(f'   userdata: {udata_mib / 1024:.2f} -> {data_mib / 1024:.2f} GiB, ' +
+              ('清空 Android 用户数据 / erase Android user data' if wipe else 'Android 的文件保留'))
+        print(f'   新分区 e5root / new partition: {part_mib / 1024:.2f} GiB（镜像 {raw_size >> 20} MiB）')
+        print('   缩容与写入在下次启动由引导镜像完成。')
+        print('   The shrink and the writing happen on the next boot, from the boot image;')
+        print('   ' + ('userdata WILL BE FORMATTED.' if wipe else 'userdata is not formatted.') +
+              ' Reboot manually when done.')
+        grow = part_growth(a)
+        print('   系统分配 / system allocation: ' +
+              ('整个分区 / the whole partition' if grow else "镜像大小 / the image's size, about 2 GiB"))
+        if not confirm('   确认上述计划，输入 yes 继续 / confirm this plan, type yes to continue: '):
+            die('aborted: nothing was written')
+
+    apn, ssid, key = a.apn, a.ssid if a.ssid is not None else default_hotspot_name(), a.wifi_key
+    if not a.y:
+        if apn is None:
+            apn = ask('APN [自动识别 / automatic, from the SIM]: ')
+        ssid = ask(f'热点名称 / hotspot name [{ssid}]: ', ssid)
+        if not key:
+            key = ask(f'热点密码 / hotspot key, 8-63 characters [random]: ')
+    apn = apn or ''
+    if not key:
+        key = ''.join(random.SystemRandom().choice('abcdefghjkmnpqrstuvwxyz23456789') for _ in range(10))
+    if not 8 <= len(key) <= 63 or "'" in key or "'" in ssid or "'" in apn:
+        die("the hotspot key must have 8-63 characters, and no ' anywhere")
+
+    if wipe:
+        part_two_stage('start', a, node, part_mib, data_mib, grow, raw_size, apn, ssid, key)
+        return
+
+    with tempfile.TemporaryDirectory() as work:
+        firmware = f'{TMP}/e5-data-device-files.tar'
+        size = pull_device_files(work, firmware)
+        print(f'   device-files.tar: {size} bytes')
+        push(img, f'{TMP}/e5-part-install.img.gz', 'openwrt.ext4.gz')
+        push(os.path.join(F, 'boot.img'), f'{TMP}/e5-boot.img', 'boot.img')
+        conf = os.path.join(work, 'part-install.settings')
+        with open(conf, 'w', encoding='utf-8', newline='\n') as f:
+            f.write("E5_APN='%s'\nE5_WIFI_SSID='%s'\nE5_WIFI_KEY='%s'\n"
+                    "E5_WIFI_CHANNEL='149'\nE5_DEFAULT_BOOT='linux'\n" % (apn, ssid, key))
+        adb('push', conf, f'{TMP}/part-install.settings', check=True)
+        say(f'落位安装载荷 / staging the install -> {D}')
+        su_checked('落位安装载荷 / staging the install',
+                   f'umask 077; mkdir -p {D}; '
+                   f'mv {TMP}/e5-part-install.img.gz {D}/part-install.img.gz; '
+                   f'mv {firmware} {D}/device-files.tar; '
+                   f'mv {TMP}/part-install.settings {D}/part-install.settings; '
+                   f'printf "PART_MIB={part_mib}\\nDATA_MIB={data_mib}\\nGROW_FS={grow}\\nFORMAT_DATA={int(wipe)}\\n" > {D}/part-install.conf.tmp; '
+                   f'mv {D}/part-install.conf.tmp {D}/part-install.conf; '
+                   f'chmod 600 {D}/part-install.conf {D}/part-install.settings {D}/device-files.tar; sync')
+
+    bootchain('sync')
+    say('写入启动镜像 / boot image -> boot_b')
+    with busy('写入并校验 boot_b / writing and verifying boot_b'):
+        su_checked('写入 boot_b / writing boot_b',
+                   f'dd if={TMP}/e5-boot.img of=/dev/block/by-name/boot_b bs=4M conv=fsync; sync',
+                   **({'effect':'boot-image'} if GUI else {}))
+        ok = su('sha256sum /dev/block/by-name/boot_b').split()[0:1] == [bj['sha256']]
+    if not ok:
+        die('boot_b did not verify; Android stays as it is')
+    su(f'rm -f {TMP}/e5-boot.img')
+    su_checked('记录分区启动目标 / recording the partition boot target',
+               f'rm -f {D}/boot-os-next; echo part > {D}/boot-os; sync')
+    arm_slot_b()
+
+    say('安装已就绪，请手动重启 / staged; reboot manually')
+    print(f'''
+  首次开机需要离线检查、缩容、建分区和写入，通常数分钟；数据较多或闪存较慢时会更久。
+  这不是普通开机，请保持供电，不要中断；缩容安装完成后会自动重启一次，再进入 OpenWrt。
+  The next boot shrinks userdata, creates the e5root partition and writes
+  OpenWrt into it, then restarts once into it -- about a few minutes.
+  热点 / hotspot:  {ssid}   密码 / key:  {key}
+  管理 / admin:    http://192.168.9.1  (LuCI, root / root -- 请改密码 / change it)
+  回 Android:      e5-next-boot android（或删掉 {D}/boot-os）后重启；首启是试启动，
+  失败会回到 Android。If the first boot fails, the next one falls back.''')
+
+
+def part_growth(a):
+    if a.grow_fs is not None:
+        return int(a.grow_fs)
+    if a.y:
+        return 1
+    answer = ask('   完全使用空间：扩满所选分区（选 no 则保留镜像约 2 GiB 容量）/ '
+                 'use the whole partition [yes]: ', 'yes').lower()
+    if answer in ('yes', 'y'):
+        return 1
+    if answer in ('no', 'n'):
+        return 0
+    die('enter yes or no / 请输入 yes 或 no')
+
+
+def part_two_stage(action, *args):
+    try:
+        helper = os.path.join(SCRIPTS, 'installer', 'part-two-stage.py')
+        if not os.path.isfile(helper):
+            helper = os.path.join(B, 'part-two-stage.py')
+        runpy.run_path(helper)[action](globals(), *args)
+    except (ValueError, OSError) as error:
+        die(str(error))
+
+
 def check(a):
     steps(3)
     find_adb()
@@ -892,23 +1263,13 @@ def check(a):
 
 
 def boot_openwrt(a):
-    steps(2)
-    find_adb()
-    android_checks()
-    bj = boot_json()
-    if 'ok' not in su(f'{{ [ -f {D}/openwrt.ext4 ] || [ "$(cat {D}/boot-os 2>/dev/null)" = sd ]; }} && echo ok'):
-        die('OpenWrt is not installed: run the first install')
-    mb = bj['persist_log_offset'] // 1048576
-    head = su(f'dd if=/dev/block/by-name/boot_b bs=1048576 count={mb} 2>/dev/null | sha256sum').split()[0:1]
-    if head != [bj['sha256_head56m']]:
-        die('boot_b holds another boot image: use the package it was flashed with, or a first install')
-    bootchain('sync')
-    # OpenWrt the default again, not only for this boot (the screen's "boot
-    # Android" made Android the default); /etc/init.d/e5-boot-ok takes it
-    su(f'echo linux > {D}/openwrt-default-boot')
-    arm_slot_b()
-    say('正在重启进 OpenWrt / rebooting into OpenWrt')
-    adb('reboot')
+    helper = os.path.join(SCRIPTS, 'installer', 'boot-control.py')
+    if not os.path.isfile(helper):
+        helper = os.path.join(B, '..', '..', 'installer', 'backend', 'boot_image.py')
+    def read(command):
+        # Only 4096/512-byte header metadata, never a partition backup.
+        return bytes.fromhex(su(command+' | od -An -tx1 -v'))
+    return runpy.run_path(helper)['boot_installed_e5'](globals(), read)
 
 
 def local_ip(host):
@@ -921,6 +1282,7 @@ def local_ip(host):
 
 
 def update(a):
+    if GUI: return GUI.update_e5(a)
     host = os.environ.get('E5_HOST', '192.168.9.1')
     try:
         ip = local_ip(host)
@@ -933,129 +1295,133 @@ def update(a):
         pw = 'root'     # (-y: the default, not asked)
     if pw is None:
         import getpass
-        pw = getpass.getpass('root password of the E5 [root]: ') or 'root'
-    bj = boot_json()
-    profile = package_profile()
-    guard = ''
-    if profile:
-        guard = ('[ "$(cat /etc/e5/device-profile 2>/dev/null)" = ' + profile['profile'] +
-                 ' ] || { echo "error: package/device profile mismatch" >&2; exit 1; }\n')
-    mb = bj['persist_log_offset'] // 1048576
-    with tempfile.TemporaryDirectory() as td:
-        head = os.path.join(td, 'boot-head.img')
-        with open(os.path.join(F, 'boot.img'), 'rb') as i, open(head, 'wb') as o:
-            o.write(i.read(mb << 20))
-        files = {'/boot-head.img': head,
-                 '/openwrt.ext4.gz': os.path.join(F, 'openwrt.ext4.gz'),
-                 '/dii.sh': os.path.join(F, 'device-install-image.sh'),
-                 '/e5-gpt': os.path.join(F, 'e5-gpt'),
-                 '/dfb.sh': os.path.join(F, 'device-flash-boot.sh')}
+        pw = getpass.getpass('Device root password / 设备 root 密码 [root]: ') or 'root'
+    boot_json()  # validate the package before connecting
+    size, image_hash = gz_metadata(os.path.join(F, 'openwrt.ext4.gz'))
+    env = dict(os.environ, E5_TELNET_PASS=pw)
+    helper = python_tool(os.path.join(SCRIPTS, 'tools', 'e5-update.py'))
+    say(f'更新 / updating {host} (SSH upload)')
+    result = subprocess.run(helper + ['--package', B, '--host', host,
+                            '--raw-size', str(size), '--raw-sha256', image_hash], env=env)
+    if result.returncode:
+        die('the update did not finish; see the failed step above')
+    say('载荷已校验，设备正在重启执行更新 / verified, rebooting to apply update')
 
-        class H(http.server.SimpleHTTPRequestHandler):
-            def translate_path(self, path):
-                return files.get(path.split('?')[0], os.path.join(td, 'nothing'))
-
-            def log_message(self, *args):
-                pass
-
-        srv = http.server.ThreadingHTTPServer((ip, 0), H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        u = f'http://{ip}:{srv.server_address[1]}'
-        say(f'更新 / updating {host}')
-        env = dict(os.environ, E5_TELNET_HOST=host, E5_TELNET_PASS=pw, E5_TELNET_WAIT='1800')
-        telnet = [sys.executable, os.path.join(SCRIPTS, 'tools', 'e5-telnet.py')]
-        # The steps as a script the device fetches: a long command line typed over
-        # telnet gets lost (the 80-column pty's line editing), so only a short one is.
-        steps_sh = f"""set -e
-{guard}\
-cd /tmp
-wget -q -O dfb.sh {u}/dfb.sh
-wget -q -O dii.sh {u}/dii.sh
-sh dfb.sh {u}/boot-head.img {bj["sha256_head56m"]} {mb}
-if [ -f /etc/e5/sd-root ]; then
-    # an SD card system (the default install): the new image goes into the card's
-    # other root partition, the next boot is its trial; userdata is not touched
-    # (FINDINGS 49)
-    wget -q -O e5-gpt {u}/e5-gpt
-    E5_IMAGE_SIZE={gz_usize(os.path.join(F, "openwrt.ext4.gz"))} sh dii.sh {u}/openwrt.ext4.gz
-    # Updating OpenWrt is an explicit operator choice; make it the persistent
-    # SD default after the new slot has verified, rather than leaving Debian
-    # selected from an earlier multi-system session.
-    if [ -f /mnt/e5-boot/format ]; then
-        e5-os openwrt
-    fi
-    # Legacy single-system SD cards already use the SD boot selection. Their
-    # userdata stays read-only; e5-os there would write an unrelated image choice.
-else
-    # the form on userdata (--data, kept for tests)
-    sh dii.sh {u}/openwrt.ext4.gz
-    d=/mnt/e5-data/e5linux
-    rm -f $d/boot-os-next
-    echo openwrt > $d/boot-os
-    sync
-fi
-echo E5-UPDATE-$((1+1))
-"""
-        with open(os.path.join(td, 'update.sh'), 'w', newline='\n') as f:
-            f.write(steps_sh)
-        files['/update.sh'] = os.path.join(td, 'update.sh')
-        cmd = f'cd /tmp && wget -q -O e5-update.sh {u}/update.sh && sh e5-update.sh'
-        # the device's own steps as they happen: the boot image, the unpacking,
-        # the settings kept, the device's files
-        lines = []
-        with subprocess.Popen(telnet + [cmd], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as pr:
-            with busy('设备上的更新 / the update on the device'):
-                for raw in pr.stdout:
-                    line = raw.decode('utf-8', 'replace').replace('\r', '').rstrip('\n')
-                    lines.append(line)
-                    if line.startswith(('==', 'installed', 'WARNING', 'error', 'the image', '   ')):
-                        sys.stdout.write('\r   ' + line + ' ' * 20 + '\n')
-                        sys.stdout.flush()
-        out = '\n'.join(lines)
-        srv.shutdown()
-        if 'E5-UPDATE-2' not in out:
-            print('\n'.join(out.splitlines()[-20:]))
-            die('the update did not finish (the log is above)')
-        # the reboot on its own: a session the reboot cuts never sees its end
-        env['E5_TELNET_WAIT'] = '20'
-        subprocess.run(telnet + ['( (sleep 2; reboot) >/dev/null 2>&1 & )'], env=env,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    say('完成，设备正在重启 / done, the E5 is rebooting')
 
 
 def main():
+    global SERIAL
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group()
+    g.add_argument('--menu', action='store_true', help='choose an installation or maintenance action')
+    g.add_argument('--tf', action='store_true', help='first install onto the existing TF first partition (whole card only if unpartitioned); erases that target')
     g.add_argument('--update', action='store_true')
     g.add_argument('--boot-openwrt', action='store_true')
     g.add_argument('--check', action='store_true')
+    g.add_argument('--verify-package', action='store_true', help='verify package files without accessing a device')
     g.add_argument('--data', action='store_true',
-                   help="install to the phone's storage (userdata) as before; the SD card is the default")
+                   help='EXPERIMENTAL userdata image: may damage Android F2FS; unencrypted data only')
+    g.add_argument('--part', action='store_true',
+                   help="install to an internal eMMC partition, without an SD card; "
+                        "the next boot shrinks userdata and creates it")
+    g.add_argument('--resume-part', metavar='TRANSACTION_JSON',
+                   help='continue the encrypted-data installation after Android setup/root authorization')
+    g.add_argument('--reinstall-part', action='store_true',
+                   help='rewrite an existing internal partition system: userdata, its filesystem and '
+                        'the partition table stay, e5root and boot_b are replaced (no wipe, no stage one)')
     ap.add_argument('--apn')
+    ap.add_argument('--serial', help='bind all ADB operations to this device')
     ap.add_argument('--ssid', help='hotspot name; defaults to the package device model plus -OpenWrt')
     ap.add_argument('--wifi-key')
     ap.add_argument('--image-size', help='userdata image size in GiB (e.g. 4 or 6.5); requires --data')
+    ap.add_argument('--part-size', help='internal partition size in GiB (e.g. 4 or 6.5); requires --part')
+    growth = ap.add_mutually_exclusive_group()
+    growth.add_argument('--grow-fs', dest='grow_fs', action='store_true',
+                        help='use the whole internal partition (default)')
+    growth.add_argument('--no-grow-fs', dest='grow_fs', action='store_false',
+                        help='keep the initial image filesystem size instead of filling the partition')
+    ap.set_defaults(grow_fs=None)
+    ap.add_argument('--format-userdata', action='store_true',
+                    help='erase ALL Android user data before internal-partition installation; requires --part')
     ap.add_argument('-y', action='store_true')
+    ap.add_argument('--no-pause', action='store_true', help='do not wait for Enter on exit')
+    ap.add_argument('--pause', action='store_true', help='wait for Enter on exit')
     a = ap.parse_args()
+    SERIAL = a.serial
+    if (a.menu or not any((a.tf, a.data, a.part, a.reinstall_part, a.resume_part,
+                          a.update, a.boot_openwrt, a.check, a.verify_package))) and not choose_install_action(a):
+        return False
     if a.image_size is not None and not a.data:
         ap.error('--image-size requires --data / install-userdata')
+    if a.part_size is not None and not a.part:
+        ap.error('--part-size requires --part / install-part')
+    if a.grow_fs is not None and not a.part:
+        ap.error('--grow-fs/--no-grow-fs requires --part / install-part')
+    if a.format_userdata and not a.part:
+        ap.error('--format-userdata requires --part / install-part')
+    if a.reinstall_part and (a.part or a.format_userdata):
+        ap.error('--reinstall-part keeps userdata and the partition table; it is not --part')
     if sys.version_info < (3, 8):
         die('Python 3.8 or newer is needed')
     check_package()
-    if a.update:
+    if a.verify_package:
+        print('Package verified / 安装包校验通过，未连接设备。')
+    elif a.resume_part:
+        part_two_stage('resume', a)
+    elif a.reinstall_part:
+        part_two_stage('reinstall', a)
+    elif a.update:
         update(a)
     elif a.boot_openwrt:
         boot_openwrt(a)
     elif a.check:
         check(a)
     elif a.data:
-        install(a)          # the form before the SD card; three confirmations
+        print('EXPERIMENTAL / 实验性功能：userdata 镜像模式可能破坏 Android 的 F2FS 文件系统。\n'
+              "This mode may damage Android's F2FS filesystem. Prefer TF or an independent internal partition.")
+        install(a)          # the legacy userdata-image method
+    elif a.part:
+        install_part(a)     # an internal partition; the boot image finishes it
     else:
         install_sd(a)
+    return True
+
+
+def run_cli():
+    started = time.monotonic()
+    rc, outcome = 0, 'SUCCESS / 成功'
+    try:
+        if main() is False:
+            outcome = 'CANCELLED / 已取消'
+    except KeyboardInterrupt:
+        rc, outcome = 130, 'CANCELLED / 已中断，请检查当前安装阶段后再操作'
+    except SystemExit as error:
+        rc = error.code if isinstance(error.code, int) else 1
+        if not rc:
+            return 0  # argparse help
+        if not isinstance(error.code, int):
+            print(str(error.code), file=sys.stderr, flush=True)
+        outcome = 'FAILED / 失败；请保留上方错误与备份，不要盲目重跑分区步骤'
+    except Exception as error:
+        rc, outcome = 1, 'FAILED / 失败'
+        print('\n错误 / error: ' + str(error), file=sys.stderr, flush=True)
+    print('\n' + '=' * 60)
+    print(f'[{outcome}]  {time.monotonic() - started:.1f} s', flush=True)
+    print('=' * 60, flush=True)
+    if '--no-pause' not in sys.argv and ('--pause' in sys.argv or sys.stdin.isatty()):
+        try:
+            input('按 Enter 关闭 / Press Enter to close...')
+        except (EOFError, KeyboardInterrupt):
+            pass
+    return rc
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except KeyboardInterrupt:
-        die('interrupted')
+    # A frozen build has no Python beside it: the executable re-enters itself
+    # to run the package's helper scripts with its bundled interpreter.
+    if len(sys.argv) > 2 and sys.argv[1] == '--run-tool':
+        _tool = sys.argv[2]
+        sys.argv = [os.path.basename(_tool), *sys.argv[3:]]
+        runpy.run_path(_tool, run_name='__main__')
+        sys.exit(0)
+    sys.exit(run_cli())

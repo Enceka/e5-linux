@@ -1,5 +1,9 @@
 # E5 Android → Linux Magisk 模块
 
+本文介绍独立的 **`e5-linux-switch` 切换模块**，不是完整固件的首次安装器。
+新版 E5/T551M/M8 完整固件 ZIP 另有 Magisk TF 部署入口，会清空整张 TF 卡并安装 OpenWrt；
+详细操作见完整安装包顶层 `START-HERE.md`，不要为了切换系统反复刷完整固件。
+
 在已 root 的 E5 Android 内安装 `e5-linux-switch-*.zip`，然后在 Magisk
 模块列表点击 **E5 切回 Linux → 操作**，设备会重启进入已安装的 Linux。
 安装模块不会自动切系统，也没有开机自动切换脚本。

@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Local installer window; device operations use fixed Rust commands","local":true,"windows":["main"],"permissions":["core:default"]}}

@@ -9,7 +9,9 @@
 ## 安装与更新
 
 从 [Releases](https://github.com/Enceka/e5-linux/releases) 下载完整主线刷入包，解压后
-Windows 运行 `flash.cmd`，macOS／Linux 运行 `./flash.sh`，按包内说明和安装器操作。
+Windows 运行 `OpenWrt-Installer.exe`，macOS／Linux 运行 `sh launchers/start-installer.sh`。
+详细指南放在解压目录顶层 `START-HERE.md`。新版完整 ZIP 也可在 Magisk 内首次部署 TF 卡，
+此操作会清空所选 TF 目标（已有第一分区，无分区则整卡），与仅用于系统切换的小型模块不同。
 首次安装从已 root 的 Android 开始，提取目标设备自身固件和 vendor 文件；通用镜像
 不携带这些文件，也不包含用户设备身份。
 
@@ -20,7 +22,7 @@ Windows 运行 `flash.cmd`，macOS／Linux 运行 `./flash.sh`，按包内说明
 已运行 OpenWrt、通过 USB 连接电脑时：
 
 ```sh
-./flash.sh --update
+sh launchers/update-openwrt.sh
 ```
 
 更新保留配置、通讯录、转发设置和持久短信收件箱。内核和根目录模块必须来自同一次

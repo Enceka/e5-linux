@@ -1,0 +1,282 @@
+#!/usr/bin/ucode
+// The SD card's partition table, for the card install's update (openwrt/device-install-image.sh): OpenWrt
+// has no sgdisk, and the card's root is mounted while it runs, so the kernel is not asked to re-read the
+// table -- a partition added here is written through the whole disk at its offset, and appears as a node
+// at the next boot.  GPT only, 512-byte sectors; both copies (primary and backup) are rewritten.
+//
+//   e5-gpt list DISK                  N START END NAME, one line per partition
+//   e5-gpt uuid DISK N                the unique GUID of partition N
+//   e5-gpt add DISK NAME SECTORS      a Linux partition in the largest free gap, 1 MiB aligned: N START END
+//   e5-gpt resize DISK NAME SECTORS   an existing partition to a new size (shrink, or into free space)
+//   e5-gpt plan DISK NAME:SECTORS|resize:NAME:SECTORS ... simulate requests, read-only: NAME N START END
+let fs = require('fs');
+
+function die(msg) {
+	warn(`e5-gpt: ${msg}\n`);
+	exit(1);
+}
+
+let crctab = [];
+for (let n = 0; n < 256; n++) {
+	let c = n;
+	for (let k = 0; k < 8; k++)
+		c = (c & 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1);
+	push(crctab, c);
+}
+function crc32(s) {
+	let c = 0xFFFFFFFF;
+	for (let i = 0; i < length(s); i++)
+		c = crctab[(c ^ ord(s, i)) & 0xFF] ^ (c >> 8);
+	return c ^ 0xFFFFFFFF;
+}
+
+function le(s, off, n) {
+	let v = 0;
+	for (let i = n - 1; i >= 0; i--)
+		v = v * 256 + ord(s, off + i);
+	return v;
+}
+function lebytes(v, n) {
+	let b = [];
+	for (let i = 0; i < n; i++) {
+		push(b, chr(v % 256));
+		v = int(v / 256);
+	}
+	return join('', b);
+}
+function put(s, off, bytes) {
+	return substr(s, 0, off) + bytes + substr(s, off + length(bytes));
+}
+
+let cmd = ARGV[0], disk = ARGV[1];
+if (!(cmd in ['list', 'add', 'uuid', 'plan', 'resize', 'carve-userdata']) || !disk)
+	die('usage: e5-gpt list DISK | uuid DISK N | add DISK NAME SECTORS | resize DISK NAME SECTORS | plan DISK NAME:SECTORS ...');
+let h = fs.open(disk, (cmd == 'add' || cmd == 'resize' || cmd == 'carve-userdata') ? 'r+' : 'r') || die(`${disk}: ${fs.error()}`);
+function rd(lba, count) {
+	h.seek(lba * 512, 0);
+	let s = h.read(count * 512);
+	if (length(s) != count * 512)
+		die(`${disk}: short read at sector ${lba}`);
+	return s;
+}
+function wr(lba, s) {
+	h.seek(lba * 512, 0);
+	h.write(s) == length(s) || die(`${disk}: write failed at sector ${lba}`);
+}
+
+// a header and its table, checked
+function load(lba) {
+	let hd = rd(lba, 1);
+	if (substr(hd, 0, 8) != 'EFI PART')
+		die(`no GPT header at sector ${lba}`);
+	let hsize = le(hd, 12, 4);
+	if (hsize < 92 || hsize > 512)
+		die(`odd GPT header size ${hsize}`);
+	if (crc32(put(substr(hd, 0, hsize), 16, lebytes(0, 4))) != le(hd, 16, 4))
+		die(`the GPT header at sector ${lba} fails its checksum`);
+	let g = { lba: lba, hd: hd, hsize: hsize, alt: le(hd, 32, 8), first: le(hd, 40, 8), last: le(hd, 48, 8),
+		elba: le(hd, 72, 8), num: le(hd, 80, 4), esize: le(hd, 84, 4) };
+	if (g.esize != 128 || g.num < 1 || g.num > 1024)
+		die(`odd GPT table (${g.num} entries of ${g.esize} bytes)`);
+	g.tab = substr(rd(g.elba, int((g.num * 128 + 511) / 512)), 0, g.num * 128);
+	if (crc32(g.tab) != le(hd, 88, 4))
+		die(`the GPT table of the header at sector ${lba} fails its checksum`);
+	return g;
+}
+
+let ZERO16 = lebytes(0, 16);
+let p = load(1);
+let parts = [], empty = -1, free_entries = [];
+for (let i = 0; i < p.num; i++) {
+	let e = substr(p.tab, i * 128, 128);
+	if (substr(e, 0, 16) == ZERO16) {
+		if (empty < 0)
+			empty = i;
+		push(free_entries, i);
+		continue;
+	}
+	let name = '';
+	for (let j = 56; j < 128; j += 2) {
+		let c = le(e, j, 2);
+		if (!c)
+			break;
+		name += (c < 128) ? chr(c) : '?';
+	}
+	push(parts, { n: i + 1, start: le(e, 32, 8), end: le(e, 40, 8), name: name });
+}
+
+if (cmd == 'list') {
+	for (let x in parts)
+		print(`${x.n} ${x.start} ${x.end} ${x.name}\n`);
+	exit(0);
+}
+
+if (cmd == 'uuid') {
+	let n = +ARGV[2];
+	if (type(n) != 'int' || n < 1 || n > p.num)
+		die('uuid: invalid partition number');
+	let e = substr(p.tab, (n - 1) * 128, 128);
+	if (substr(e, 0, 16) == ZERO16)
+		die('uuid: unused partition');
+	let g = substr(e, 16, 16), out = '';
+	for (let i in [3, 2, 1, 0, -1, 5, 4, -1, 7, 6, -1, 8, 9, -1, 10, 11, 12, 13, 14, 15])
+		out += (i < 0) ? '-' : sprintf('%02x', ord(g, i));
+	print(`${out}\n`);
+	exit(0);
+}
+
+let b = load(p.alt);
+if (p.tab != b.tab || p.num != b.num || p.first != b.first || p.last != b.last || b.alt != 1 ||
+    substr(p.hd, 56, 16) != substr(b.hd, 56, 16))
+	die('primary and backup GPT disagree; repair the partition table before installing');
+
+// the largest free gap between the usable sectors, the partitions sorted
+function available() {
+	let sorted = sort(parts, (x, y) => x.start - y.start), gaps = [], at = p.first;
+	for (let x in sorted) {
+		if (x.start < at || x.end < x.start || x.end > p.last)
+			die(`invalid/overlapping partition ${x.n} (${x.name})`);
+		if (x.start > at)
+			push(gaps, [at, x.start - 1]);
+		at = x.end + 1;
+	}
+	if (p.last >= at)
+		push(gaps, [at, p.last]);
+	return gaps;
+}
+function allocation(name, want) {
+	if (!match(name ?? '', /^[A-Za-z0-9_-]{1,36}$/) || type(want) != 'int' || want < 2048)
+		die('invalid partition request: name and integer size >= 2048 sectors required');
+	for (let x in parts)
+		if (x.name == name)
+			die(`partition ${name} already exists`);
+	let best = null, total = 0, largest = 0;
+	for (let g in available()) {
+		let s = int((g[0] + 2047) / 2048) * 2048;
+		let size = max(0, g[1] - s + 1);
+		total += size;
+		largest = max(largest, size);
+		if (size >= want && (!best || size > best[1] - best[0] + 1))
+			best = [s, g[1]];
+	}
+	if (!best)
+		die(`insufficient unallocated space on ${disk} for ${name}: required ${want / 2048} MiB, largest aligned gap ${largest / 2048} MiB, total remaining ${total / 2048} MiB; free space inside existing filesystems cannot be used`);
+	return [best[0], best[0] + want - 1];
+}
+// An existing partition's new range. Shrinking here only moves the table's
+// end: the caller must have shrunk the filesystem inside it first, while it
+// was unmounted. Growing may use free space after it and needs no more.
+function resize_range(name, want) {
+	if (type(want) != 'int' || want < 2048)
+		die('invalid resize request: an integer size >= 2048 sectors is required');
+	let target = null;
+	for (let x in parts)
+		if (x.name == name) {
+			if (target)
+				die(`two partitions are named ${name}; resize by hand`);
+			target = x;
+		}
+	if (!target)
+		die(`no partition named ${name} to resize`);
+	let end = target.start + want - 1;
+	if (end > p.last)
+		die(`resize of ${name} would end past the last usable sector`);
+	for (let x in parts)
+		if (x.n != target.n && x.start <= end && x.end >= target.start)
+			die(`resize of ${name} to ${want} sectors overlaps partition ${x.n} (${x.name})`);
+	return [target.start, end, target.n];
+}
+
+if (cmd == 'plan') {
+	let count = length(ARGV) - 2, planned = [];
+	if (count < 1)
+		die('plan: specify every NAME:SECTORS or resize:NAME:SECTORS request');
+	let adds = 0;
+	for (let i = 0; i < count; i++) {
+		let request = split(ARGV[i + 2], ':');
+		if (length(request) == 3 && request[0] == 'resize') {
+			let range = resize_range(request[1], +request[2]);
+			for (let x in parts)
+				if (x.n == range[2])
+					x.end = range[1];             // later requests see the new layout
+			push(planned, { n: range[2], start: range[0], end: range[1], name: request[1] });
+			continue;
+		}
+		if (length(request) != 2)
+			die('plan: expected NAME:SECTORS or resize:NAME:SECTORS');
+		adds++;
+		if (adds > length(free_entries))
+			die(`insufficient GPT entries: required ${adds}, available ${length(free_entries)}; nothing was written`);
+		let range = allocation(request[0], +request[1]);
+		let x = { n: free_entries[adds - 1] + 1, start: range[0], end: range[1], name: request[0] };
+		push(parts, x);
+		push(planned, x);
+	}
+	for (let x in planned)
+		print(`${x.name} ${x.n} ${x.start} ${x.end}\n`);
+	exit(0);
+}
+
+// Both copies, backup first: a cut in between leaves one good copy that the
+// kernel takes (the rest of a last sector the table does not fill is kept).
+function commit(tab) {
+	let tcrc = lebytes(crc32(tab), 4);
+	for (let g in [b, p]) {
+		let rest = length(tab) % 512;
+		wr(g.elba, tab + (rest ? substr(rd(g.elba + int(length(tab) / 512), 1), rest) : ''));
+		let hd = put(g.hd, 88, tcrc);
+		hd = put(hd, 16, lebytes(0, 4));
+		hd = put(hd, 16, lebytes(crc32(substr(hd, 0, g.hsize)), 4));
+		wr(g.lba, hd);
+		h.flush();
+	}
+}
+
+if (cmd == 'resize') {
+	let range = resize_range(ARGV[2], +ARGV[3]);
+	let entry = substr(p.tab, (range[2] - 1) * 128, 128);
+	entry = put(entry, 40, lebytes(range[1], 8));
+	commit(put(p.tab, (range[2] - 1) * 128, entry));
+	h.close();
+	print(`${ARGV[2]} ${range[2]} ${range[0]} ${range[1]}\n`);
+	exit(0);
+}
+
+if (empty < 0)
+	die('the GPT has no free entry; nothing was written');
+let carve = null;
+if (cmd == 'carve-userdata') {
+	// Destructive prepare only: caller authorizes discarding userdata and checks
+	// that it is unmounted. Commit both geometry edits in one GPT generation.
+	let length = +ARGV[2], root_size = +ARGV[3], previous = +ARGV[4];
+	let r = resize_range('userdata', length), original = null;
+	for (let x in parts) {
+		if (x.name == 'e5root') die('e5root already exists');
+		if (x.n == r[2]) original = x;
+	}
+	if (!original || original.end - original.start + 1 != previous ||
+	    length < 4194304 || root_size < 4194304 || length % 2048 || root_size % 2048 ||
+	    type(root_size) != 'int' || r[1] + root_size > original.end || (r[1] + 1) % 2048)
+		die('invalid destructive userdata allocation');
+	available();
+	carve = [r[1] + 1, r[1] + root_size];
+	let entry = substr(p.tab, (r[2] - 1) * 128, 128);
+	p.tab = put(p.tab, (r[2] - 1) * 128, put(entry, 40, lebytes(r[1], 8)));
+}
+let name = carve ? 'e5root' : ARGV[2], want = +ARGV[3];
+let range = carve || allocation(name, want);
+let start = range[0], end = range[1];
+
+let guid = fs.readfile('/dev/urandom', 16) || die('no /dev/urandom');
+guid = put(guid, 7, chr((ord(guid, 7) & 0x0F) | 0x40));      // version 4
+guid = put(guid, 8, chr((ord(guid, 8) & 0x3F) | 0x80));      // variant
+let uname = '';
+for (let i = 0; i < length(name); i++)
+	uname += chr(ord(name, i), 0);
+// the Linux filesystem type, 0FC63DAF-8483-4772-8E79-3D69D8477DE4, in GPT's byte order
+let linux = chr(0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4);
+let entry = linux + guid + lebytes(start, 8) + lebytes(end, 8) + lebytes(0, 8) + uname;
+entry += lebytes(0, 128 - length(entry));
+commit(put(p.tab, empty * 128, entry));
+h.close();
+print(`${empty + 1} ${start} ${end}\n`);

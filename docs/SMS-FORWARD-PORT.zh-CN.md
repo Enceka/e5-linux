@@ -74,3 +74,22 @@ E5 已应用 `e3d21c0` 的同版前后端及原生短信事件接入，安装 `m
 无 JavaScript 异常检查。服务运行及开机链接正常，原通知 UCI、CPU 配置未变，
 九个原始 NV 分区只读校验通过，蜂窝网络、热点和屏幕运行正常。
 未重启整机；未发送真实转发测试，实际到达需配置目标后用新短信验证。
+
+### T551M 加签依赖补装（2026-10-12）
+
+T551M 上钉钉加签渠道全部记录 `delivery_failed`，历史 `http_code` 恒为 0。根因：
+2026-10-10 部署只拷贝后端与界面文件，未安装依赖包，设备上没有 `openssl`
+命令。签名管道 `openssl dgst -sha256 -hmac … -binary | openssl base64 -A`
+的 `2>/dev/null` 把“命令不存在”静默成空输出，`[ -n "$_sig" ]` 判空后直接
+返回失败，curl 从未执行；`record_delivery` 对非 `[1-5]xx` 一律记 0，即页面
+看到的占位值。与蜂窝网络、SIM 或 TLS 无关：curl 自带 TLS 后端，实测
+webhook 直连 200；页面的“无服务”读数来自空置卡槽。
+
+修复：设备执行 `apk update && apk add openssl-util msmtp`。`msmtp` 同在
+10-10 部署中遗漏，SMTP 渠道会因缺少命令直接失败；已安装时为空操作。投递
+在每次调用时重新解析命令路径，安装后即生效，无需重启；
+`/etc/init.d/unisoc-sms-forward restart` 可选。加签不能省略，也无法用忽略
+证书替代：机器人密钥模式必须携带有效 `timestamp`+`sign`，此处 openssl 用于
+HMAC 计算，与 TLS 证书无关；TLS 校验保持开启。E5/M8 根文件系统自
+e3d21c0f 起包含两包；TF 组装（`openwrt/build-profile-tf.py`）现于构建时安装
+两包，校验 apk 数据库并在 `BUILD.json` 记录版本。

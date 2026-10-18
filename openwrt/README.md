@@ -10,7 +10,9 @@ web interface.
 ## Install and update
 
 Download a complete mainline bundle from [Releases](https://github.com/Enceka/e5-linux/releases),
-unpack it, then run `flash.cmd` on Windows or `./flash.sh` on macOS/Linux.
+unpack it, then run `OpenWrt-Installer.exe` on Windows or `sh launchers/start-installer.sh` on macOS/Linux.
+The detailed guide is `START-HERE.md` at the package root. New complete ZIPs can also deploy to TF directly
+from Magisk (erasing the entire card); this differs from the small switch-only module.
 Follow the included bundle README and interactive installer. A first install
 starts from rooted Android and extracts that device's firmware/vendor files;
 the generic image contains neither those files nor personal device identity.
@@ -23,7 +25,7 @@ and older directory installations remain supported.
 For a running OpenWrt system connected over USB:
 
 ```sh
-./flash.sh --update
+sh launchers/update-openwrt.sh
 ```
 
 Updates preserve configuration, contacts, forwarding profiles and the durable

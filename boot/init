@@ -14,7 +14,7 @@
 # inside boot_b, which survives a cold power cycle (pstore does not).
 /bin/busybox mkdir -p /bin /sbin /proc /sys /dev /run /tmp /root /etc
 /bin/busybox --install -s /bin
-export PATH=/bin:/sbin HOME=/root TERM=vt100
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin HOME=/root TERM=vt100
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 # Info-level serial output delays module loading at 115200 baud. Keep the
@@ -65,7 +65,9 @@ persist() {
     {
         echo "E5-PERSIST-BEGIN uptime=$(cut -d' ' -f1 /proc/uptime) release=$(uname -r)"
         cat /run/stages
-        for f in /run/f2fs-before.log /run/f2fs-repair.log /run/f2fs-after.log; do
+        for f in /run/f2fs-before.log /run/f2fs-repair.log /run/f2fs-after.log \
+                 /run/part-fsck.log /run/part-resize.log /run/part-shrink-check.log \
+                 /run/part-carve.log /run/part-growfs.log /run/part-dd.err; do
             [ ! -f "$f" ] || { echo "--- $f"; tail -c 131072 "$f"; }
         done
         echo "--- cmdline"; cat /proc/cmdline
@@ -172,7 +174,7 @@ persist_job=$!
 # supposed to survive, and a reboot with no recorded reason is impossible to
 # diagnose after the fact.
 (sleep 600
- while [ -e /run/f2fs-repair.running ]; do sleep 5; done
+ while [ -e /run/f2fs-repair.running ] || [ -e /run/part-install.running ]; do sleep 5; done
  if [ -e /run/stay ] || [ -e /data/e5linux/stay ]; then log "stage=timer-skipped"; persist; exit 0; fi
  log "stage=timer-reboot"
  echo "<3>E5-LINUX: safety timer expired, no /run/stay -- rebooting to slot a" > /dev/kmsg
@@ -225,7 +227,7 @@ early_card_firmware() {
             name=${d##*/}
             case "$name" in *p[0-9]*|*boot*) continue ;; esac
             [ "$name" = "$skip" ] && continue
-            for part in /dev/${name}p*; do
+            for part in /dev/$name /dev/${name}p*; do
                 [ -b "$part" ] || continue
                 mount -t ext4 -o ro,noload,noatime "$part" /tmp/e5-early-fw 2>/dev/null || continue
                 if [ -f /tmp/e5-early-fw/etc/e5/sd-root ] &&
@@ -285,6 +287,31 @@ early_device_firmware() {
         [ -n "$dev" ] || { n=$((n + 1)); mdev -s; sleep 1; }
     done
     emmc=${dev#/dev/}; emmc=${emmc%%p*}
+    # A system installed in its own partition keeps its firmware on e5root, and
+    # by then the payload on userdata is gone (install-part.sh removes it), so
+    # this is the only source.  It cannot be gated on the two-stage marker in
+    # the command line: the plain internal-partition install (boot-os=part) has
+    # no marker either, and without the firmware in the initramfs the WCN's GNSS
+    # half fails its single request_firmware, never powers the chip on and Wi-Fi
+    # is gone (measured on all three models, 2026-10-13).  Probing is cheap and
+    # harmless when there is no e5root or no firmware there, and the search does
+    # not wait for userdata -- mdev may not have settled it yet.
+    mkdir -p /tmp/part-fw /lib/firmware
+    for u in /sys/class/block/mmcblk*p*/uevent; do
+        grep -qx PARTNAME=e5root "$u" 2>/dev/null || continue
+        if mount -t ext4 -o ro,noload /dev/$(basename "$(dirname "$u")") /tmp/part-fw; then
+            if [ -f /tmp/part-fw/etc/e5/part-root ] && [ -s /tmp/part-fw/lib/firmware/wcnmodem.bin ]; then
+                [ ! -f /tmp/part-fw/etc/e5/part-autoboot ] || touch /run/part-default
+                if [ -f /tmp/part-fw/.e5-update/request ]; then
+                    printf '/dev/%s\n' "$(basename "$(dirname "$u")")" > /run/part-update-pending
+                fi
+                cp -a /tmp/part-fw/lib/firmware/. /lib/firmware/
+                log "stage=device-firmware-source e5root"
+            fi
+            umount /tmp/part-fw
+            [ ! -s /lib/firmware/wcnmodem.bin ] || return 0
+        fi
+    done
     # An explicit image already bypasses SD root selection below. Read its
     # userdata firmware first instead of spending ten seconds searching a card.
     # Ordinary/TF boots keep SD-first discovery, including the full card wait.
@@ -423,6 +450,41 @@ if [ -n "$udc" ]; then
 fi
 ifconfig usb0 up 2>/dev/null
 persist
+
+# The PC installer alone arms a TF update. Probe all TF roots, including legacy
+# cards, before mounting the root read/write. CONFIG_CMDLINE_FORCE and LK may
+# discard boot-header flags, so the verified on-card request is the trigger.
+# No polling service is installed in the running system.
+tf_update_probe() {
+    mkdir -p /tmp/tf-update-probe
+    for sysdev in /sys/class/block/mmcblk*; do
+        tf=${sysdev##*/}
+        case "$tf" in *p[0-9]*|*boot*) continue ;; esac
+        [ "$(cat "$sysdev/device/type" 2>/dev/null)" = SD ] || continue
+        for target in /dev/$tf /dev/${tf}p*; do
+            [ -b "$target" ] || continue
+            mount -t ext4 -o ro,noload "$target" /tmp/tf-update-probe 2>/dev/null || continue
+            if [ -f /tmp/tf-update-probe/etc/e5/sd-root ] && [ -f /tmp/tf-update-probe/.e5-update/request ]; then
+                [ ! -s /run/tf-update-found ] || touch /run/tf-update-conflict
+                echo "$target" > /run/tf-update-found
+                echo "$target" > /run/part-update-pending
+            fi
+            umount /tmp/tf-update-probe
+        done
+    done
+}
+tf_update_probe
+. /etc/part-update.sh
+if ! part_update_pending; then
+    part_fail 'offline update stopped; logs and RAM payload retained'
+    while :; do sleep 10; done
+fi
+
+. /etc/part-prepare.sh
+if ! part_prepare; then
+    part_fail 'partition preparation stopped; inspect /run/part-carve.log'
+    while :; do sleep 10; done
+fi
 
 # ------------------------------------------------------- root filesystem
 # The E5 has no unallocated eMMC space (userdata runs to the last usable LBA),
@@ -585,8 +647,14 @@ mount_userdata_root() {
     log "stage=f2fs-recovery-incomplete retaining-rescue-fallback"
     return 1
 }
-rootdir= data_mounted= on_card=
+rootdir= data_mounted= on_card= on_part= PARTROOT= PARTTRIAL=
 [ -n "$data" ] && f2fs_last_cp "$data"
+# A pending internal-partition install (flash.py --part): userdata is
+# unmounted here, which is the only place its vendor F2FS may be shrunk
+# (raw tools only, docs/FINDINGS.md 48).  A finished install restarts into
+# the new system itself (its partition is unknown to this boot's kernel
+# table); a failed or absent one leaves the chain below to decide.
+[ -z "$data" ] || { . /etc/install-part.sh && install_part_pending "$data"; }
 # The SD card system is the one maintained (the systems on userdata are for
 # tests), and it leaves userdata read-only: mainline damaged that F2FS across
 # power cycles even after a clean unmount (docs/FINDINGS.md 48).  So userdata is
@@ -600,9 +668,12 @@ if [ -n "$data" ] && { mount -t f2fs -o ro,noatime,nodiratime "$data" /data 2>/r
     once=$([ -f /data/e5linux/boot-os-next ] && echo 1)
     umount /data
 fi
-# The card comes up after userdata: wait up to 10 s for it. A registered card
-# owns its selection even if userdata has an old boot-os choice. An unregistered
-# card retains the legacy userdata choice, including explicit image trials.
+# The card enumerates during kernel init (~3 s in) and this runs well past
+# 20 s, so a present card is already visible and the cap only guards cards
+# that enumerate unusually late: 4 s is a wide margin over every card seen.
+# A registered card owns its selection even if userdata has an old boot-os
+# choice. An unregistered card retains the legacy userdata choice, including
+# explicit image trials.
 sd_wait() {
     local i=0
     while [ "$i" -lt "$1" ]; do
@@ -613,7 +684,57 @@ sd_wait() {
     log "stage=sd-none (waited $(($1 / 2)) s)"
     return 1
 }
-if [ -z "$e5_trial" ] && sd_wait 20 &&
+# The internal partition system (openwrt/device-install-part.sh): a real ext4
+# partition on the eMMC, created by that installer with e5-gpt and marked
+# /etc/e5/part-root.  A system that lives there keeps userdata unmounted, so
+# the vendor F2FS is never written under mainline (docs/FINDINGS.md 48) --
+# the same reason the card system leaves userdata read-only.  Chosen when
+# userdata names it (e5linux/boot-os = part); when the partition is gone the
+# selection falls through to the image path below.
+part_root() {
+    local u e dev
+    [ -n "$misc" ] || return 1
+    e=${misc#/dev/}; e=${e%%p*}
+    for u in /sys/class/block/${e}p*/uevent; do
+        grep -qx PARTNAME=e5root "$u" 2>/dev/null || continue
+        dev=/dev/$(basename "$(dirname "$u")")
+        mount -t ext4 -o ro,noatime "$dev" /sdtry 2>/dev/null || continue
+        if [ -x /sdtry/sbin/init ] && [ -f /sdtry/etc/e5/part-root ]; then
+            PARTTRIAL=
+            [ -f /sdtry/etc/e5/part-trial ] && PARTTRIAL=$(cat /sdtry/etc/e5/part-trial 2>/dev/null)
+            umount /sdtry
+            PARTROOT=$dev
+            return 0
+        fi
+        umount /sdtry
+    done
+    return 1
+}
+# The internal partition system, when userdata names it (boot-os = part).  A
+# trial marker on it, like the card's sd-trial, makes a boot that dies before
+# userspace fall back: booting it writes 0 into the file, and the running
+# system removes it once it is up (e5-boot-ok).  A failed trial, a missing
+# partition or an unreadable one drops the choice for this boot only -- the
+# chain below (card, then image) still gets its turn.
+grep -q ' e5.root=part\( \|$\)' /proc/cmdline && want=part
+if [ -f /run/part-default ] && [ -z "$SDMETA" ] && { [ -z "$want" ] || [ "$want" = part ]; }; then
+    want=part
+fi
+if [ -z "$e5_trial" ] && [ "$want" = part ]; then
+    if part_root && [ "$PARTTRIAL" != 0 ] &&
+       mount -t ext4 -o noatime "$PARTROOT" /disk 2>>/run/rootmount.err; then
+        rootdir=/disk on_part=1
+        log "stage=openwrt-part $PARTROOT"
+        if [ -n "$PARTTRIAL" ]; then
+            echo 0 > /disk/etc/e5/part-trial && sync
+            log "stage=openwrt-part-trial $PARTROOT"
+        fi
+    else
+        log "stage=openwrt-part-fail ${PARTROOT:-none}${PARTTRIAL:+ trial=$PARTTRIAL}"
+        want=
+    fi
+fi
+if [ -z "$rootdir" ] && [ -z "$e5_trial" ] && sd_wait 8 &&
    { [ -n "$SDMETA" ] || [ -z "$want" ] || [ "$want" = sd ]; }; then
     card=1
     log "stage=card-system userdata read-only"
@@ -625,7 +746,11 @@ if [ -z "$e5_trial" ] && sd_wait 20 &&
                            mount -t f2fs -o ro,norecovery,noatime,nodiratime "$data" /data 2>>/run/datamount.err; }; then
         data_mounted=1
     fi
-elif [ -z "$SDMETA" ] && [ -z "$SDMETA_INVALID" ] && [ -n "$data" ] && mount_userdata_root; then
+elif [ -z "$rootdir" ] && [ -z "$e5_trial" ] && [ "$want" = part ] && part_root && [ "$PARTTRIAL" != 0 ] &&
+     mount -t ext4 -o noatime "$PARTROOT" /disk 2>>/run/rootmount.err; then
+    log "stage=openwrt-part $PARTROOT"
+    rootdir=/disk on_part=1
+elif [ -z "$rootdir" ] && [ -z "$SDMETA" ] && [ -z "$SDMETA_INVALID" ] && [ -n "$data" ] && mount_userdata_root; then
     log "stage=data-mounted"
     data_mounted=1
     want=$(read_boot_os /data)
@@ -662,7 +787,7 @@ elif [ -z "$SDMETA" ] && [ -z "$SDMETA_INVALID" ] && [ -n "$data" ] && mount_use
             rootdir=
         fi
     fi
-elif [ -z "$card" ]; then
+elif [ -z "$rootdir" ] && [ -z "$card" ]; then
     log "stage=data-mount-fail $(cat /run/datamount.err 2>/dev/null)"
 fi
 
@@ -699,7 +824,7 @@ if [ -n "$rootdir" ]; then
         # brought an image without them.
         dft=/data/e5linux/device-files.tar
         # (a card system carries its own, from its install or update)
-        if [ -z "$on_card" ] && [ -f /newroot/etc/e5/image-form ] && [ -f "$dft" ]; then
+        if [ -z "$on_card" ] && [ -z "$on_part" ] && [ -f /newroot/etc/e5/image-form ] && [ -f "$dft" ]; then
             stamp=$(sha256sum "$dft" | cut -d' ' -f1)
             if [ ! -f /newroot/lib/firmware/wcnmodem.bin ] ||
                [ "$(cat /newroot/etc/e5/device-files.stamp 2>/dev/null)" != "$stamp" ]; then
@@ -739,8 +864,9 @@ if [ -n "$rootdir" ]; then
     fi
     mkdir -p /run/e5linux && cp /etc/misc-bc-slot-a.bin /etc/misc-bc-slot-b-trial.bin /run/e5linux/ 2>/dev/null
     # what this initramfs can do, for the installers of the running system
-    echo "openwrt-image userdata-boot-os sd-gen" > /run/e5linux/init-features
+    echo "openwrt-image userdata-boot-os sd-gen part-root" > /run/e5linux/init-features
     [ -n "$on_card" ] && echo "$SDROOT" > /run/e5linux/sd-root-dev
+    [ -n "$on_part" ] && echo "$PARTROOT" > /run/e5linux/part-root-dev
     if [ -n "$SDMETA" ]; then
         mkdir -p /newroot/mnt/e5-boot
         mount --move /sdboot /newroot/mnt/e5-boot

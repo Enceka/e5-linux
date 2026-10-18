@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="SwitchDialogLight" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:colorAccent">#1769C2</item>
+        <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:windowBackground">@drawable/dialog_light</item>
+        <item name="android:textColorPrimary">#17202C</item>
+        <item name="android:textColorSecondary">#536173</item>
+        <item name="android:buttonBarButtonStyle">@style/SwitchButtonLight</item>
+    </style>
+    <style name="SwitchDialogDark" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:colorAccent">#9CCBFF</item>
+        <item name="android:colorBackground">#20242C</item>
+        <item name="android:windowBackground">@drawable/dialog_dark</item>
+        <item name="android:textColorPrimary">#F3F5F8</item>
+        <item name="android:textColorSecondary">#C2CAD6</item>
+        <item name="android:buttonBarButtonStyle">@style/SwitchButtonDark</item>
+    </style>
+    <style name="SwitchButtonLight" parent="android:style/Widget.Material.Button.Borderless">
+        <item name="android:textColor">#1769C2</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+    </style>
+    <style name="SwitchButtonDark" parent="android:style/Widget.Material.Button.Borderless">
+        <item name="android:textColor">#9CCBFF</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+    </style>
+</resources>

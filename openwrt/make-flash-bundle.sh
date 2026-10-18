@@ -43,6 +43,11 @@ KERNEL=${E5_KERNEL:-$TOP/work/Image-bt2}
 STOCK_BOOT=${E5_STOCK_BOOT:-$TOP/dumps/boot_b.img}
 MISC_HEAD=${E5_MISC_HEAD:-$TOP/dumps/misc-head.bin}
 BUSYBOX=${E5_BUSYBOX:-$TOP/work/busybox/ext/usr/bin/busybox}
+python3 - "$TOP" "$BUSYBOX" <<'PY'
+from pathlib import Path
+import runpy, sys
+runpy.run_path(str(Path(sys.argv[1]) / 'openwrt/bundle/flash.py'))['validate_installer_busybox'](sys.argv[2])
+PY
 GIT=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
 # CI sets the epoch before compiling; local builds capture the package start.
 # POSIX TZ uses the opposite sign: CST-8 is fixed UTC+8, without daylight saving.
@@ -129,49 +134,49 @@ S=$(mktemp -d)
 trap 'rm -rf "$S0" "$S"' EXIT
 P=$S/$NAME
 mkdir -p "$P/files" "$P/scripts/tools"
-# the flasher: flash.py (Windows, macOS, Linux), started by flash.cmd / flash.sh
-cp "$HERE/bundle/flash.py" "$HERE/bundle/flash.sh" "$HERE/bundle/flash.cmd" "$P/"
-cp "$HERE/bundle/install-userdata.cmd" "$HERE/bundle/install-userdata.sh" "$P/"
-cp "$HERE/bundle/userdata-image.sh" "$P/files/"
-test -f "$OUT/ext4-tools.tar" || { echo 'Missing ext4-tools.tar; build a fresh root image' >&2; exit 1; }
+cp "$BUSYBOX" "$P/files/busybox"
+chmod 0755 "$P/files/busybox"
+if [ -n "$MAINLINE" ]; then
+    python3 "$TOP/upstream/check-container-support.py" "$KOUT"
+    cp "$KOUT/config" "$P/files/kernel.config"
+    cp "$KOUT/modules.in-tree" "$P/files/modules.in-tree"
+fi
+# Use the same descriptive user entries as all three profile packages.
+python3 "$HERE/bundle/install-entrypoints.py" "$P"
+cp "$HERE/bundle/part-write.sh" "$P/files/"
+test -f "$OUT/ext4-tools.tar" || { echo 'Missing ext4-tools.tar: openwrt/prepare-ext4-tools.py --root CLEAN_ARM64_ROOT --out out/openwrt/ext4-tools.tar' >&2; exit 1; }
+tar -tf "$OUT/ext4-tools.tar" | grep -qx 'ext4-geometry.sh' || {
+    echo 'ext4-tools.tar is stale: rebuild it with openwrt/prepare-ext4-tools.py before packaging' >&2; exit 1;
+}
 cp "$OUT/ext4-tools.tar" "$P/files/"
-cp "$TOP/tools/android-bootchain.sh" "$P/files/android-bootchain.sh"
-printf '%s\n' '{"profile":"e5","android_models":["E5"]}' > "$P/files/device-profile.json"
-chmod 755 "$P/flash.py" "$P/flash.sh" "$P/install-userdata.sh"
-cp "$HERE/bundle/README.md" "$HERE/bundle/README.zh-CN.md" "$P/"
-cp "$TOP/LICENSE" "$P/LICENSE"
+cp "$TOP/LICENSE" "$P/docs/LICENSE"
 cp "$IMG" "$P/files/openwrt.ext4.gz"
 cp "$BOOT.img" "$P/files/boot.img"
 cp "$BOOT.json" "$P/files/boot.json"
 cp "$BOOT.misc-slot-b-trial.bin" "$P/files/boot-misc-slot-b.bin"
-cp "$HERE/device-install-image.sh" "$HERE/device-flash-boot.sh" "$HERE/bundle/collect-device-files.sh" \
-   "$TOP/device/openwrt_device_common/overlay/usr/libexec/e5-gpt" "$P/files/"
-cp "$TOP/tools/e5-telnet.py" "$TOP/tools/sprd-bt-config.py" "$P/scripts/tools/"
+cp "$HERE/device-install-image.sh" "$HERE/device-install-part.sh" "$HERE/device-flash-boot.sh" "$HERE/device-stage-part-update.sh" "$HERE/bundle/collect-device-files.sh" \
+   "$TOP/boot/installer-runtime/openwrt/usr/libexec/e5-gpt" "$P/files/"
+cp "$TOP/tools/e5-telnet.py" "$TOP/tools/e5-update.py" "$TOP/tools/sprd-bt-config.py" "$P/scripts/tools/"
+cp "$TOP/tools/android-bootchain.sh" "$P/files/android-bootchain.sh"
 cp -R "$TOP/tools/vbc-profile" "$P/scripts/tools/"
 find "$P" \( -name .DS_Store -o -name __pycache__ \) -prune -exec rm -rf {} +
 printf "e5-openwrt-flash %s (OpenWrt %s, e5-linux %s, kernel %s)\n" \
     "$BUILD_TIME" "$VER" "$GIT" "$rel" > "$P/files/VERSION"
-(cd "$P" && find files scripts flash.py flash.sh flash.cmd install-userdata.sh install-userdata.cmd -type f | sort | while read -r f; do
-    printf "%s  %s\n" "$({ shasum -a 256 "$f" 2>/dev/null || sha256sum "$f"; } | cut -d' ' -f1)" "$f"
-done > SHA256SUMS)
+
+# One ZIP, usable both from Magisk and after extraction on a computer. Keep
+# the native E5 TF partition/update layout and share the same compressed image.
+docker run --rm --platform linux/arm64 -v "$P/files":/out \
+    -v "$TOP/magisk/e5-linux-switch/bootctl.c":/src.c:ro \
+    "${E5_MAGISK_BUILD_IMAGE:-e5-mainline-build}" \
+    sh -ec 'gcc -static -Os -s -Wall -Wextra -Werror -o /out/e5-bootctl /src.c'
+printf '%s\n' '{"profile":"e5","android_models":["E5"]}' > "$P/files/device-profile.json"
+python3 "$HERE/bundle/finalize-package.py" "$P" --profile e5 --bootctl "$P/files/e5-bootctl"
 
 # macOS tar otherwise adds AppleDouble files that are absent from the ZIP.
 COPYFILE_DISABLE=1 tar -C "$S" -czf "$OUT/$NAME.tar.gz.part" "$NAME"
 mv "$OUT/$NAME.tar.gz.part" "$OUT/$NAME.tar.gz"
 # and a .zip for Windows (its Explorer opens it without anything installed)
 rm -f "$OUT/$NAME.zip"
-(cd "$S" && python3 - "$NAME" "$OUT/$NAME.zip.part" <<'PY'
-import os, sys, zipfile
-top, out = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
-    for d, _, files in os.walk(top):
-        for f in sorted(files):
-            p = os.path.join(d, f)
-            i = zipfile.ZipInfo.from_file(p, p)
-            i.external_attr = (os.stat(p).st_mode & 0xFFFF) << 16
-            with open(p, 'rb') as fh:
-                z.writestr(i, fh.read(), zipfile.ZIP_STORED if f.endswith('.gz') else zipfile.ZIP_DEFLATED)
-PY
-)
+python3 "$HERE/bundle/finalize-package.py" "$P" --zip-only "$OUT/$NAME.zip.part"
 mv "$OUT/$NAME.zip.part" "$OUT/$NAME.zip"
 echo "== $OUT/$NAME.tar.gz ($(du -h "$OUT/$NAME.tar.gz" | cut -f1)), $OUT/$NAME.zip ($(du -h "$OUT/$NAME.zip" | cut -f1))"

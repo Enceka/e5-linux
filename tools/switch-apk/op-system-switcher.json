@@ -1,0 +1,13 @@
+{
+  "source": {
+    "AndroidManifest.xml": "3037e06d651014847d9a9614a1769676bee07780ebf7b621bf30d0a6e0d3d489",
+    "res/drawable/dialog_dark.xml": "e6dbaebfb6f8ae753bd3bcca80ef99d074be003439d933c7ef4988b09bb84c5f",
+    "res/drawable/dialog_light.xml": "453610cd2d9cbb9fdb8bbdbc5624ac13f23347d207a506d38b081edb8e0a3b03",
+    "res/mipmap-xxhdpi/ic_launcher.png": "217b9f1f47fd0f76e94163f7f59c8bb3d52c2127abb3eda5ded08ea52cb2408a",
+    "res/values/strings.xml": "8aba51e70d95d398319fcd59a75fb9e68f721028572fa001bcdb6a4a8b601052",
+    "res/values/styles.xml": "5b093ef9a37a5b910eb43fb81f64b33016b5998a365c7b63ee7bb8cd91e16c5e",
+    "src/com/minikano/e5switch/ArmedBlock.java": "d79f531c2b2c44132c6195d2c626f131ae212322759a2e10206a18488c931d95",
+    "src/com/minikano/e5switch/MainActivity.java": "6fbc45caf4c73f062227ac8a816fbf23a9f11e6d278d7e806d7943280ef922aa"
+  },
+  "binary_sha256": "b571e8a0f84fdc4b2854ddb0d07c67ec276d0d0bf2d32d4dd05c0cf795fa4405"
+}

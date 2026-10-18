@@ -1,5 +1,10 @@
 # Unisoc 设备上的 Linux
 
+Windows EXE 与 Apple Silicon APP 共用 [桌面安装器](installer/README.md)，支持 TF、
+内部分区安装与覆盖重装、两阶段续装、SSH 更新和 Android 卸载。操作前阅读包内
+`START-HERE.md` 或 [安装指南](installer/GUIDE.md)。TF 安装会覆盖已有第一分区；
+仅在卡上没有分区表时使用整卡，文件系统扩到所选目标容量。同一个 ZIP 也可交给 Magisk 安装到 TF。
+
 [English](README.md)
 
 本项目维护荣悦 E5、T551M 和 VIPME M8 的 Linux 启动、内核适配及用户空间构建。
@@ -133,7 +138,7 @@ info screen 的前端、API 和屏幕服务直接在 `ci/infoscreen` 修改；�
 
 从 [Releases](https://github.com/sprd-linux-devs/release/releases) 获取与设备匹配的包，
 先阅读包内说明并备份启动镜像及 `misc`。E5 使用 `boot_b` 启动 Linux，Android 保留在 slot A；
-SD 安装会修改所选存储卡的分区表。回退与持久启动策略因机型而异。
+TF 安装覆盖所选第一分区或无分区整卡，不修改分区表。回退与持久启动策略因机型而异。
 
 E5 默认 LAN 为 `192.168.9.1`。OpenWrt 通过 LuCI / SSH 管理，并提供信息屏、短信与电话应用；
 Debian 提供 Phosh。账户和热点配置以设备或刷入包说明为准，使用前修改初始密码。

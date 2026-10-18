@@ -1,0 +1,55 @@
+name: Portable Windows installer
+
+on:
+  workflow_call:
+    inputs:
+      source_repository:
+        type: string
+        required: false
+      source_ref:
+        type: string
+        required: false
+  workflow_dispatch:
+  push:
+    paths: ['installer/**', 'openwrt/bundle/flash.py', 'openwrt/bundle/part-two-stage.py', '.github/workflows/gui.yml']
+  pull_request:
+    paths: ['installer/**', 'openwrt/bundle/flash.py', 'openwrt/bundle/part-two-stage.py', '.github/workflows/gui.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.source_repository || github.repository }}
+          ref: ${{ inputs.source_ref || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: installer/ui/package-lock.json
+      - name: Rust build toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal
+      - name: Python build dependencies
+        run: python -m pip install pyinstaller paramiko lz4
+      - name: State and recovery tests (no device writes)
+        run: python -m unittest discover -s installer/tests -v
+      - name: Build portable release
+        run: python installer/build.py
+      - name: Browser test dependencies
+        run: |
+          python -m pip install playwright
+          python -m playwright install chromium
+      - name: Production UI regression (simulated transport only)
+        run: python -X utf8 installer/tests/run_ui.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-installer-windows
+          path: installer/artifacts/windows/
+          if-no-files-found: error

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Stage OpenWrt aarch64/musl fsck.f2fs and its libraries for early recovery.
+"""Stage OpenWrt aarch64/musl f2fs tools and ucode for early recovery and the
+internal-partition install.
 
 Input is an extracted target rootfs (or a maintenance tool root), not host libs.
+resize.f2fs is fsck.f2fs under a second name (f2fs-tools dispatches on argv[0]);
+ucode and its fs module run the same e5-gpt the running system uses.
 The resulting private bundle is consumed by build-boot-image.py.
 """
 import argparse
@@ -10,8 +13,10 @@ import json
 import struct
 from pathlib import Path
 
-FILES = ('sbin/fsck.f2fs', 'lib/ld-musl-aarch64.so.1', 'lib/libf2fs.so.10',
-         'lib/libuuid.so.1', 'lib/libgcc_s.so.1')
+FILES = ('sbin/fsck.f2fs', 'sbin/resize.f2fs', 'lib/ld-musl-aarch64.so.1', 'lib/libf2fs.so.10',
+         'lib/libuuid.so.1', 'lib/libgcc_s.so.1',
+         'usr/bin/ucode', 'lib/libucode.so.20230711', 'lib/libjson-c.so.5', 'usr/lib/ucode/fs.so',
+         'usr/sbin/resize2fs', 'lib/libe2p.so.2', 'lib/libext2fs.so.2', 'lib/libcom_err.so.0')
 
 def stage(root, out):
     manifest = {}

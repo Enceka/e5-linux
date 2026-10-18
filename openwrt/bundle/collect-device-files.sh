@@ -11,8 +11,9 @@
 # Collected here, not on the computer: some of these files have ":" in their
 # names (the property area), which Windows cannot store.  Everything owned by
 # root: bionic refuses a property area that is not.
+umask 022
 OUT=${1:?out} FW=${2:?firmware}
-S=/data/local/tmp/e5-devfiles
+S=${E5_COLLECT_WORK:-/data/local/tmp/e5-devfiles}
 rm -rf "$S"
 mkdir -p "$S/opt/e5/android" "$S/lib/firmware" || exit 1
 elf_class=$(od -An -tu1 -j4 -N1 /vendor/bin/modem_control | tr -d ' \n')
@@ -45,7 +46,11 @@ do
   cp -rL "/$p" "$d/" 2>/dev/null || { echo "E5-COLLECT-FAIL missing /$p"; exit 1; }
 done
 tar -xf "$FW" -C "$S" || { echo "E5-COLLECT-FAIL firmware archive"; exit 1; }
-chown -R 0:0 "$S"
+chown -R 0:0 "$S" || exit 1
+find "$S/opt/e5/android" -type d -exec chmod 755 {} + || exit 1
+find "$S/opt/e5/android" -type f -exec chmod 644 {} + || exit 1
+find "$S/opt/e5/android" -type f -path '*/bin/*' -exec chmod 755 {} + || exit 1
+find "$S/opt/e5/android/dev/__properties__" -type f -exec chmod 444 {} + || exit 1
 for f in lib/firmware/wcnmodem.bin lib/firmware/l_agdsp_a.img lib/firmware/sprd/marlin3lite_pskey.bin \
          opt/e5/android/vendor/bin/modem_control opt/e5/android/dev/__properties__/property_info; do
   [ -s "$S/$f" ] || { echo "E5-COLLECT-FAIL no $f"; exit 1; }

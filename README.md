@@ -60,6 +60,7 @@ All ten device repositories come from `github.com/sprd-linux-devs`.
 | `ci/infoscreen-plugins/` | Independent [infoscreen-plugins](https://github.com/Enceka/infoscreen-plugins), including Phone |
 | `boot/`, `upstream/`, `kernel/` | Boot image tooling, mainline build entry points and legacy vendor kernel reference |
 | `rootfs/`, `openwrt/`, `magisk/` | System builders, installers, flash bundles and Android-to-Linux module |
+| `installer/` | Shared Windows and Apple Silicon desktop installer, backend, UI and offline tests |
 | `tools/`, `docs/` | Synchronization, overlay composition, validation and device findings |
 
 [device/manifest.json](device/manifest.json) declares overlay order:
@@ -136,8 +137,14 @@ screen migration notes retain the source commit references. Existing public pare
 
 Download a matching bundle from [Releases](https://github.com/sprd-linux-devs/release/releases).
 Read its instructions and back up boot images and `misc` first. E5 boots Linux through `boot_b` while
-Android remains on slot A. SD installation changes the selected card's partition table.
+Android remains on slot A. TF installation overwrites the existing first partition, or the whole card
+when it has no partition table, and grows the filesystem to the selected target's capacity.
 Rollback and persistent boot policies are device-specific.
+
+The shared installer provides Windows EXE and Apple Silicon APP entries, internal-partition
+installation and reinstall, resumable two-stage setup, SSH updates and Android uninstall options.
+Read the packaged `START-HERE.md` and [installer guide](installer/GUIDE.md) before choosing a method.
+The same ZIP supports TF installation through Magisk and extracted desktop installation.
 
 E5's default LAN is `192.168.9.1`. OpenWrt provides LuCI/SSH, infoscreen, SMS and Phone;
 Debian provides Phosh. Credentials and hotspot defaults are documented with the device/bundle;

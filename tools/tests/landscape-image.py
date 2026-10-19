@@ -368,6 +368,10 @@ class WanHelpers(unittest.TestCase):
         self.assertNotRegex(self.sync, r'10\.35\.\d+\.\d+')
         self.assertNotIn('ANTHROPIC_BASE_URL', self.sync)
         self.assertIn('ip -4 -o addr show dev sipa_eth0', self.sync)
+        # An older/empty row must also regain the default route flags, not
+        # only the address, or the seeded link has no gateway.
+        self.assertIn("model['default_router'] = True", self.sync)
+        self.assertIn("model['default_router_ip'] = '10.0.0.1'", self.sync)
 
     def test_loop_and_slot_keeper_are_resident(self):
         self.assertIn('while :; do', self.loop)

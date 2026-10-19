@@ -301,6 +301,15 @@ class InitConfig(unittest.TestCase):
         self.assertIn('iface_name = "br-lan"', self.text)
         self.assertIn('iface_name = "sipa_eth0"', self.text)
 
+    def test_wan_link_is_seeded_before_the_modem_attaches(self):
+        # The address is carrier-assigned, but the link row itself must exist
+        # on the first boot even when the bearer is late.
+        self.assertIn('[[wan_links]]', self.text)
+        self.assertIn('attach_iface_name = "sipa_eth0"', self.text)
+        self.assertIn('t = "static"', self.text)
+        self.assertIn('default_router_ip = "10.0.0.1"', self.text)
+        self.assertIn('[wan_links.nat]', self.text)
+
     def test_dhcp_pool_matches_the_openwrt_lan(self):
         self.assertIn('iface_name = "br-lan"', self.text)
         self.assertIn('ip_range_start = "192.168.9.10"', self.text)

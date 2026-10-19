@@ -35,6 +35,26 @@ enable = true
 iface_name = "sipa_eth0"
 enable = true
 
+# The link exists from the first boot, without an address: sipa_eth0 gets
+# its IPv4 from the carrier and landscape-wan-sync fills it in as soon as
+# the modem attaches.  Seeding the link (rather than only route_wans) means
+# a slow modem does not leave a bootable router with no WAN link row.
+[[wan_links]]
+name = "5g"
+attach_iface_name = "sipa_eth0"
+kind = { t = "ethernet" }
+
+[wan_links.v4]
+enable = true
+
+[wan_links.v4.model]
+t = "static"
+default_router = true
+default_router_ip = "10.0.0.1"
+
+[wan_links.nat]
+enable = true
+
 # DHCPv4 for the management LAN.  The server adds 192.168.9.1/24 itself and
 # hands out .10-.200: ip_range_end is exclusive, so .201 is the bound.
 [[dhcpv4_services]]

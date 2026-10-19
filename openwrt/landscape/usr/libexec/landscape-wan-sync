@@ -85,10 +85,12 @@ if link is None:
 model = link.get('v4', {}).get('model', {})
 if model.get('t') != 'static':
     sys.exit(0)
-if model.get('ipv4') == ipv4 and model.get('ipv4_mask') == mask:
+if model.get('ipv4') == ipv4 and model.get('ipv4_mask') == mask and model.get('default_router'):
     sys.exit(0)
 model['ipv4'] = ipv4
 model['ipv4_mask'] = mask
+model['default_router'] = True
+model['default_router_ip'] = '10.0.0.1'
 print(link['id'])
 print(json.dumps({k: v for k, v in link.items() if k != 'id'}, separators=(',', ':')))
 PY

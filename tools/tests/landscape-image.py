@@ -15,6 +15,8 @@ option, the OpenWrt package list and the procd service):
     and only in a landscape image.
 """
 import re
+import shlex
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -119,23 +121,52 @@ class Build(unittest.TestCase):
         self.assertIn('openwrt/landscape', self.text)
         self.assertIn('cp -a /in/landscape-root/. $R/', self.text)
 
+    def test_the_inner_container_script_survives_quoting(self):
+        # build-rootfs.sh hands its container body to `sh -euc '...'`.  An
+        # apostrophe in it (a comment, a UCI value) ends that argument early,
+        # and the container then runs a truncated script.  Parse the command
+        # exactly as the shell does, then syntax-check the body it produces.
+        start = self.text.index('/bin/sh -euc ')
+        lex = shlex.shlex(self.text[start:], posix=True, punctuation_chars=False)
+        lex.whitespace_split = True
+        words = list(lex)
+        self.assertEqual(words[:2], ['/bin/sh', '-euc'])
+        body = words[2]
+        self.assertIn('tar -czf /out/$NAME', body)
+        self.assertIn('landscape_init.toml', body)
+        result = subprocess.run(['sh', '-n'], input=body, text=True,
+                                capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_standalone_image_has_the_management_lan(self):
         # Netifd needs a lan interface to exist; 90-e5 configures it but does
-        # not create it, and armsr's base image does not ship one.
-        self.assertIn("config device 'br_lan'", self.text)
-        self.assertIn("option name 'br-lan'", self.text)
-        self.assertIn("option bridge_empty '1'", self.text)
-        self.assertIn("config interface 'lan'", self.text)
-        self.assertIn("list ipaddr '192.168.9.1/24'", self.text)
-        self.assertIn("option hostname 'E5'", self.text)
+        # not create it, and armsr's base image does not ship one.  The two
+        # variants are files copied into the image, never here-documents:
+        # build-rootfs.sh's outer `sh -euc '...'` would end at their quotes.
+        plain = (TOP / 'openwrt/standalone/network').read_text()
+        landscape = (TOP / 'openwrt/standalone/network.landscape').read_text()
+        system = (TOP / 'openwrt/standalone/system').read_text()
+        for text in (plain, landscape):
+            self.assertIn("config device 'br_lan'", text)
+            self.assertIn("option name 'br-lan'", text)
+            self.assertIn("option bridge_empty '1'", text)
+            self.assertIn("config interface 'lan'", text)
+        self.assertIn("list ipaddr '192.168.9.1/24'", plain)
+        self.assertIn("option ip6assign '64'", plain)
         # Landscape's DHCPv4 owns the address and deletes netifd's copy, so
-        # the built-in image has to drop netifd's IPv4/IPv6 configuration.
-        self.assertIn('if [ "$LANDSCAPE" = 1 ]; then', self.text)
-        self.assertIn("option proto 'none'", self.text)
-        match = re.search(r'sed -i "(.*?)"', self.text)
-        self.assertIsNotNone(match)
-        self.assertIn("ipaddr '192.168.9.1\\/24'", match.group(1))
-        self.assertIn("ip6assign '64'", match.group(1))
+        # its image must not let netifd configure it at all.
+        self.assertNotIn("list ipaddr '192.168.9.1/24'", landscape)
+        self.assertNotIn('ip6assign', landscape)
+        self.assertIn("option proto 'none'", landscape)
+        self.assertIn("option hostname 'E5'", system)
+        # and the build has to mount and use those files
+        self.assertIn('-v "$HERE/standalone":/in/standalone:ro', self.text)
+        self.assertIn('cp /in/standalone/"$STANDALONE_NETWORK" $R/etc/config/network', self.text)
+        self.assertIn('cp /in/standalone/system $R/etc/config/system', self.text)
+        self.assertIn('STANDALONE_NETWORK=network.landscape', self.text)
+        # no here-document may reintroduce the quoting bug
+        self.assertNotIn('<<NET', self.text)
+        self.assertNotIn('<<SYS', self.text)
 
     def test_ebpf_packages_use_the_feed_names(self):
         # OpenWrt's feed names the library libelf1; libelf is not a package.

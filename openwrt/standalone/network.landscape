@@ -1,0 +1,18 @@
+config interface 'loopback'
+	option device 'lo'
+	option proto 'static'
+	list ipaddr '127.0.0.1/8'
+
+config globals 'globals'
+	option dhcp_default_duid 'auto'
+
+config device 'br_lan'
+	option name 'br-lan'
+	option type 'bridge'
+	option bridge_empty '1'
+
+# Landscape's DHCPv4 service adds 192.168.9.1/24 itself and deletes any other
+# IPv4 address on the interface label; netifd must only create the bridge.
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'none'

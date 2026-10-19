@@ -92,6 +92,10 @@ SCREEN_PLUGINS=${E5_INFOSCREEN_PLUGINS-$TOP/ci/infoscreen-plugins}
 [ -n "$SCREEN_PLUGINS" ] && [ -d "$SCREEN_PLUGINS/plugins/phone" ] || SCREEN_PLUGINS=""
 NAME=e5-openwrt-$VER-rootfs.tar.gz
 STANDALONE=${E5_STANDALONE:-}
+# the standalone UCI defaults (openwrt/standalone/): netifd's default image
+# config differs from the Landscape one only in that it owns 192.168.9.1.
+STANDALONE_NETWORK=network
+[ "$LANDSCAPE" != 1 ] || STANDALONE_NETWORK=network.landscape
 DEVICE_FILES=${E5_DEVICE_FILES:-1}
 CONTAINERS=${E5_DOCKER:-0}
 FEATURES=${E5_FEATURES:-0}
@@ -323,6 +327,7 @@ VERSION=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
 
 docker run --rm --platform linux/arm64 \
     -v "$OVERLAY":/in/overlay:ro -v "$LS":/in/landscape-root:ro \
+    -v "$HERE/standalone":/in/standalone:ro \
     -v "$TOP/device/linux_device_common/overlay/opt/e5":/in/opt-e5:ro \
     -v "$TOP/device/openwrt_device_common/packages.list":/in/packages.list:ro \
     -v "$TOP":/in/feature-source:ro -e E5_FEATURES="$FEATURES" -e E5_UI_CACHE=/tmp/e5-ui-cache \
@@ -336,7 +341,8 @@ docker run --rm --platform linux/arm64 \
     -v "$BLOCK_APK":/in/block-mount-guarded.apk:ro \
     -v "$BLOCK_APK.build-id":/in/block-mount.build-id:ro \
     -v "$WIFI_APKS":/in/wifi-sae:ro \
-    -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
+    -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -e STANDALONE_NETWORK="$STANDALONE_NETWORK" \
+    -v "$RM":/in/root-modules:ro \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" -v "$TP":/in/transplant:ro \
     -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" -e E5_BUILD_EPOCH="${E5_BUILD_EPOCH:-}" \
     -e CONTAINERS="$CONTAINERS" -e LANDSCAPE="$LANDSCAPE" -e E5_LANDSCAPE_VER="$LANDSCAPE_VER" -e VER="$VER" \
@@ -441,49 +447,13 @@ mkdir -p $R/etc/e5
 # no board.json, so netifd comes up with no lan interface at all.  The first
 # boot (90-e5) only edits the lan it expects to exist, so the management LAN
 # has to be in the image.  The update path restores the user config over it.
+#
+# The files come from openwrt/standalone/, mounted at /in/standalone, not from
+# a here-document: this script is the body of a single-quoted `sh -euc`
+# invocation, and UCI configuration itself contains single quotes.
 if [ -n "$STANDALONE" ]; then
-    [ -s $R/etc/config/network ] || cat > $R/etc/config/network <<NET
-config interface 'loopback'
-	option device 'lo'
-	option proto 'static'
-	list ipaddr '127.0.0.1/8'
-
-config globals 'globals'
-	option dhcp_default_duid 'auto'
-
-config device 'br_lan'
-	option name 'br-lan'
-	option type 'bridge'
-	option bridge_empty '1'
-
-config interface 'lan'
-	option device 'br-lan'
-	option proto 'static'
-	option ip6assign '64'
-	list ipaddr '192.168.9.1/24'
-NET
-    # Landscape's DHCPv4 service owns 192.168.9.1/24 and deletes any other
-    # IPv4 address on the interface label (netlink add_address_with_handle),
-    # so netifd must not configure the same address: the two would remove
-    # each other's address and the DHCP server would lose its own.
-    if [ "$LANDSCAPE" = 1 ]; then
-        sed -i "s/^\toption proto 'static'$/\toption proto 'none'/; /ipaddr '192.168.9.1\/24'/d; /option ip6assign '64'/d" \
-            $R/etc/config/network
-    fi
-    [ -s $R/etc/config/system ] || cat > $R/etc/config/system <<SYS
-config system
-	option hostname 'E5'
-	option timezone 'CST-8'
-	option zonename 'Asia/Shanghai'
-	option log_size '2048'
-	option ttylogin '0'
-
-config timeserver 'ntp'
-	option enabled '1'
-	option enable_server '0'
-	list server '0.openwrt.pool.ntp.org'
-	list server '1.openwrt.pool.ntp.org'
-SYS
+    [ -s $R/etc/config/network ] || cp /in/standalone/"$STANDALONE_NETWORK" $R/etc/config/network
+    [ -s $R/etc/config/system ] || cp /in/standalone/system $R/etc/config/system
     # 91-e5-wireless fills it in once there is a radio; an absent file is not
     # an empty one when netifd loads the wireless package.
     [ -e $R/etc/config/wireless ] || : > $R/etc/config/wireless
@@ -543,9 +513,11 @@ if [ "$LANDSCAPE" = 1 ]; then
     chown -R 0:0 $R/etc/landscape-router
     chmod 600 $R/etc/landscape-router/landscape.toml $R/etc/landscape-router/landscape_init.toml
     # The init file is version-locked: the daemon refuses one written by
-    # another release, so the image's version replaces the source's default.
+    # another release, so the version in the image replaces the default.
     sed -i "s/^version = .*/version = \"$E5_LANDSCAPE_VER\"/" $R/etc/landscape-router/landscape_init.toml
-    [ "$(grep -c '^version = ' $R/etc/landscape-router/landscape_init.toml)" = 1 ]
+    # (this is the body of the outer single-quoted `sh -euc` argument: a
+    # quoted pattern with a space would end it.  grep gets the ERE.)
+    [ "$(grep -cE \"^version[[:space:]]=\" $R/etc/landscape-router/landscape_init.toml)" = 1 ]
     grep -qx "version = \"$E5_LANDSCAPE_VER\"" $R/etc/landscape-router/landscape_init.toml
 fi
 # the applets the shared scripts use that OpenWrt'"'"'s busybox leaves out --

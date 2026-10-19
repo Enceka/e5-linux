@@ -65,11 +65,14 @@ class KernelConfig(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_required_options_are_off(self):
-        # (merge_config accepts either spelling; the compiled config below is
-        # checked again by the workflow)
+        # `# ... is not set` is what kconfig writes and what the Landscape
+        # checklist and the workflow grep for; `=n` in the fragment becomes
+        # `# ... is not set` but would fail the workflow's own check.
         for option in REQUIRED_OFF:
             self.assertFalse(any(line in (f'{option}=y', f'{option}=m') for line in self.lines),
                              f'{option} must not be built in')
+            self.assertIn(f'# {option} is not set', self.lines)
+            self.assertNotIn(f'{option}=n', self.lines)
 
     def test_btf_needs_dwarf(self):
         # BTF without debug info is empty: the Build ID Landscape reads would

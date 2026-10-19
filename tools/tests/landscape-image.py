@@ -152,6 +152,15 @@ class Build(unittest.TestCase):
         result = subprocess.run(['sh', '-n'], input=body, text=True,
                                 capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+        # Inside that body, a backslash before a quote is literal: it turned
+        # the version grep's pattern into \"^version... and the count into 0,
+        # so `set -e` aborted the build after ModemManager with no message
+        # (run 39299973749).  Quotes inside a double-quoted argument still
+        # need their backslash; this grep is unquoted shell syntax and does
+        # not.
+        self.assertNotIn('grep -cE \\"', body)
+        self.assertIn('grep -cE "^version[[:space:]]=" '
+                      '$R/etc/landscape-router/landscape_init.toml', body)
 
     def test_standalone_image_has_the_management_lan(self):
         # Netifd needs a lan interface to exist; 90-e5 configures it but does

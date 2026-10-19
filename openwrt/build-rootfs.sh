@@ -436,6 +436,7 @@ fi
 # (apk info <name> describes the repository'"'"'s package; the installed one is here)
 echo "modemmanager $(sed -n "/^P:modemmanager$/{n;s/^V://p}" /lib/apk/db/installed) installed"
 
+echo "rootfs: staging the live filesystem"
 R=/build/root; mkdir -p $R
 # the live filesystem of this container (OpenWrt and the packages), without the runtime mounts
 for e in /*; do
@@ -444,6 +445,7 @@ for e in /*; do
 done
 mkdir -p $R/proc $R/sys $R/dev $R/tmp $R/mnt/e5-disk $R/opt/e5/android $R/opt/e5/bin $R/etc/e5linux
 mkdir -p $R/etc/e5
+echo "rootfs: applying the OpenWrt defaults and overlay"
 # The armsr base package has no etc/config/network, system or wireless.  Its
 # board.d scripts generate them when /etc/board.json is absent, but the E5 has
 # no board.json, so netifd comes up with no lan interface at all.  The first
@@ -473,6 +475,7 @@ printf "E5\n" > $R/etc/hostname
 
 cp -a /in/overlay/. $R/
 cp -a /in/landscape-root/. $R/
+echo "rootfs: overlay and Landscape files applied"
 rm -f $R/.device-overlay.json
 if [ "$CONTAINERS" = 1 ]; then
     python3 $R/usr/libexec/e5-container-setup --root $R
@@ -525,8 +528,9 @@ if [ "$LANDSCAPE" = 1 ]; then
     sed -i "s/^version = .*/version = \"$E5_LANDSCAPE_VER\"/" $R/etc/landscape-router/landscape_init.toml
     # (this is the body of the outer single-quoted `sh -euc` argument: a
     # quoted pattern with a space would end it.  grep gets the ERE.)
-    [ "$(grep -cE \"^version[[:space:]]=\" $R/etc/landscape-router/landscape_init.toml)" = 1 ]
+    [ "$(grep -cE "^version[[:space:]]=" $R/etc/landscape-router/landscape_init.toml)" = 1 ]
     grep -qx "version = \"$E5_LANDSCAPE_VER\"" $R/etc/landscape-router/landscape_init.toml
+    echo "rootfs: Landscape files verified"
 fi
 # the applets the shared scripts use that OpenWrt'"'"'s busybox leaves out --
 # the ones the full busybox really has
@@ -600,6 +604,7 @@ python3 /in/feature-source/boot/stage-installer.py --system openwrt --root $R
 if [ -f $R/usr/libexec/unisoc-modem/disable-channel-analysis ]; then
     ucode $R/usr/libexec/unisoc-modem/disable-channel-analysis $R
 fi
+echo "rootfs: writing $NAME"
 cd $R && tar -czf /out/$NAME .
 ls -la /out/$NAME
 '

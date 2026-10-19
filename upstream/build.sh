@@ -22,11 +22,23 @@ if [ -z "${E5_IN_CONTAINER:-}" ]; then
         kernel_common_git=$(git -C "$K" rev-parse --path-format=absolute --git-common-dir)
         KERNEL_MOUNTS+=(-v "$kernel_common_git:$kernel_common_git:ro")
     fi
-    # The manifest is read in the container from /work; resolve it on the host
-    # so a relative path stays the one the caller meant.
+    # The caller's path is relative to their current directory; the container
+    # sees this checkout at /work, so map a path under HERE there.  Anything
+    # outside it is passed through as an absolute path (and will need its own
+    # mount, which the release manifests do not).
     manifest=${E5_KERNEL_MANIFEST:-}
     if [ -n "$manifest" ]; then
-        case "$manifest" in /*) ;; *) manifest="$(cd "$(dirname "$manifest")" && pwd)/$(basename "$manifest")";; esac
+        case "$manifest" in
+            /*) ;;
+            *) manifest="$(cd "$(dirname "$manifest")" && pwd)/$(basename "$manifest")" ;;
+        esac
+        # HERE is already the physical path (cd + pwd above); resolve the
+        # manifest the same way before prefixing it with /work.
+        manifest_dir=$(cd "$(dirname "$manifest")" && pwd)
+        manifest="$manifest_dir/$(basename "$manifest")"
+        case "$manifest" in
+            "$HERE"/*) manifest="/work/${manifest#"$HERE"/}" ;;
+        esac
     fi
     exec docker run --rm -e E5_IN_CONTAINER=1 -e E5_RELEASE="${E5_RELEASE:-}" \
         -e E5_KERNEL_MANIFEST="$manifest" \

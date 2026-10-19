@@ -111,6 +111,12 @@ class ManifestSelection(unittest.TestCase):
                                              'repository': 'https://example.invalid/kernel.git',
                                              'branch': 'e5-7.2-experiment'}))
 
+    def test_build_maps_the_manifest_into_the_build_container(self):
+        # upstream/build.sh mounts the checkout at /work; a relative manifest
+        # path must become /work/<file>, not stay relative inside Docker.
+        script = (Path(__file__).resolve().parents[1] / 'build.sh').read_text()
+        self.assertIn('"/work/${manifest#"$HERE"/}"', script)
+
     def test_environment_selects_the_experiment_manifest(self):
         import os
         from unittest import mock

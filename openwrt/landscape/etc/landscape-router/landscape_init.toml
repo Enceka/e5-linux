@@ -1,0 +1,40 @@
+# Imported once, when landscape_init.lock does not exist; the daemon then owns
+# landscape_db.sqlite and this file is not read again.  It is the first boot of
+# an image built with E5_LANDSCAPE=1, not a template for a configured router.
+#
+# version is replaced with E5_LANDSCAPE_VER while the image is built: the
+# daemon refuses an init file from another release.
+version = "0.26.3"
+
+# br-lan is made by netifd (etc/config/network), not by Landscape; the daemon
+# must only attach to it.  Landscape's own br_lan default does not exist here.
+[[ifaces]]
+name = "br-lan"
+create_dev_type = "no_need_to_create"
+zone_type = "lan"
+enable_in_boot = true
+
+# DHCPv4 for the management LAN.  The server adds 192.168.9.1/24 itself and
+# hands out .10-.200: ip_range_end is exclusive, so .201 is the bound.
+[[dhcpv4_services]]
+iface_name = "br-lan"
+enable = true
+
+[dhcpv4_services.config]
+ip_range_start = "192.168.9.10"
+ip_range_end = "192.168.9.201"
+server_ip_addr = "192.168.9.1"
+network_mask = 24
+address_lease_time = 43200
+
+# The USB host (the gadget's fixed host_addr, boot/init) keeps .2, outside the
+# pool, as dnsmasq did on Debian and OpenWrt.
+[[enrolled_devices]]
+iface_name = "br-lan"
+name = "USB host"
+mac = "02:50:00:00:e5:02"
+ipv4 = "192.168.9.2"
+
+[config.auth]
+admin_user = "admin"
+admin_pass = "root"

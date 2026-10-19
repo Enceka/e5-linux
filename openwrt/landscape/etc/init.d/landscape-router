@@ -23,7 +23,7 @@ start_service() {
 		--config-dir /etc/landscape-router \
 		--web /etc/landscape-router/static \
 		--port 6300 --https 6443 --address 0.0.0.0 \
-		--log_path /var/log/landscape-router --log_terminal false
+		--log_path /var/log/landscape-router --log-output-in-terminal false
 	procd_set_param limits memlock=unlimited
 	procd_set_param respawn 3600 5 0
 	procd_set_param stderr 1

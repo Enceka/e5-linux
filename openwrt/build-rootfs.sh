@@ -436,6 +436,58 @@ for e in /*; do
 done
 mkdir -p $R/proc $R/sys $R/dev $R/tmp $R/mnt/e5-disk $R/opt/e5/android $R/opt/e5/bin $R/etc/e5linux
 mkdir -p $R/etc/e5
+# The armsr base package has no etc/config/network, system or wireless.  Its
+# board.d scripts generate them when /etc/board.json is absent, but the E5 has
+# no board.json, so netifd comes up with no lan interface at all.  The first
+# boot (90-e5) only edits the lan it expects to exist, so the management LAN
+# has to be in the image.  The update path restores the user config over it.
+if [ -n "$STANDALONE" ]; then
+    [ -s $R/etc/config/network ] || cat > $R/etc/config/network <<NET
+config interface 'loopback'
+	option device 'lo'
+	option proto 'static'
+	list ipaddr '127.0.0.1/8'
+
+config globals 'globals'
+	option dhcp_default_duid 'auto'
+
+config device 'br_lan'
+	option name 'br-lan'
+	option type 'bridge'
+	option bridge_empty '1'
+
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'static'
+	option ip6assign '64'
+	list ipaddr '192.168.9.1/24'
+NET
+    # Landscape's DHCPv4 service owns 192.168.9.1/24 and deletes any other
+    # IPv4 address on the interface label (netlink add_address_with_handle),
+    # so netifd must not configure the same address: the two would remove
+    # each other's address and the DHCP server would lose its own.
+    if [ "$LANDSCAPE" = 1 ]; then
+        sed -i "s/^\toption proto 'static'$/\toption proto 'none'/; /ipaddr '192.168.9.1\/24'/d; /option ip6assign '64'/d" \
+            $R/etc/config/network
+    fi
+    [ -s $R/etc/config/system ] || cat > $R/etc/config/system <<SYS
+config system
+	option hostname 'E5'
+	option timezone 'CST-8'
+	option zonename 'Asia/Shanghai'
+	option log_size '2048'
+	option ttylogin '0'
+
+config timeserver 'ntp'
+	option enabled '1'
+	option enable_server '0'
+	list server '0.openwrt.pool.ntp.org'
+	list server '1.openwrt.pool.ntp.org'
+SYS
+    # 91-e5-wireless fills it in once there is a radio; an absent file is not
+    # an empty one when netifd loads the wireless package.
+    [ -e $R/etc/config/wireless ] || : > $R/etc/config/wireless
+fi
 cp /in/block-mount.build-id $R/etc/e5/block-mount.build-id
 cp /in/wifi-sae/build-id $R/etc/e5/wifi-sae.build-id
 cp /in/wifi-sae/source-info $R/etc/e5/wifi-sae.source-info
@@ -482,13 +534,19 @@ if [ "$LANDSCAPE" = 1 ]; then
     # first-boot defaults from openwrt/landscape/; both are laid over the same
     # paths as the rest of the overlay.
     for f in usr/sbin/landscape-webserver usr/libexec/redirect_pkg_handler \
-             etc/landscape-router/landscape.toml etc/landscape-router/static/index.html \
+             etc/landscape-router/landscape.toml etc/landscape-router/landscape_init.toml \
+             etc/landscape-router/static/index.html \
              etc/init.d/landscape-router etc/uci-defaults/99-landscape; do
         [ -s "$R/$f" ] || { echo "the Landscape image has no /$f" >&2; exit 1; }
     done
     chmod 755 $R/usr/sbin/landscape-webserver $R/usr/libexec/redirect_pkg_handler $R/etc/init.d/landscape-router
     chown -R 0:0 $R/etc/landscape-router
-    chmod 600 $R/etc/landscape-router/landscape.toml
+    chmod 600 $R/etc/landscape-router/landscape.toml $R/etc/landscape-router/landscape_init.toml
+    # The init file is version-locked: the daemon refuses one written by
+    # another release, so the image's version replaces the source's default.
+    sed -i "s/^version = .*/version = \"$E5_LANDSCAPE_VER\"/" $R/etc/landscape-router/landscape_init.toml
+    [ "$(grep -c '^version = ' $R/etc/landscape-router/landscape_init.toml)" = 1 ]
+    grep -qx "version = \"$E5_LANDSCAPE_VER\"" $R/etc/landscape-router/landscape_init.toml
 fi
 # the applets the shared scripts use that OpenWrt'"'"'s busybox leaves out --
 # the ones the full busybox really has

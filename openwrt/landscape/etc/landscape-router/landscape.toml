@@ -2,9 +2,9 @@
 # zones, WAN/LAN, DHCP, DNS and flows -- are configured in the web UI on :6443
 # and live in landscape_db.sqlite next to this file.
 #
-# This is not landscape_init.toml: that file rebuilds the database once and
-# would silently replace a configured router on the next start, so the image
-# ships none.  See https://landscape.whileaway.dev/configuration/init-config.
+# landscape_init.toml next to this file seeds the database once, while
+# landscape_init.lock is missing; after that the lock keeps it from replacing
+# a configured router.  See https://landscape.whileaway.dev/configuration/init-config.
 [log]
 log_path = "/var/log/landscape-router"
 max_log_files = 7

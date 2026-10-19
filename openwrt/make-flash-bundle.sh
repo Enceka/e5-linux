@@ -116,7 +116,8 @@ if [ "$LANDSCAPE" = 1 ]; then
     trap 'rm -rf "$S0" "$IMG_TMP"' EXIT
     gzip -dc "$IMG" > "$IMG_TMP/img"
     for f in usr/sbin/landscape-webserver usr/libexec/redirect_pkg_handler \
-             etc/landscape-router/landscape.toml etc/landscape-router/static/index.html \
+             etc/landscape-router/landscape.toml etc/landscape-router/landscape_init.toml \
+             etc/landscape-router/static/index.html \
              etc/init.d/landscape-router etc/uci-defaults/99-landscape; do
         debugfs -R "stat /$f" "$IMG_TMP/img" 2>/dev/null | grep -q '^Inode:' ||
             { echo "the Landscape image has no /$f" >&2; exit 1; }

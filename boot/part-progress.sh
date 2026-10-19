@@ -56,12 +56,22 @@ part_fail() {
 }
 part_grow_ext4() {
     # Resize offline: online resize can be unavailable in the installation kernel.
-    local dev=$1 sectors=$2 blocks low high shift actual
+    # resize2fs cannot put a partial block group at the end: a partition whose
+    # sectors do not divide into whole groups stops at the previous group
+    # boundary (a 4196352-sector SD partition: 524544 wanted, 524288 written).
+    # Accept exactly that result, but nothing smaller or a 2 GiB filesystem.
+    local dev=$1 sectors=$2 blocks magic low high shift group
     blocks=$((sectors / 8))
     /usr/sbin/resize2fs -f "$dev" "$blocks" > /run/part-growfs.log 2>&1 || return 1
+    magic=$(od -An -tx2 -j 1080 -N 2 "$dev" | tr -d ' \n')
     low=$(od -An -tu4 -j 1028 -N 4 "$dev" | tr -d ' \n')
     high=$(od -An -tu4 -j 1360 -N 4 "$dev" | tr -d ' \n')
     shift=$(od -An -tu4 -j 1048 -N 4 "$dev" | tr -d ' \n')
-    # Our root images use 4 KiB blocks. Do not report success on a 2 GiB FS.
-    [ "$shift" = 2 ] && [ "$high" = 0 ] && [ "$low" = "$blocks" ]
+    group=$(od -An -tu4 -j 1056 -N 4 "$dev" | tr -d ' \n')
+    # Our root images use 4 KiB blocks.
+    [ "$magic" = ef53 ] && [ "$shift" = 2 ] && [ "$high" = 0 ] || return 1
+    case "$low:$group" in ''|*[!0-9:]*) return 1 ;; esac
+    [ "$group" -gt 0 ] && [ $((group & (group - 1))) = 0 ] || return 1
+    [ "$low" -gt 0 ] && [ "$low" -le "$blocks" ] || return 1
+    [ "$low" = "$blocks" ] || [ "$low" = "$((blocks / group * group))" ]
 }

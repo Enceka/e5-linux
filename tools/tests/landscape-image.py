@@ -24,6 +24,7 @@ BUILD = TOP / 'openwrt/build-rootfs.sh'
 SERVICE = TOP / 'openwrt/landscape/etc/init.d/landscape-router'
 DEFAULTS = TOP / 'openwrt/landscape/etc/uci-defaults/99-landscape'
 TOML = TOP / 'openwrt/landscape/etc/landscape-router/landscape.toml'
+INIT = TOP / 'openwrt/landscape/etc/landscape-router/landscape_init.toml'
 
 # landscape.whileaway.dev/zh/intro/requirements, verbatim where the kernel
 # Kconfig does not derive it (BPF_JIT_DEFAULT_ON and IPV6_SEG6_BPF are
@@ -110,12 +111,31 @@ class Build(unittest.TestCase):
 
     def test_image_carries_the_landscape_files(self):
         for name in ('usr/sbin/landscape-webserver', 'etc/landscape-router/static',
+                     'etc/landscape-router/landscape_init.toml',
                      'etc/init.d/landscape-router'):
             self.assertIn(name, self.text)
         # the service/config tree is staged next to the root modules and copied
         # over the image root, so it stays out of the Debian/OpenWrt shared tree
         self.assertIn('openwrt/landscape', self.text)
         self.assertIn('cp -a /in/landscape-root/. $R/', self.text)
+
+    def test_standalone_image_has_the_management_lan(self):
+        # Netifd needs a lan interface to exist; 90-e5 configures it but does
+        # not create it, and armsr's base image does not ship one.
+        self.assertIn("config device 'br_lan'", self.text)
+        self.assertIn("option name 'br-lan'", self.text)
+        self.assertIn("option bridge_empty '1'", self.text)
+        self.assertIn("config interface 'lan'", self.text)
+        self.assertIn("list ipaddr '192.168.9.1/24'", self.text)
+        self.assertIn("option hostname 'E5'", self.text)
+        # Landscape's DHCPv4 owns the address and deletes netifd's copy, so
+        # the built-in image has to drop netifd's IPv4/IPv6 configuration.
+        self.assertIn('if [ "$LANDSCAPE" = 1 ]; then', self.text)
+        self.assertIn("option proto 'none'", self.text)
+        match = re.search(r'sed -i "(.*?)"', self.text)
+        self.assertIsNotNone(match)
+        self.assertIn("ipaddr '192.168.9.1\\/24'", match.group(1))
+        self.assertIn("ip6assign '64'", match.group(1))
 
     def test_ebpf_packages_use_the_feed_names(self):
         # OpenWrt's feed names the library libelf1; libelf is not a package.
@@ -141,6 +161,12 @@ class Service(unittest.TestCase):
         for value in ('/etc/landscape-router', '/etc/landscape-router/static',
                       '--port 6300', '--https 6443'):
             self.assertIn(value, self.text)
+
+    def test_uses_the_flag_names_of_the_pinned_release(self):
+        # 0.26.3's clap parser has --log-output-in-terminal; --log_terminal is
+        # rejected at startup, which left the router down with no DHCP.
+        self.assertIn('--log-output-in-terminal false', self.text)
+        self.assertNotIn('--log_terminal', self.text)
 
     def test_raises_the_memlock_limit(self):
         # Landscape locks its maps; the manual's LimitMEMLOCK=infinity.  The
@@ -181,11 +207,43 @@ class Config(unittest.TestCase):
     def test_database_lives_with_the_config(self):
         self.assertIn('sqlite:///etc/landscape-router/landscape_db.sqlite', self.text)
 
-    def test_no_init_template_is_shipped(self):
-        # landscape_init.toml replaces the database on the next start; shipping
-        # one would silently reset a configured router.
-        self.assertNotIn('landscape_init', BUILD.read_text().split('LANDSCAPE = 1', 1)[0])
-        self.assertFalse((TOML.parent / 'landscape_init.toml').exists())
+    def test_init_template_is_shipped_and_versioned(self):
+        # The init file seeds the first boot only: landscape_init.lock stops it
+        # from replacing a router that has been configured since.  Its version
+        # must match the binary, so the build rewrites it from E5_LANDSCAPE_VER.
+        self.assertTrue(INIT.is_file())
+        text = INIT.read_text()
+        self.assertRegex(text, r'(?m)^version = "0\.26\.3"$')
+        self.assertIn('landscape_init.toml', BUILD.read_text())
+        self.assertIn('sed -i "s/^version = .*/version =', BUILD.read_text())
+        # the init file is the active config on a first boot; without auth here
+        # the daemon falls back to root/root
+        self.assertIn('[config.auth]', text)
+        self.assertIn('admin_user = "admin"', text)
+        self.assertIn('admin_pass = "root"', text)
+
+
+class InitConfig(unittest.TestCase):
+    def setUp(self):
+        self.text = INIT.read_text()
+
+    def test_management_lan_is_seeded(self):
+        # br-lan is netifd's; Landscape must not try to make its own br_lan.
+        self.assertIn('name = "br-lan"', self.text)
+        self.assertIn('create_dev_type = "no_need_to_create"', self.text)
+        self.assertIn('zone_type = "lan"', self.text)
+
+    def test_dhcp_pool_matches_the_openwrt_lan(self):
+        self.assertIn('iface_name = "br-lan"', self.text)
+        self.assertIn('ip_range_start = "192.168.9.10"', self.text)
+        # ip_range_end is exclusive: .201 ends the pool at .200
+        self.assertIn('ip_range_end = "192.168.9.201"', self.text)
+        self.assertIn('server_ip_addr = "192.168.9.1"', self.text)
+        self.assertIn('network_mask = 24', self.text)
+
+    def test_usb_host_keeps_its_address(self):
+        self.assertIn('mac = "02:50:00:00:e5:02"', self.text)
+        self.assertIn('ipv4 = "192.168.9.2"', self.text)
 
 
 class Bundle(unittest.TestCase):
@@ -204,6 +262,7 @@ class Bundle(unittest.TestCase):
     def test_bundle_image_is_checked_for_landscape(self):
         self.assertIn('checking the image for Landscape', self.text)
         self.assertIn('etc/landscape-router/static/index.html', self.text)
+        self.assertIn('etc/landscape-router/landscape_init.toml', self.text)
 
 
 if __name__ == '__main__':

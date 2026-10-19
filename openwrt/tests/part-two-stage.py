@@ -228,6 +228,40 @@ class TwoStage(unittest.TestCase):
             self.assertIn('elapsed 0s', (root/'kmsg').read_text())
             self.assertFalse((root/'part-install.running').exists())
 
+    def test_growth_accepts_the_last_complete_block_group(self):
+        # A 4196352-sector card partition (2 GiB - 512 KiB) wants 524544 4K
+        # blocks, but resize2fs stops at the last whole group: 524288.  The
+        # installer used to call that a capacity failure after a good resize.
+        if not shutil.which('mkfs.ext4') or not shutil.which('resize2fs'):
+            self.skipTest('requires Linux ext4 tools')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); image = root / 'card.ext4'
+            with image.open('wb') as stream:
+                stream.truncate(1 << 30)
+            subprocess.run(['mkfs.ext4', '-q', '-F', '-b', '4096', str(image)], check=True)
+            with image.open('r+b') as stream:
+                stream.truncate(4196352 * 512)
+            code = (TOP / 'boot/part-progress.sh').read_text().replace('/run/', str(root) + '/')
+            code = code.replace('/usr/sbin/resize2fs', shutil.which('resize2fs'))
+            result = subprocess.run(
+                ['sh'], input=code + f'\npart_grow_ext4 "{image}" 4196352\n',
+                text=True, capture_output=True, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with image.open('rb') as stream:
+                stream.seek(1028)
+                self.assertEqual(struct.unpack('<I', stream.read(4))[0], 524288)
+            # ... but a filesystem that did not grow is still rejected
+            small = root / 'small.ext4'
+            with small.open('wb') as stream:
+                stream.truncate(1 << 30)
+            subprocess.run(['mkfs.ext4', '-q', '-F', '-b', '4096', str(small)], check=True)
+            fake = root / 'no-op'; fake.write_text('#!/bin/sh\nexit 0\n'); fake.chmod(0o755)
+            result = subprocess.run(
+                ['sh'], input=code.replace(shutil.which('resize2fs'), str(fake)) +
+                f'\npart_grow_ext4 "{small}" 4196352\n',
+                text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0)
+
     def test_real_ext4_two_to_ten_gib_and_noop_rejected(self):
         if not shutil.which('mkfs.ext4') or not shutil.which('resize2fs'):
             self.skipTest('requires Linux ext4 tools')

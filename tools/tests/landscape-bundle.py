@@ -30,11 +30,12 @@ REQUIRED = [
     'usr/sbin/landscape-webserver',
     'usr/libexec/redirect_pkg_handler',
     'etc/landscape-router/landscape.toml',
+    'etc/landscape-router/landscape_init.toml',
     'etc/landscape-router/static/index.html',
     'etc/init.d/landscape-router',
     'etc/uci-defaults/99-landscape',
 ]
-FORBIDDEN = ['etc/landscape-router/landscape_init.toml']
+FORBIDDEN = []
 # e_type (16) = ET_EXEC, e_machine (18) = EM_AARCH64 in an ELF64 LE header
 ELF_AARCH64 = (b'\x7fELF\x02\x01\x01' + b'\0' * 9 + b'\x02\x00\xb7\x00'
                + b'\0' * 32)

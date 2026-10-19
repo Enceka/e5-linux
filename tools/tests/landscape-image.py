@@ -115,6 +115,13 @@ class Build(unittest.TestCase):
         self.assertIn('LANDSCAPE=${E5_LANDSCAPE:-0}', self.text)
         self.assertIn('E5_LANDSCAPE=1 requires E5_ROOT_MODULES', self.text)
 
+    def test_landscape_flag_is_set_before_reads(self):
+        # The script runs under `set -u`; assigning LANDSCAPE after the
+        # standalone network choice aborted bundle assembly with
+        # "LANDSCAPE: unbound variable" (run 39296585990).
+        self.assertLess(self.text.index('LANDSCAPE=${E5_LANDSCAPE:-0}'),
+                        self.text.index('[ "$LANDSCAPE" != 1 ] || STANDALONE_NETWORK'))
+
     def test_image_carries_the_landscape_files(self):
         for name in ('usr/sbin/landscape-webserver', 'etc/landscape-router/static',
                      'etc/landscape-router/landscape_init.toml',

@@ -92,6 +92,13 @@ SCREEN_PLUGINS=${E5_INFOSCREEN_PLUGINS-$TOP/ci/infoscreen-plugins}
 [ -n "$SCREEN_PLUGINS" ] && [ -d "$SCREEN_PLUGINS/plugins/phone" ] || SCREEN_PLUGINS=""
 NAME=e5-openwrt-$VER-rootfs.tar.gz
 STANDALONE=${E5_STANDALONE:-}
+# Landscape Router (E5_LANDSCAPE=1): its static aarch64 binary, the redirect
+# package handler and the web UI, pinned by release and SHA-256, plus the
+# OpenWrt packages its eBPF data path needs.  Off by default: the image it is
+# in runs Landscape instead of dnsmasq/odhcpd as the router (99-landscape).
+# (Set before the standalone network choice reads it; the script runs with
+# set -u, so a later default is too late.)
+LANDSCAPE=${E5_LANDSCAPE:-0}
 # the standalone UCI defaults (openwrt/standalone/): netifd's default image
 # config differs from the Landscape one only in that it owns 192.168.9.1.
 STANDALONE_NETWORK=network
@@ -99,11 +106,6 @@ STANDALONE_NETWORK=network
 DEVICE_FILES=${E5_DEVICE_FILES:-1}
 CONTAINERS=${E5_DOCKER:-0}
 FEATURES=${E5_FEATURES:-0}
-# Landscape Router (E5_LANDSCAPE=1): its static aarch64 binary, the redirect
-# package handler and the web UI, pinned by release and SHA-256, plus the
-# OpenWrt packages its eBPF data path needs.  Off by default: the image it is
-# in runs Landscape instead of dnsmasq/odhcpd as the router (99-landscape).
-LANDSCAPE=${E5_LANDSCAPE:-0}
 LANDSCAPE_VER=${E5_LANDSCAPE_VER:-0.26.3}
 LANDSCAPE_URL=https://github.com/ThisSeanZhang/landscape/releases/download/v$LANDSCAPE_VER
 LANDSCAPE_ASSETS="17095a4a25ce505d565edc5430ac549211e6b77e66c4294006747be63563bd3e landscape-webserver-aarch64-static

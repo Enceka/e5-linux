@@ -338,7 +338,8 @@ docker run --rm --platform linux/arm64 \
     -v "$WIFI_APKS":/in/wifi-sae:ro \
     -v "$SA":/in/sa:ro -e STANDALONE="$STANDALONE" -v "$RM":/in/root-modules:ro \
     -v "$WORK/extra":/in/extra:ro -e EXTRA_LIST="$EXTRA_LIST" -v "$TP":/in/transplant:ro \
-    -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" -e E5_BUILD_EPOCH="${E5_BUILD_EPOCH:-}" -e CONTAINERS="$CONTAINERS" \
+    -v "$TAROUT":/out -e NAME="$NAME" -e VERSION="$VERSION" -e E5_BUILD_EPOCH="${E5_BUILD_EPOCH:-}" \
+    -e CONTAINERS="$CONTAINERS" -e LANDSCAPE="$LANDSCAPE" -e E5_LANDSCAPE_VER="$LANDSCAPE_VER" -e VER="$VER" \
     e5-openwrt-base:$VER /bin/sh -euc '
 mkdir -p /var/lock /var/run /tmp
 attempt=1

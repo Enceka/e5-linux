@@ -85,6 +85,18 @@ class Build(unittest.TestCase):
     def setUp(self):
         self.text = BUILD.read_text()
 
+    def test_container_gets_the_host_variables_it_reads(self):
+        # The rootfs script runs with set -u; a flag named here but left
+        # off the docker command aborts the build only after the packages
+        # are installed (run 39227497153 stopped at "LANDSCAPE: parameter
+        # not set").  Check the run block, not the whole file.
+        start = self.text.index('docker run --rm --platform linux/arm64 \\\n')
+        body = self.text.index("/bin/sh -euc '", start)
+        run = self.text[start:body]
+        for name in ('LANDSCAPE', 'E5_LANDSCAPE_VER', 'VER', 'CONTAINERS',
+                     'STANDALONE', 'NAME', 'VERSION', 'EXTRA_LIST'):
+            self.assertIn(f'-e {name}=', run)
+
     def test_assets_are_pinned_and_hashed(self):
         self.assertIn('LANDSCAPE_VER=${E5_LANDSCAPE_VER:-0.26.3}', self.text)
         for name in ('landscape-webserver-aarch64-static',

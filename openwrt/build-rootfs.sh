@@ -95,6 +95,20 @@ STANDALONE=${E5_STANDALONE:-}
 DEVICE_FILES=${E5_DEVICE_FILES:-1}
 CONTAINERS=${E5_DOCKER:-0}
 FEATURES=${E5_FEATURES:-0}
+# Landscape Router (E5_LANDSCAPE=1): its static aarch64 binary, the redirect
+# package handler and the web UI, pinned by release and SHA-256, plus the
+# OpenWrt packages its eBPF data path needs.  Off by default: the image it is
+# in runs Landscape instead of dnsmasq/odhcpd as the router (99-landscape).
+LANDSCAPE=${E5_LANDSCAPE:-0}
+LANDSCAPE_VER=${E5_LANDSCAPE_VER:-0.26.3}
+LANDSCAPE_URL=https://github.com/ThisSeanZhang/landscape/releases/download/v$LANDSCAPE_VER
+LANDSCAPE_ASSETS="17095a4a25ce505d565edc5430ac549211e6b77e66c4294006747be63563bd3e landscape-webserver-aarch64-static
+60bbb82aa7b8508f035aa12f219aa793170597eea72d3087be79575b4ff0fb10 redirect_pkg_handler-aarch64-static
+dffbb8f2ce0ecabb8a0876bec8e58efe38941564fe0e8cd8ae929125195b2fe6 static.zip"
+if [ "$LANDSCAPE" = 1 ]; then
+    # the data path needs BTF/BPF from the kernel, which is a mainline build
+    [ -n "${E5_ROOT_MODULES:-}" ] || { echo 'E5_LANDSCAPE=1 requires E5_ROOT_MODULES (the matching mainline kernel)' >&2; exit 1; }
+fi
 if [ "$FEATURES" = 1 ]; then
     [ -n "$INFOSCREEN" ] || { echo 'E5_FEATURES=1 requires the E5_INFOSCREEN base package' >&2; exit 1; }
     [ -n "${E5_ROOT_MODULES:-}" ] && [ "${E5_ROOT_MODULES_ONLY:-0}" = 1 ] || {
@@ -144,6 +158,17 @@ want=$(curl -fsSL "$URL/sha256sums" | sed -n "s/^\([0-9a-f]*\) \*$TARBALL$/\1/p"
 have=$(shasum -a 256 "$WORK/$TARBALL" 2>/dev/null || sha256sum "$WORK/$TARBALL")
 [ -n "$want" ] && [ "${have%% *}" = "$want" ] || { echo "checksum mismatch for $TARBALL" >&2; exit 1; }
 
+if [ "$LANDSCAPE" = 1 ]; then
+    mkdir -p "$WORK/landscape"
+    printf "%s\n" "$LANDSCAPE_ASSETS" | while read -r sum f; do
+        [ -f "$WORK/landscape/$f" ] ||
+            curl -fsSL -o "$WORK/landscape/$f.part" "$LANDSCAPE_URL/$f" &&
+            [ -f "$WORK/landscape/$f" ] || mv "$WORK/landscape/$f.part" "$WORK/landscape/$f"
+        got=$(shasum -a 256 "$WORK/landscape/$f" 2>/dev/null || sha256sum "$WORK/landscape/$f")
+        [ "${got%% *}" = "$sum" ] || { echo "checksum mismatch for $f" >&2; rm -f "$WORK/landscape/$f"; exit 1; }
+    done
+fi
+
 # logdw, e5-vibrate, e5-ctl-raw and e5-modemd, static: OpenWrt has no compiler of its own
 docker run --rm --platform linux/arm64 -v "$TOP/device/openwrt_device_common/src":/src:ro \
     -v "$TOP/device/openwrt_device_common/shared":/at-source:ro -v "$WORK":/out "${E5_TOOLS_BUILD_IMAGE:-alpine:3.22}" \
@@ -160,6 +185,19 @@ python3 "$TOP/device/openwrt_device_common/shared/build-at-client.py" --binary "
 # directory form); an empty directory each otherwise
 SA="$WORK/standalone"
 rm -rf "$SA" && mkdir -p "$SA/firmware" "$SA/android" "$SA/modem" "$SA/fonts" "$SA/audio"
+# Landscape's payload in the same layout as overlay: the pinned daemon, the
+# redirect handler, the web UI and the service/config files (openwrt/landscape).
+LS="$WORK/landscape-root"
+if [ "$LANDSCAPE" = 1 ]; then
+    rm -rf "$LS" && mkdir -p "$LS/usr/sbin" "$LS/usr/libexec" "$LS/etc/landscape-router/static"
+    cp "$WORK/landscape/landscape-webserver-aarch64-static" "$LS/usr/sbin/landscape-webserver"
+    cp "$WORK/landscape/redirect_pkg_handler-aarch64-static" "$LS/usr/libexec/redirect_pkg_handler"
+    unzip -q "$WORK/landscape/static.zip" -d "$LS/etc/landscape-router"
+    [ -f "$LS/etc/landscape-router/static/index.html" ] || { echo 'Landscape web UI is missing index.html' >&2; exit 1; }
+    cp -a "$HERE/landscape/." "$LS/"
+else
+    rm -rf "$LS" && mkdir -p "$LS"
+fi
 # Another kernel's root modules, unpacked before the standalone staging pass.
 RM="$WORK/root-modules"
 rm -rf "$RM" && mkdir -p "$RM"
@@ -284,7 +322,8 @@ echo "info screen: ${INFOSCREEN:-(none)}"
 VERSION=$(git -C "$TOP" describe --always --dirty 2>/dev/null || echo dev)
 
 docker run --rm --platform linux/arm64 \
-    -v "$OVERLAY":/in/overlay:ro -v "$TOP/device/linux_device_common/overlay/opt/e5":/in/opt-e5:ro \
+    -v "$OVERLAY":/in/overlay:ro -v "$LS":/in/landscape-root:ro \
+    -v "$TOP/device/linux_device_common/overlay/opt/e5":/in/opt-e5:ro \
     -v "$TOP/device/openwrt_device_common/packages.list":/in/packages.list:ro \
     -v "$TOP":/in/feature-source:ro -e E5_FEATURES="$FEATURES" -e E5_UI_CACHE=/tmp/e5-ui-cache \
     -e E5_INFOSCREEN=/in/infoscreen -e E5_INFOSCREEN_PLUGINS=/in/infoscreen-plugins \
@@ -353,6 +392,13 @@ done
 # the Argon theme (its release'"'"'s packages, unsigned)
 apk add --allow-untrusted $EXTRA_LIST >/dev/null
 echo "argon: $(sed -n "/^P:luci-theme-argon$/{n;s/^V://p}" /lib/apk/db/installed)"
+# The Landscape data path is XDP/TC eBPF: it loads its own BPF objects, so
+# the image needs the full tc (ELF loader), bpftool and libelf.  dnsmasq and
+# odhcpd stay installed -- 99-landscape turns them off instead of hiding them.
+if [ "$LANDSCAPE" = 1 ]; then
+    apk add tc-full bpftool-full libelf1 >/dev/null ||
+        { echo "the Landscape eBPF packages are not available from the $VER feeds" >&2; exit 1; }
+fi
 # the info screen'"'"'s packages (cage, cog, Mesa, ...), when there is one
 if [ -f /in/infoscreen/packages.txt ]; then
     # (the transplant above: used when the repository has none of those packages)
@@ -401,6 +447,7 @@ printf "127.0.0.1\tlocalhost\n\n::1\tlocalhost ip6-localhost ip6-loopback\nff02:
 printf "E5\n" > $R/etc/hostname
 
 cp -a /in/overlay/. $R/
+cp -a /in/landscape-root/. $R/
 rm -f $R/.device-overlay.json
 if [ "$CONTAINERS" = 1 ]; then
     python3 $R/usr/libexec/e5-container-setup --root $R
@@ -429,6 +476,19 @@ cp /in/e5-sim-probe $R/usr/libexec/e5-sim-probe && chmod 755 $R/usr/libexec/e5-s
 # the card'"'"'s UCM profile: applied by e5-audio-dsp with amixer (OpenWrt has no alsaucm)
 mkdir -p $R/usr/share/alsa && cp -a /in/alsa/ucm2 $R/usr/share/alsa/
 cp /in/busybox $R/opt/e5/bin/busybox && chmod 755 $R/opt/e5/bin/busybox
+if [ "$LANDSCAPE" = 1 ]; then
+    # The daemon and the UI come from the pinned release, the service and the
+    # first-boot defaults from openwrt/landscape/; both are laid over the same
+    # paths as the rest of the overlay.
+    for f in usr/sbin/landscape-webserver usr/libexec/redirect_pkg_handler \
+             etc/landscape-router/landscape.toml etc/landscape-router/static/index.html \
+             etc/init.d/landscape-router etc/uci-defaults/99-landscape; do
+        [ -s "$R/$f" ] || { echo "the Landscape image has no /$f" >&2; exit 1; }
+    done
+    chmod 755 $R/usr/sbin/landscape-webserver $R/usr/libexec/redirect_pkg_handler $R/etc/init.d/landscape-router
+    chown -R 0:0 $R/etc/landscape-router
+    chmod 600 $R/etc/landscape-router/landscape.toml
+fi
 # the applets the shared scripts use that OpenWrt'"'"'s busybox leaves out --
 # the ones the full busybox really has
 have=$(/in/busybox --list)
@@ -463,7 +523,9 @@ rm -f $R/etc/rc.d/*pulseaudio
 # (the cage package'"'"'s own kiosk service: cog on http://localhost/, which is LuCI,
 # shown at every boot before the info screen'"'"'s session takes the panel)
 rm -f $R/etc/rc.d/*cage
-for s in e5-hw e5-vendor e5-modemd e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-network-recovery e5-luci e5-audio e5-voice-audio e5-hfp e5-bt bluetoothd dbus modemmanager e5-usb-watch ttyd $screen; do
+svcs="e5-hw e5-vendor e5-modemd e5-sipc-wwan e5-telnetd e5-boot-ok e5-sms-notify e5-charge e5-apn-auto e5-network-recovery e5-luci e5-audio e5-voice-audio e5-hfp e5-bt bluetoothd dbus modemmanager e5-usb-watch ttyd $screen"
+[ "$LANDSCAPE" != 1 ] || svcs="$svcs landscape-router"
+for s in $svcs; do
     n=$(sed -n "s/^START=//p" $R/etc/init.d/$s)
     ln -sf ../init.d/$s $R/etc/rc.d/S$n$s
 done

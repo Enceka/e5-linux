@@ -1,0 +1,28 @@
+# Landscape's process settings, read at every start.  The router rules --
+# zones, WAN/LAN, DHCP, DNS and flows -- are configured in the web UI on :6443
+# and live in landscape_db.sqlite next to this file.
+#
+# This is not landscape_init.toml: that file rebuilds the database once and
+# would silently replace a configured router on the next start, so the image
+# ships none.  See https://landscape.whileaway.dev/configuration/init-config.
+[log]
+log_path = "/var/log/landscape-router"
+max_log_files = 7
+debug = false
+log_output_in_terminal = false
+
+[web]
+web_root = "/etc/landscape-router/static"
+# br-lan (USB and hotspot) is the management LAN; sipa_eth0 is the WAN.
+# The API answers on the WAN too unless --export_manager is left off (it is).
+address = "0.0.0.0"
+port = 6300
+https_port = 6443
+
+[auth]
+# The documented default; change both on the first visit.
+admin_user = "admin"
+admin_pass = "root"
+
+[store]
+database_path = "sqlite:///etc/landscape-router/landscape_db.sqlite?mode=rwc"

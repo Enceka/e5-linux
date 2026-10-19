@@ -8,6 +8,9 @@
 #       e5-openwrt-flash-<version>-mainline-<timestamp>-<git>; the kernel of E5_RELEASE=1 upstream/build.sh
 #       (upstream/out-release: no e5.openwrt=, so it is no trial), the boot modules of
 #       upstream/module-order.txt, and an image rebuilt with upstream/root-modules.txt in it
+#   E5_LANDSCAPE=1 with E5_MAINLINE=1 adds Landscape Router to the image (its
+#       static aarch64 daemon, web UI and the BPF packages): e5-openwrt-flash-<version>-landscape-...
+#       The kernel is the mainline build, whose BTF/BPF options Landscape requires.
 #   E5_IMAGE_FROM=<openwrt.ext4.gz> (with E5_MAINLINE=1)   no image rebuilt (build-rootfs.sh needs docker):
 #       that one, a flash package's files/openwrt.ext4.gz, with this kernel's root modules written in
 #       (openwrt/image-add-modules.sh) -- only for an image whose sources did not change since
@@ -60,11 +63,13 @@ t = datetime.fromtimestamp(int(sys.argv[1]), timezone(timedelta(hours=8)))
 print(t.strftime('%Y%m%d-%H%M%S'), t.isoformat(timespec='seconds'))
 PY
 )
+LANDSCAPE=${E5_LANDSCAPE:-0}
 NAME=e5-openwrt-flash-$VER-$STAMP-$GIT
 MAINLINE=${E5_MAINLINE:-}
 KOUT=${E5_UPSTREAM_OUT:-$TOP/upstream/out-release}
 if [ -n "$MAINLINE" ]; then
     NAME=e5-openwrt-flash-$VER-mainline-$STAMP-$GIT
+    [ "$LANDSCAPE" != 1 ] || NAME=e5-openwrt-flash-$VER-landscape-$STAMP-$GIT
     KERNEL=$KOUT/Image.lk
     [ -f "$KERNEL" ] || { echo "no $KERNEL: E5_RELEASE=1 upstream/build.sh" >&2; exit 1; }
     # (grep -c, not grep -q: see the kernel check below)
@@ -72,10 +77,13 @@ if [ -n "$MAINLINE" ]; then
         { echo "$KERNEL has e5.openwrt= on its command line: a trial kernel" >&2; exit 1; }
     E5_UPSTREAM_OUT=$KOUT sh "$TOP/upstream/root-modules.sh"
     if [ -n "${E5_IMAGE_FROM:-}" ]; then
+        [ "$LANDSCAPE" != 1 ] || {
+            echo 'E5_LANDSCAPE=1 needs the image rebuilt: the existing one carries no Landscape' >&2
+            exit 1; }
         bash "$HERE/image-add-modules.sh" "$E5_IMAGE_FROM" "$KOUT/root-modules.tar" "$IMG"
     else
         # the image always again: it has to carry this kernel's root modules
-        E5_ROOT_MODULES=$KOUT/root-modules.tar E5_ROOT_MODULES_ONLY=1 \
+        E5_LANDSCAPE=$LANDSCAPE E5_ROOT_MODULES=$KOUT/root-modules.tar E5_ROOT_MODULES_ONLY=1 \
             E5_STANDALONE=1 E5_DEVICE_FILES=0 bash "$HERE/build-rootfs.sh"
     fi
 elif [ ! -f "$IMG" ] || [ -n "${E5_REBUILD:-}" ]; then
@@ -101,6 +109,19 @@ grep -qx 'sbin/init' "$S0/files" || grep -qx './sbin/init' "$S0/files" || { echo
 bad=$(cat "$S0/files" |
       grep -E 'lib/firmware/(wcnmodem|gnssmodem|l_agdsp|wifi_board|sprd/)|opt/e5/android/.|etc/e5/install\.conf|mnt/vendor/.|attendedsysupgrade' || true)
 [ -z "$bad" ] || { echo "the generic image carries what it must not (device files, attended sysupgrade):" >&2; echo "$bad" | head >&2; exit 1; }
+
+if [ "$LANDSCAPE" = 1 ]; then
+    echo "== checking the image for Landscape"
+    IMG_TMP=$(mktemp -d)
+    trap 'rm -rf "$S0" "$IMG_TMP"' EXIT
+    gzip -dc "$IMG" > "$IMG_TMP/img"
+    for f in usr/sbin/landscape-webserver usr/libexec/redirect_pkg_handler \
+             etc/landscape-router/landscape.toml etc/landscape-router/static/index.html \
+             etc/init.d/landscape-router etc/uci-defaults/99-landscape; do
+        debugfs -R "stat /$f" "$IMG_TMP/img" 2>/dev/null | grep -q '^Inode:' ||
+            { echo "the Landscape image has no /$f" >&2; exit 1; }
+    done
+fi
 
 echo "== boot image without the overlay"
 BOOT="$TOP/work/boot-linux-slotb-bundle"

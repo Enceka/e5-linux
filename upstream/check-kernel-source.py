@@ -2,6 +2,7 @@
 """Require the committed E5 kernel baseline and an unchanged source checkout."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -12,7 +13,10 @@ MANIFEST = Path(__file__).with_name('kernel-source.json')
 def check(kernel, requirements=None, release_file=None, require_clean=True):
     kernel = Path(kernel).resolve()
     if requirements is None:
-        requirements = json.loads(MANIFEST.read_text())
+        # E5_KERNEL_MANIFEST selects an experiment manifest (kernel-source-7.2.json)
+        # without editing the release default.
+        manifest = os.environ.get('E5_KERNEL_MANIFEST')
+        requirements = json.loads((Path(manifest) if manifest else MANIFEST).read_text())
     required = requirements['minimum_revision']
     if not re.fullmatch(r'[0-9a-f]{40}', required):
         raise ValueError('Invalid committed kernel revision')

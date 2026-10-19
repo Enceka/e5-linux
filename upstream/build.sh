@@ -22,7 +22,14 @@ if [ -z "${E5_IN_CONTAINER:-}" ]; then
         kernel_common_git=$(git -C "$K" rev-parse --path-format=absolute --git-common-dir)
         KERNEL_MOUNTS+=(-v "$kernel_common_git:$kernel_common_git:ro")
     fi
+    # The manifest is read in the container from /work; resolve it on the host
+    # so a relative path stays the one the caller meant.
+    manifest=${E5_KERNEL_MANIFEST:-}
+    if [ -n "$manifest" ]; then
+        case "$manifest" in /*) ;; *) manifest="$(cd "$(dirname "$manifest")" && pwd)/$(basename "$manifest")";; esac
+    fi
     exec docker run --rm -e E5_IN_CONTAINER=1 -e E5_RELEASE="${E5_RELEASE:-}" \
+        -e E5_KERNEL_MANIFEST="$manifest" \
         -e TZ=CST-8 -e KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-}" \
         -e E5_OUTPUT_UID="$(id -u)" -e E5_OUTPUT_GID="$(id -g)" \
         "${KERNEL_MOUNTS[@]}" -v e5-mainline-out:/out -v "$HERE":/work \

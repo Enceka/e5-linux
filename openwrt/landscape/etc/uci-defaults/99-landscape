@@ -1,0 +1,24 @@
+#!/bin/sh
+# Landscape Router owns the router functions this image enables it for: DNS on
+# port 53, DHCP, and the packet path.  OpenWrt's dnsmasq and odhcpd would hold
+# 53/67 first, so they stay installed but start turned off; netifd keeps the
+# interfaces themselves (br-lan, sipa_eth0) that Landscape configures.
+#
+# Only runs in an image built with E5_LANDSCAPE=1: the service, binary and web
+# UI are absent otherwise.
+[ -x /usr/sbin/landscape-webserver ] && [ -f /etc/landscape-router/landscape.toml ] || exit 0
+
+/etc/init.d/dnsmasq disable 2>/dev/null
+/etc/init.d/odhcpd disable 2>/dev/null
+/etc/init.d/dnsmasq stop 2>/dev/null
+/etc/init.d/odhcpd stop 2>/dev/null
+
+# Landscape rewrites /etc/resolv.conf to its own resolver; point it at each
+# other before the first start, as its manual asks.
+[ -L /etc/resolv.conf ] || ln -sf /tmp/resolv.conf /etc/resolv.conf
+echo 'nameserver 127.0.0.1' > /tmp/resolv.conf
+
+# The listener ports are reachable on the management LAN (OpenWrt's default
+# input policy already allows LAN); keep the WAN side closed until the
+# operator enables --export_manager.
+exit 0

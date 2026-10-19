@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise clean source provenance with real temporary Git histories."""
 from pathlib import Path
+import json
 import runpy
 import subprocess
 import tempfile
@@ -85,6 +86,44 @@ class CommittedKernel(unittest.TestCase):
         release.write_text('6.18-e5-g' + self.required[:12] + '\n')
         self.assertEqual(check(self.kernel, self.requirements, release), self.required)
 
+
+
+class ManifestSelection(unittest.TestCase):
+    """E5_KERNEL_MANIFEST must select an experiment manifest, not edit the default."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.kernel = self.base / 'kernel'
+        self.kernel.mkdir()
+        subprocess.check_call(['git', '-C', str(self.kernel), 'init', '-q'])
+        subprocess.check_call(['git', '-C', str(self.kernel), 'config', 'user.name', 'Manifest test'])
+        subprocess.check_call(['git', '-C', str(self.kernel), 'config', 'user.email', 'manifest@example.invalid'])
+        (self.kernel / 'driver.c').write_text('kernel\n')
+        subprocess.check_call(['git', '-C', str(self.kernel), 'add', '-A'])
+        subprocess.check_call(['git', '-C', str(self.kernel), '-c', 'commit.gpgSign=false',
+                               'commit', '-qm', 'fixture'])
+        self.head = subprocess.check_output(['git', '-C', str(self.kernel), 'rev-parse', 'HEAD'],
+                                            text=True).strip()
+        self.manifest = self.base / 'kernel-source-7.2.json'
+        self.manifest.write_text(json.dumps({'minimum_revision': self.head,
+                                             'repository': 'https://example.invalid/kernel.git',
+                                             'branch': 'e5-7.2-experiment'}))
+
+    def test_environment_selects_the_experiment_manifest(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {'E5_KERNEL_MANIFEST': str(self.manifest)}):
+            self.assertEqual(check(self.kernel), self.head)
+        # an unrelated minimum in the selected manifest is still rejected
+        other = self.base / 'other.json'
+        other.write_text(json.dumps({'minimum_revision': '0' * 40,
+                                     'repository': 'https://example.invalid/kernel.git',
+                                     'branch': 'e5-7.2-experiment'}))
+        with mock.patch.dict(os.environ, {'E5_KERNEL_MANIFEST': str(other)}):
+            with self.assertRaisesRegex(ValueError, 'lacks committed'):
+                check(self.kernel)
 
 if __name__ == '__main__':
     unittest.main()

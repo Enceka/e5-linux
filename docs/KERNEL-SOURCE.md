@@ -31,3 +31,22 @@ E5 专用输出另存 `source-commit`。改动驱动后一起重建内核和模�
 扁平暂存到宿主的 `out-release/modules/` 时，不区分大小写的 APFS 让一个覆盖另一个，
 而归档 `modules.tar` 里两个都在。同一份产物在大小写敏感的 Linux 语义下（容器内或 CI）
 校验通过，共 253 个模块。本地复验请在容器内或 CI 上做这一步。
+
+## 7.2 实验分支
+
+内核 `e5-7.2-experiment` 不是 LTS：Linux 7.2 没有进入 longterm 列表，实验分支只是把
+`e5-6.18` 的设备提交重放到 7.2.11（`a2de78ee6ed8`），并修正 7.2 移除的 API
+（`strncpy()`、`of_gpio.h`、`alarm_start_timer()`、per-CPU workqueue 等）。它与 6.18
+没有共同历史，因此不能通过 `upstream/kernel-source.json` 的祖先检查。
+
+该分支的固定清单是 [`upstream/kernel-source-7.2.json`](../upstream/kernel-source-7.2.json)，
+最低提交 `4becc355f6505274ffeec5f7901fe941dba75c7e`。构建时显式选择：
+
+```sh
+E5_KERNEL_MANIFEST=upstream/kernel-source-7.2.json upstream/build.sh
+```
+
+发布 workflow 仍默认 6.18；只有 Landscape 构建 workflow 使用该清单。已在设备上验证
+当前 7.2.11 的 Wi-Fi AP、5G 数据、充电、显示/触摸和音频；6.18 已有的
+charger-manager `-22`、`asoc_sprd_card_parse_of` `-517`、thermal v2t 和 sprd_serial
+DMA 告警在 7.2 同样存在，未新增 workqueue 告警或 Call trace。

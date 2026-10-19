@@ -1,0 +1,57 @@
+#!/bin/sh
+# Keep every WAN target slot of each Landscape link populated.
+#
+# The eBPF LAN ingress picks a slot with route4_target_slot(daddr) & 0xF and
+# drops the packet when that slot has no target.  For a single target the
+# daemon fills all 16 slots, but a later replace_batch can fail (seen on 7.2:
+# "replace ipv4 wan slot batch error: Out of memory"), leaving only the slots
+# written by an earlier, smaller batch.  Targets hashing elsewhere are then
+# black-holed even though the WAN link itself is running.
+#
+# A replace_batch that fails after four entries also happens on a later
+# address/config change, not only at startup, so this stays resident and
+# re-checks.  It never invents a target: nothing is written unless slot 0 for
+# flow id 0 already holds one.
+
+BPFTOOL=
+for p in /usr/sbin/bpftool /usr/bin/bpftool /sbin/bpftool; do
+	[ -x "$p" ] && BPFTOOL=$p && break
+done
+[ -n "$BPFTOOL" ] || exit 0
+
+MAP=${LANDSCAPE_SLOT_MAP:-/sys/fs/bpf/landscape/default/rt4_slot_map}
+
+# Key layout is { flow_id: u32, slot: u32 }, both little-endian.  Read only
+# flow 0: with one WAN the daemon writes the same target to every flow, and
+# with several, copying one flow's target into another's slots would be worse
+# than leaving them alone.
+slot_target() {
+	"$BPFTOOL" map lookup pinned "$MAP" key hex \
+		00 00 00 00 "$(printf '%02x' "$1")" 00 00 00 \
+		2>/dev/null | sed -n 's/.*value: //p'
+}
+
+# The daemon recreates the pinned map on every chain rebuild.  A boot race
+# must not end this loop, and neither must a later rebuild.
+while :; do
+	if [ ! -e "$MAP" ]; then
+		sleep 5
+		continue
+	fi
+
+	value=$(slot_target 0)
+	if [ -n "$value" ]; then
+		filled=0
+		slot=1
+		while [ $slot -le 15 ]; do
+			key=$(printf '00 00 00 00 %02x 00 00 00' "$slot")
+			if ! "$BPFTOOL" map lookup pinned "$MAP" key hex $key >/dev/null 2>&1; then
+				"$BPFTOOL" map update pinned "$MAP" key hex $key value hex $value >/dev/null 2>&1 &&
+					filled=$((filled + 1))
+			fi
+			slot=$((slot + 1))
+		done
+		[ "$filled" = 0 ] || logger -t landscape "filled $filled WAN IPv4 target slots"
+	fi
+	sleep 10
+done

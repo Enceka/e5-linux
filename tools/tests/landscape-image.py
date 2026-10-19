@@ -27,6 +27,10 @@ SERVICE = TOP / 'openwrt/landscape/etc/init.d/landscape-router'
 DEFAULTS = TOP / 'openwrt/landscape/etc/uci-defaults/99-landscape'
 TOML = TOP / 'openwrt/landscape/etc/landscape-router/landscape.toml'
 INIT = TOP / 'openwrt/landscape/etc/landscape-router/landscape_init.toml'
+WAN_SYNC = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-sync'
+WAN_LOOP = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-sync-loop'
+WAN_SLOTS = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-slots'
+WAN_HOTPLUG = TOP / 'openwrt/landscape/etc/hotplug.d/iface/95-landscape-wan'
 
 # landscape.whileaway.dev/zh/intro/requirements, verbatim where the kernel
 # Kconfig does not derive it (BPF_JIT_DEFAULT_ON and IPV6_SEG6_BPF are
@@ -114,7 +118,11 @@ class Build(unittest.TestCase):
     def test_image_carries_the_landscape_files(self):
         for name in ('usr/sbin/landscape-webserver', 'etc/landscape-router/static',
                      'etc/landscape-router/landscape_init.toml',
-                     'etc/init.d/landscape-router'):
+                     'etc/init.d/landscape-router',
+                     'usr/libexec/landscape-wan-sync',
+                     'usr/libexec/landscape-wan-sync-loop',
+                     'usr/libexec/landscape-wan-slots',
+                     'etc/hotplug.d/iface/95-landscape-wan'):
             self.assertIn(name, self.text)
         # the service/config tree is staged next to the root modules and copied
         # over the image root, so it stays out of the Debian/OpenWrt shared tree
@@ -172,6 +180,13 @@ class Build(unittest.TestCase):
         # OpenWrt's feed names the library libelf1; libelf is not a package.
         self.assertIn('apk add tc-full bpftool-full libelf1', self.text)
 
+    def test_wan_helpers_are_executable_in_the_image(self):
+        self.assertIn('chmod 755 $R/usr/sbin/landscape-webserver', self.text)
+        for name in ('landscape-wan-sync', 'landscape-wan-sync-loop',
+                     'landscape-wan-slots'):
+            self.assertIn(f'$R/usr/libexec/{name}', self.text)
+        self.assertIn('$R/etc/hotplug.d/iface/95-landscape-wan', self.text)
+
     def test_service_is_enabled_only_with_landscape(self):
         match = re.search(r'svcs="([^"]+)"', self.text)
         self.assertIsNotNone(match)
@@ -206,6 +221,14 @@ class Service(unittest.TestCase):
         self.assertIn('procd_set_param limits memlock=unlimited', self.text)
         self.assertNotIn('ulimit -l', self.text)
 
+    def test_wan_sync_is_resident(self):
+        # The API token and the bearer's address arrive in either order, and
+        # either can be late; a one-shot call after boot is not enough.
+        self.assertIn('procd_open_instance wan-sync', self.text)
+        self.assertIn('/usr/libexec/landscape-wan-sync-loop', self.text)
+        self.assertIn('procd_open_instance slot-keeper', self.text)
+        self.assertIn('/usr/libexec/landscape-wan-slots', self.text)
+
 
 class Defaults(unittest.TestCase):
     def setUp(self):
@@ -224,6 +247,10 @@ class Defaults(unittest.TestCase):
     def test_resolv_conf_points_at_landscape(self):
         self.assertIn('/etc/resolv.conf', self.text)
         self.assertIn('nameserver 127.0.0.1', self.text)
+
+    def test_wan_seed_lives_in_the_service_not_a_sleep(self):
+        self.assertNotIn('sleep 20', self.text)
+        self.assertNotIn('landscape-wan-sync ensure', self.text)
 
 
 class Config(unittest.TestCase):
@@ -264,6 +291,16 @@ class InitConfig(unittest.TestCase):
         self.assertIn('create_dev_type = "no_need_to_create"', self.text)
         self.assertIn('zone_type = "lan"', self.text)
 
+    def test_wan_interface_and_route_services_are_seeded(self):
+        # Without route_lans/route_wans the BPF ingress has no WAN target
+        # table, and forwarded LAN traffic silently falls back to the kernel.
+        self.assertIn('name = "sipa_eth0"', self.text)
+        self.assertIn('zone_type = "wan"', self.text)
+        self.assertIn('[[route_lans]]', self.text)
+        self.assertIn('[[route_wans]]', self.text)
+        self.assertIn('iface_name = "br-lan"', self.text)
+        self.assertIn('iface_name = "sipa_eth0"', self.text)
+
     def test_dhcp_pool_matches_the_openwrt_lan(self):
         self.assertIn('iface_name = "br-lan"', self.text)
         self.assertIn('ip_range_start = "192.168.9.10"', self.text)
@@ -294,6 +331,45 @@ class Bundle(unittest.TestCase):
         self.assertIn('checking the image for Landscape', self.text)
         self.assertIn('etc/landscape-router/static/index.html', self.text)
         self.assertIn('etc/landscape-router/landscape_init.toml', self.text)
+        for name in ('usr/libexec/landscape-wan-sync',
+                     'usr/libexec/landscape-wan-sync-loop',
+                     'usr/libexec/landscape-wan-slots',
+                     'etc/hotplug.d/iface/95-landscape-wan'):
+            self.assertIn(name, self.text)
+
+
+class WanHelpers(unittest.TestCase):
+    def setUp(self):
+        self.sync = WAN_SYNC.read_text()
+        self.loop = WAN_LOOP.read_text()
+        self.slots = WAN_SLOTS.read_text()
+        self.hotplug = WAN_HOTPLUG.read_text()
+
+    def test_hotplug_is_a_thin_wrapper(self):
+        self.assertNotIn('urllib', self.hotplug)
+        self.assertNotIn('curl', self.hotplug)
+        self.assertIn('ifup|ifupdate', self.hotplug)
+        self.assertIn('[ "$DEVICE" = sipa_eth0 ]', self.hotplug)
+        self.assertIn('exec /usr/libexec/landscape-wan-sync', self.hotplug)
+
+    def test_sync_creates_the_link_and_does_not_hardcode_an_address(self):
+        self.assertIn("'t': 'static'", self.sync)
+        self.assertIn("'default_router_ip': '10.0.0.1'", self.sync)
+        self.assertIn('method=POST', self.sync)
+        self.assertNotRegex(self.sync, r'10\.35\.\d+\.\d+')
+        self.assertNotIn('ANTHROPIC_BASE_URL', self.sync)
+        self.assertIn('ip -4 -o addr show dev sipa_eth0', self.sync)
+
+    def test_loop_and_slot_keeper_are_resident(self):
+        self.assertIn('while :; do', self.loop)
+        self.assertIn('sleep 10', self.loop)
+        self.assertIn('while :; do', self.slots)
+        self.assertIn('rt4_slot_map', self.slots)
+        self.assertIn("printf '%02x'", self.slots)
+        # key is {flow_id: u32, slot: u32}, little-endian
+        self.assertIn('00 00 00 00', self.slots)
+        self.assertIn('00 00 00', self.slots)
+        self.assertIn('slot -le 15', self.slots)
 
 
 if __name__ == '__main__':

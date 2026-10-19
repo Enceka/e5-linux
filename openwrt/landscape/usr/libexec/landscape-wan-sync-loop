@@ -1,0 +1,11 @@
+#!/bin/sh
+# Keep Landscape's WAN link on sipa_eth0's current address.
+#
+# The sync helper exits immediately when the daemon has not written its API
+# token yet or the modem has no address; running it on a timer covers both
+# boot races without either side having to know the other's schedule.
+
+while :; do
+	/usr/libexec/landscape-wan-sync
+	sleep 10
+done

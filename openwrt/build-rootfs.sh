@@ -504,12 +504,18 @@ if [ "$LANDSCAPE" = 1 ]; then
     # first-boot defaults from openwrt/landscape/; both are laid over the same
     # paths as the rest of the overlay.
     for f in usr/sbin/landscape-webserver usr/libexec/redirect_pkg_handler \
+             usr/libexec/landscape-wan-sync usr/libexec/landscape-wan-sync-loop \
+             usr/libexec/landscape-wan-slots \
+             etc/hotplug.d/iface/95-landscape-wan \
              etc/landscape-router/landscape.toml etc/landscape-router/landscape_init.toml \
              etc/landscape-router/static/index.html \
              etc/init.d/landscape-router etc/uci-defaults/99-landscape; do
         [ -s "$R/$f" ] || { echo "the Landscape image has no /$f" >&2; exit 1; }
     done
-    chmod 755 $R/usr/sbin/landscape-webserver $R/usr/libexec/redirect_pkg_handler $R/etc/init.d/landscape-router
+    chmod 755 $R/usr/sbin/landscape-webserver $R/usr/libexec/redirect_pkg_handler \
+        $R/usr/libexec/landscape-wan-sync $R/usr/libexec/landscape-wan-sync-loop \
+        $R/usr/libexec/landscape-wan-slots $R/etc/hotplug.d/iface/95-landscape-wan \
+        $R/etc/init.d/landscape-router
     chown -R 0:0 $R/etc/landscape-router
     chmod 600 $R/etc/landscape-router/landscape.toml $R/etc/landscape-router/landscape_init.toml
     # The init file is version-locked: the daemon refuses one written by

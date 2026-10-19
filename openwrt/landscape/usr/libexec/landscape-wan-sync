@@ -1,0 +1,113 @@
+#!/bin/sh
+# Create or update the Landscape WAN link on the modem's current address.
+#
+# sipa_eth0 is a raw-IP (NOARP, no MAC) bearer.  ModemManager hands it an IPv4
+# address when the bearer attaches, and that address changes across
+# reconnects, so the address cannot be a static entry in landscape_init.toml.
+# Landscape's static v4 model needs the address in the link config, while its
+# DHCP client model needs a MAC this device does not have.
+#
+# The service runs this on a timer from boot: the daemon writes its API token
+# and the modem attaches its address at different moments, and either can be
+# late.  Each run creates the link when it does not exist and otherwise PUTs
+# only a changed address, which makes the daemon restart just that link's v4
+# section.  A fresh link uses the address the kernel has at that moment, so
+# no second address race is needed.
+#
+# Only in a Landscape image: without the daemon both endpoints are absent.
+
+[ -x /usr/sbin/landscape-webserver ] || exit 0
+[ -f /etc/landscape-router/landscape.toml ] || exit 0
+[ -x /usr/bin/curl ] || exit 0
+[ -x /usr/bin/python3 ] || exit 0
+[ -r /etc/landscape-router/landscape_api_token ] || exit 0
+
+addr=
+for _ in 1 2 3 4 5; do
+	addr=$(ip -4 -o addr show dev sipa_eth0 scope global 2>/dev/null |
+		awk '{ print $4; exit }')
+	[ -n "$addr" ] && break
+	sleep 1
+done
+[ -n "$addr" ] || exit 0
+
+ipv4=${addr%/*}
+mask=${addr#*/}
+token=$(cat /etc/landscape-router/landscape_api_token 2>/dev/null)
+[ -n "$token" ] || exit 0
+
+# One WAN link on sipa_eth0.  On a create request the helper prints "create";
+# otherwise it prints the id when the stored address differs.  The body is
+# the second line.  An up-to-date link prints nothing.
+request=$(python3 - "$ipv4" "$mask" "$token" <<'PY'
+import json, ssl, sys, urllib.request
+ipv4, mask, token = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+base = 'https://127.0.0.1:6443/api/v1/services/wan-links'
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+def call(url, method='GET', body=None):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={'Authorization': 'Bearer ' + token,
+                                          'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+        return json.load(resp)
+
+links = call(base).get('data', [])
+link = next((l for l in links if l.get('attach_iface_name') == 'sipa_eth0'), None)
+if link is None:
+    # Defaults follow the fields the daemon stores; default_router_ip is the
+    # modem's fixed point-to-point peer.  The WAN iface itself is added by the
+    # operator/route service through the same API, so only the link is created.
+    body = {
+        'name': '5g',
+        'attach_iface_name': 'sipa_eth0',
+        'kind': {'t': 'ethernet'},
+        'v4': {'enable': True, 'model': {
+            't': 'static', 'ipv4': ipv4, 'ipv4_mask': mask, 'ipv6': None,
+            'default_router': True, 'default_router_ip': '10.0.0.1'}},
+        'pd': {'enable': False, 'mac': '00:00:00:00:00:00', 'expected_pd_len': None},
+        'nat': {'enable': True, 'tcp_range': None, 'udp_range': None,
+                'icmp_in_range': None},
+        'firewall': {'enable': False},
+        'mss': {'enable': False, 'clamp_size': None},
+        'health_check': {'enable': False, 'probe': {'t': 'icmp', 'targets': [],
+                          'probe_gateway': False}, 'interval_secs': None,
+                          'timeout_ms': None, 'failure_threshold': None,
+                          'recovery_threshold': None, 'reliability': None},
+    }
+    print('create')
+    print(json.dumps(body, separators=(',', ':')))
+    sys.exit(0)
+
+model = link.get('v4', {}).get('model', {})
+if model.get('t') != 'static':
+    sys.exit(0)
+if model.get('ipv4') == ipv4 and model.get('ipv4_mask') == mask:
+    sys.exit(0)
+model['ipv4'] = ipv4
+model['ipv4_mask'] = mask
+print(link['id'])
+print(json.dumps({k: v for k, v in link.items() if k != 'id'}, separators=(',', ':')))
+PY
+) || exit 0
+[ -n "$request" ] || exit 0
+
+first=$(printf '%s\n' "$request" | sed -n '1p')
+body=$(printf '%s\n' "$request" | sed -n '2p')
+[ -n "$body" ] || exit 0
+
+if [ "$first" = create ]; then
+	url=https://127.0.0.1:6443/api/v1/services/wan-links
+	method=POST
+else
+	url=https://127.0.0.1:6443/api/v1/services/wan-links/$first
+	method=PUT
+fi
+
+curl -sk -m 10 -X "$method" -H "Authorization: Bearer $token" \
+	-H 'Content-Type: application/json' --data "$body" "$url" >/dev/null 2>&1 &&
+	logger -t landscape "WAN link on sipa_eth0 $method $ipv4/$mask"
+exit 0

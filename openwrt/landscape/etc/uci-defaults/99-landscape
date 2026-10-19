@@ -21,4 +21,9 @@ echo 'nameserver 127.0.0.1' > /tmp/resolv.conf
 # The listener ports are reachable on the management LAN (OpenWrt's default
 # input policy already allows LAN); keep the WAN side closed until the
 # operator enables --export_manager.
+
+# sipa_eth0's IPv4 address is carrier-assigned and changes across reconnects,
+# so the WAN link cannot live in landscape_init.toml.  The landscape-router
+# service runs landscape-wan-sync on a timer from boot; 95-landscape-wan also
+# runs it on the bearer's address events.
 exit 0

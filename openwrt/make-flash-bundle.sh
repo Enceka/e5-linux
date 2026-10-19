@@ -116,6 +116,9 @@ if [ "$LANDSCAPE" = 1 ]; then
     trap 'rm -rf "$S0" "$IMG_TMP"' EXIT
     gzip -dc "$IMG" > "$IMG_TMP/img"
     for f in usr/sbin/landscape-webserver usr/libexec/redirect_pkg_handler \
+             usr/libexec/landscape-wan-sync usr/libexec/landscape-wan-sync-loop \
+             usr/libexec/landscape-wan-slots \
+             etc/hotplug.d/iface/95-landscape-wan \
              etc/landscape-router/landscape.toml etc/landscape-router/landscape_init.toml \
              etc/landscape-router/static/index.html \
              etc/init.d/landscape-router etc/uci-defaults/99-landscape; do

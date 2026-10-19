@@ -14,6 +14,27 @@ create_dev_type = "no_need_to_create"
 zone_type = "lan"
 enable_in_boot = true
 
+# sipa_eth0 is ModemManager's raw-IP bearer.  netifd owns the device; the
+# daemon only attaches to it.  Its IPv4 address is carrier-assigned and is
+# filled into the WAN link by landscape-wan-sync (the link itself cannot live
+# in this file for that reason).
+[[ifaces]]
+name = "sipa_eth0"
+create_dev_type = "no_need_to_create"
+zone_type = "wan"
+enable_in_boot = true
+
+# The BPF data path needs explicit route services: without them the LAN
+# ingress has no WAN target table and forwarded Wi-Fi/USB traffic falls back
+# to the kernel's forwarding/NAT instead of Landscape.
+[[route_lans]]
+iface_name = "br-lan"
+enable = true
+
+[[route_wans]]
+iface_name = "sipa_eth0"
+enable = true
+
 # DHCPv4 for the management LAN.  The server adds 192.168.9.1/24 itself and
 # hands out .10-.200: ip_range_end is exclusive, so .201 is the bound.
 [[dhcpv4_services]]

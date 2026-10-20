@@ -5,11 +5,26 @@
 # and netifd's address configuration must be off (99-landscape below).  The
 # webserver runs in the foreground under procd; its database and web UI are
 # under /etc/landscape-router.
-START=19
+# netifd starts at 20; Landscape's DHCP services need br-lan to exist when
+# the database configuration is loaded on the first boot.
+START=21
 STOP=90
 USE_PROCD=1
 
+wait_for_lan_device() {
+	attempt=0
+	while [ "$attempt" -lt 10 ]; do
+		ip link show dev br-lan >/dev/null 2>&1 && return 0
+		sleep 1
+		attempt=$((attempt + 1))
+	done
+	logger -t landscape "br-lan did not appear after network startup"
+	return 1
+}
+
 start_service() {
+	wait_for_lan_device || true
+
 	# Landscape locks its BPF maps and sockets: the manual's
 	# LimitMEMLOCK=infinity.  procd applies this rlimit to the child it
 	# starts; a ulimit here would only change this init script's own shell.

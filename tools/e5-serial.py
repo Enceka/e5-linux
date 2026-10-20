@@ -18,7 +18,7 @@ import time
 def default_port():
     import glob
 
-    for pattern in ("/dev/cu.usbmodemE5LINUX*", "/dev/cu.usbmodem*"):
+    for pattern in ("/dev/cu.usbmodemE5LINUX*", "/dev/cu.usbmodem*", "/dev/ttyACM*"):
         found = sorted(glob.glob(pattern))
         if found:
             return found[0]

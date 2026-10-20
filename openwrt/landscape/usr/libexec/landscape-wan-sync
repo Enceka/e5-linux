@@ -92,7 +92,9 @@ model['ipv4_mask'] = mask
 model['default_router'] = True
 model['default_router_ip'] = '10.0.0.1'
 print(link['id'])
-print(json.dumps({k: v for k, v in link.items() if k != 'id'}, separators=(',', ':')))
+# UpdateWanLinkConfig requires id during deserialization; the endpoint then
+# overwrites it with the path id.
+print(json.dumps(link, separators=(',', ':')))
 PY
 ) || exit 0
 [ -n "$request" ] || exit 0
@@ -109,7 +111,10 @@ else
 	method=PUT
 fi
 
-curl -sk -m 10 -X "$method" -H "Authorization: Bearer $token" \
-	-H 'Content-Type: application/json' --data "$body" "$url" >/dev/null 2>&1 &&
+if curl -fsSk -m 10 -X "$method" -H "Authorization: Bearer $token" \
+	-H 'Content-Type: application/json' --data "$body" "$url" >/dev/null 2>&1; then
 	logger -t landscape "WAN link on sipa_eth0 $method $ipv4/$mask"
+else
+	logger -t landscape "WAN link sync failed on sipa_eth0 $method $ipv4/$mask"
+fi
 exit 0

@@ -214,6 +214,16 @@ class Service(unittest.TestCase):
     def setUp(self):
         self.text = SERVICE.read_text()
 
+    def test_starts_after_netifd_and_waits_for_first_boot_lan(self):
+        start = re.search(r'(?m)^START=(\d+)$', self.text)
+        self.assertIsNotNone(start)
+        self.assertGreater(int(start.group(1)), 20)
+        self.assertIn('wait_for_lan_device() {', self.text)
+        self.assertIn('ip link show dev br-lan', self.text)
+        self.assertIn('while [ "$attempt" -lt 10 ]', self.text)
+        self.assertLess(self.text.index('\twait_for_lan_device || true\n'),
+                        self.text.index('\tprocd_open_instance'))
+
     def test_runs_the_static_binary_under_procd(self):
         self.assertIn('USE_PROCD=1', self.text)
         self.assertIn('/usr/sbin/landscape-webserver', self.text)
@@ -381,6 +391,9 @@ class WanHelpers(unittest.TestCase):
         self.assertIn("'t': 'static'", self.sync)
         self.assertIn("'default_router_ip': '10.0.0.1'", self.sync)
         self.assertIn('method=POST', self.sync)
+        self.assertIn("print(json.dumps(link, separators=(',', ':')))", self.sync)
+        self.assertNotIn("if k != 'id'", self.sync)
+        self.assertIn('curl -fsSk -m 10', self.sync)
         self.assertNotRegex(self.sync, r'10\.35\.\d+\.\d+')
         self.assertNotIn('ANTHROPIC_BASE_URL', self.sync)
         self.assertIn('ip -4 -o addr show dev sipa_eth0', self.sync)

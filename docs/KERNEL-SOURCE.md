@@ -32,21 +32,38 @@ E5 专用输出另存 `source-commit`。改动驱动后一起重建内核和模�
 而归档 `modules.tar` 里两个都在。同一份产物在大小写敏感的 Linux 语义下（容器内或 CI）
 校验通过，共 253 个模块。本地复验请在容器内或 CI 上做这一步。
 
-## 7.2 实验分支
+## lts-experiment（Landscape 镜像）
 
-内核 `e5-7.2-experiment` 不是 LTS：Linux 7.2 没有进入 longterm 列表，实验分支只是把
+`lts-experiment` 是 Landscape Router 镜像所用的分支与配置，内核仍取 `e5-6.18`
+（`b93bbc3a`）：6.18.54 的 Kconfig 已经提供 Landscape 数据路径需要的全部选项
+（`BPF_LSM`、`LWTUNNEL_BPF`、`NETFILTER_BPF_LINK`、`IPV6_SEG6_LWTUNNEL`、
+`BPF_PRELOAD`、`HID_BPF`、`BPF_JIT_ALWAYS_ON`），因此不需要另开实验内核分支。
+
+配置片段随清单走：`E5_KERNEL_MANIFEST` 选中
+`upstream/kernel-source-lts-experiment.json` 时，`upstream/build.sh` 使用
+`upstream/e5-lts-experiment.config`（即 `e5-mainline.config` 加上 Landscape 的 BPF
+选项段），发布基线 `e5-mainline.config` 与 `kernel-source.json` 保持不变。
+
+（旧的 `e5-7.2-experiment` 分支不是 LTS：Linux 7.2 没有进入 longterm 列表，它只是把
 `e5-6.18` 的设备提交重放到 7.2.11（`a2de78ee6ed8`），并修正 7.2 移除的 API
 （`strncpy()`、`of_gpio.h`、`alarm_start_timer()`、per-CPU workqueue 等）。它与 6.18
-没有共同历史，因此不能通过 `upstream/kernel-source.json` 的祖先检查。
+没有共同历史，因此不能通过 `upstream/kernel-source.json` 的祖先检查。该分支保留作
+参考，Landscape 镜像不再使用它。）
 
-该分支的固定清单是 [`upstream/kernel-source-7.2.json`](../upstream/kernel-source-7.2.json)，
-最低提交 `4becc355f6505274ffeec5f7901fe941dba75c7e`。构建时显式选择：
+Landscape 构建的固定清单是
+[`upstream/kernel-source-lts-experiment.json`](../upstream/kernel-source-lts-experiment.json)，
+最低提交 `b93bbc3a36fd3c1acae0e44b93d909f7fe942182`（即 `e5-6.18`）。构建时显式选择：
 
 ```sh
-E5_KERNEL_MANIFEST=upstream/kernel-source-7.2.json upstream/build.sh
+E5_KERNEL_MANIFEST=upstream/kernel-source-lts-experiment.json upstream/build.sh
 ```
 
-发布 workflow 仍默认 6.18；只有 Landscape 构建 workflow 使用该清单。已在设备上验证
-当前 7.2.11 的 Wi-Fi AP、5G 数据、充电、显示/触摸和音频；6.18 已有的
-charger-manager `-22`、`asoc_sprd_card_parse_of` `-517`、thermal v2t 和 sprd_serial
-DMA 告警在 7.2 同样存在，未新增 workqueue 告警或 Call trace。
+发布 workflow 仍默认 6.18 与 `upstream/kernel-source.json`；只有 Landscape 构建
+workflow 使用 lts-experiment 清单与其配置片段。
+
+在 `e5-7.2-experiment`（7.2.11）上曾验证 Wi-Fi AP、5G 数据、充电、显示/触摸和音频；
+6.18 已有的 charger-manager `-22`、`asoc_sprd_card_parse_of` `-517`、thermal v2t 和
+sprd_serial DMA 告警在 7.2 同样存在，未新增 workqueue 告警或 Call trace。USB NCM 的
+DHCP 在 7.2.11 上取不到地址（服务器 ACK 的 UDP 校验和固定错误 `0xcae6`，主机
+`rx-checksumming` 为 `off [fixed]` 时内核直接丢包），这也是改用 6.18 构建 Landscape
+镜像的原因之一。

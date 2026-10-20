@@ -106,10 +106,10 @@ class ManifestSelection(unittest.TestCase):
                                'commit', '-qm', 'fixture'])
         self.head = subprocess.check_output(['git', '-C', str(self.kernel), 'rev-parse', 'HEAD'],
                                             text=True).strip()
-        self.manifest = self.base / 'kernel-source-7.2.json'
+        self.manifest = self.base / 'kernel-source-lts-experiment.json'
         self.manifest.write_text(json.dumps({'minimum_revision': self.head,
                                              'repository': 'https://example.invalid/kernel.git',
-                                             'branch': 'e5-7.2-experiment'}))
+                                             'branch': 'e5-6.18'}))
 
     def test_build_maps_the_manifest_into_the_build_container(self):
         # upstream/build.sh mounts the checkout at /work; a relative manifest

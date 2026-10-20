@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "repository": "https://github.com/Enceka/linux.git",
-  "base_revision": "a2de78ee6ed8bf8cd99d177c74865a6e8c3cb6ea",
-  "branch": "e5-7.2-experiment",
-  "minimum_revision": "4becc355f6505274ffeec5f7901fe941dba75c7e",
+  "base_revision": "b93bbc3a36fd3c1acae0e44b93d909f7fe942182",
+  "branch": "e5-6.18",
+  "minimum_revision": "b93bbc3a36fd3c1acae0e44b93d909f7fe942182",
   "policy_sources": {
     "linux_device_common": "90d418efe480c9adcbc110251657e0e0b7503982"
   }

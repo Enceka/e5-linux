@@ -57,10 +57,18 @@ O=/out/$KV
 mkdir -p "$O"
 echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
 
-CFG=/work/e5-mainline.config DEST=/work/out
+# The config fragment travels with the manifest: the lts-experiment kernel
+# (E5_KERNEL_MANIFEST=upstream/kernel-source-lts-experiment.json) carries the
+# Landscape BPF options, so it uses its own fragment and the release baseline
+# keeps e5-mainline.config unchanged.
+case "${E5_KERNEL_MANIFEST:-}" in
+    *kernel-source-lts-experiment.json) BASE_CFG=/work/e5-lts-experiment.config ;;
+    *) BASE_CFG=/work/e5-mainline.config ;;
+esac
+CFG=$BASE_CFG DEST=/work/out
 if [ -n "${E5_RELEASE:-}" ]; then
-    CFG=/tmp/e5-mainline-release.config DEST=/work/out-release
-    sed 's/ e5\.openwrt=[A-Za-z0-9._-]*//' /work/e5-mainline.config > "$CFG"
+    CFG=/tmp/$(basename "$BASE_CFG" .config)-release.config DEST=/work/out-release
+    sed 's/ e5\.openwrt=[A-Za-z0-9._-]*//' "$BASE_CFG" > "$CFG"
     ! grep -q 'e5\.openwrt=' "$CFG" || { echo "e5.openwrt= is still in the release command line" >&2; exit 1; }
     echo "   (release: no e5.openwrt=, into out-release/)"
 fi

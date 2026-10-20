@@ -21,7 +21,10 @@ import unittest
 from pathlib import Path
 
 TOP = Path(__file__).resolve().parents[2]
-CONFIG = TOP / 'upstream/e5-mainline.config'
+# The Landscape image builds with its own fragment so the release baseline
+# (upstream/e5-mainline.config) keeps the options it has always had.
+CONFIG = TOP / 'upstream/e5-lts-experiment.config'
+BASELINE_CONFIG = TOP / 'upstream/e5-mainline.config'
 BUILD = TOP / 'openwrt/build-rootfs.sh'
 SERVICE = TOP / 'openwrt/landscape/etc/init.d/landscape-router'
 DEFAULTS = TOP / 'openwrt/landscape/etc/uci-defaults/99-landscape'
@@ -86,6 +89,28 @@ class KernelConfig(unittest.TestCase):
         # not be there either.
         self.assertIn('CONFIG_DEBUG_INFO_BTF=y', self.lines)
         self.assertTrue(any(line.startswith('CONFIG_DEBUG_INFO_DWARF') for line in self.lines))
+
+    def test_release_baseline_does_not_carry_the_landscape_block(self):
+        # The fragment is the only place the Landscape BPF block lives; the
+        # release image must keep building from an unchanged baseline.
+        baseline = {line.strip() for line in BASELINE_CONFIG.read_text().splitlines()}
+        for option in ('CONFIG_BPF_LSM=y', 'CONFIG_LWTUNNEL_BPF=y',
+                       'CONFIG_NETFILTER_BPF_LINK=y', 'CONFIG_IPV6_SEG6_LWTUNNEL=y',
+                       'CONFIG_NETFILTER_XT_MATCH_BPF=m'):
+            self.assertNotIn(option, baseline)
+        for option in REQUIRED_OFF:
+            self.assertNotIn(f'# {option} is not set', baseline)
+
+    def test_the_fragment_is_the_baseline_plus_the_landscape_block(self):
+        # A fragment that drifts from the baseline would silently drop device
+        # options, so compare the two directly.
+        baseline = BASELINE_CONFIG.read_text().splitlines()
+        fragment = CONFIG.read_text().splitlines()
+        extra = [line for line in fragment if line not in baseline]
+        missing = [line for line in baseline if line not in fragment]
+        self.assertEqual(missing, [])
+        self.assertTrue(all(line.startswith('#') or line.startswith('CONFIG_')
+                            for line in extra))
 
 
 class Build(unittest.TestCase):

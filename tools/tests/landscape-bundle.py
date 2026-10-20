@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 import tarfile
 import tempfile
 from pathlib import Path
@@ -93,21 +94,34 @@ def synthetic(out):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--image', type=Path, help='ext4 or .ext4.gz Landscape image')
-    ap.add_argument('--bundle', type=Path, help='Landscape flash bundle tar.gz')
+    ap.add_argument('--bundle', type=Path,
+                    help='Landscape flash bundle: the .zip artifact, or a .tar.gz')
     a = ap.parse_args()
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         if a.bundle:
-            with tarfile.open(a.bundle, 'r:gz') as archive:
-                names = archive.getnames()
-                prefix = names[0].split('/')[0]
-                for name in REQUIRED:
-                    if f'{prefix}/files/openwrt.ext4.gz' not in names:
-                        raise SystemExit('bundle has no files/openwrt.ext4.gz')
-                for member in archive.getmembers():
-                    if member.name.endswith('files/openwrt.ext4.gz'):
-                        archive.extract(member, tmp, filter='data')
-                        break
+            if a.bundle.suffix == '.zip':
+                # The shipped artifact: members sit at the archive root, which is
+                # also what Magisk requires of module.prop/customize.sh.
+                with zipfile.ZipFile(a.bundle) as archive:
+                    names = archive.namelist()
+                    for name in ('module.prop', 'customize.sh', 'files/SHA256SUMS',
+                                 'files/openwrt.ext4.gz'):
+                        if name not in names:
+                            raise SystemExit(f'bundle has no {name}')
+                    (tmp / 'openwrt.ext4.gz').write_bytes(
+                        archive.read('files/openwrt.ext4.gz'))
+            else:
+                with tarfile.open(a.bundle, 'r:gz') as archive:
+                    names = archive.getnames()
+                    prefix = names[0].split('/')[0]
+                    for name in REQUIRED:
+                        if f'{prefix}/files/openwrt.ext4.gz' not in names:
+                            raise SystemExit('bundle has no files/openwrt.ext4.gz')
+                    for member in archive.getmembers():
+                        if member.name.endswith('files/openwrt.ext4.gz'):
+                            archive.extract(member, tmp, filter='data')
+                            break
             image = next(tmp.rglob('openwrt.ext4.gz'))
             (tmp / 'img').write_bytes(gzip.decompress(image.read_bytes()))
             a.image = tmp / 'img'

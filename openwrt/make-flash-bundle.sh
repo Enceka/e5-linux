@@ -1,7 +1,9 @@
 #!/bin/bash
 # Build the flash package for other people's E5s:
-# out/openwrt/e5-openwrt-flash-<version>-<timestamp>-<git>.tar.gz, unpacked and run as
-# ./flash.sh (openwrt/bundle/README.md is its manual).
+# out/openwrt/e5-openwrt-flash-<version>-<timestamp>-<git>.zip, unpacked and run as
+# ./flash.sh (openwrt/bundle/README.md is its manual).  One archive only: the ZIP is
+# what Magisk installs and what every desktop extracts.  E5_BUNDLE_TARBALL=1 also
+# writes the .tar.gz of the same tree.
 #
 #   openwrt/make-flash-bundle.sh
 #   E5_MAINLINE=1 openwrt/make-flash-bundle.sh    the mainline 6.18 kernel instead of 5.15:
@@ -205,11 +207,17 @@ fi
 printf '%s\n' '{"profile":"e5","android_models":["E5"]}' > "$P/files/device-profile.json"
 python3 "$HERE/bundle/finalize-package.py" "$P" --profile e5 --bootctl "$P/files/e5-bootctl"
 
-# macOS tar otherwise adds AppleDouble files that are absent from the ZIP.
-COPYFILE_DISABLE=1 tar -C "$S" -czf "$OUT/$NAME.tar.gz.part" "$NAME"
-mv "$OUT/$NAME.tar.gz.part" "$OUT/$NAME.tar.gz"
-# and a .zip for Windows (its Explorer opens it without anything installed)
+# The ZIP carries the whole package and is the artifact people download: Windows
+# Explorer opens it, Linux/macOS extract it, and Magisk installs from it directly
+# (module.prop and customize.sh sit at its root).  A .tar.gz of the same tree only
+# duplicated it -- about 200 MB per build -- so it is opt-in.
 rm -f "$OUT/$NAME.zip"
 python3 "$HERE/bundle/finalize-package.py" "$P" --zip-only "$OUT/$NAME.zip.part"
 mv "$OUT/$NAME.zip.part" "$OUT/$NAME.zip"
-echo "== $OUT/$NAME.tar.gz ($(du -h "$OUT/$NAME.tar.gz" | cut -f1)), $OUT/$NAME.zip ($(du -h "$OUT/$NAME.zip" | cut -f1))"
+echo "== $OUT/$NAME.zip ($(du -h "$OUT/$NAME.zip" | cut -f1))"
+if [ -n "${E5_BUNDLE_TARBALL:-}" ]; then
+    # macOS tar otherwise adds AppleDouble files that are absent from the ZIP.
+    COPYFILE_DISABLE=1 tar -C "$S" -czf "$OUT/$NAME.tar.gz.part" "$NAME"
+    mv "$OUT/$NAME.tar.gz.part" "$OUT/$NAME.tar.gz"
+    echo "== $OUT/$NAME.tar.gz ($(du -h "$OUT/$NAME.tar.gz" | cut -f1))"
+fi

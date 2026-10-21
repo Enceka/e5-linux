@@ -4,6 +4,7 @@
 # openwrt/build-rootfs.sh (openwrt/make-flash-bundle.sh E5_IMAGE_FROM=).
 #
 #   openwrt/image-add-modules.sh IN.ext4.gz ROOT-MODULES.tar OUT.ext4.gz
+#   E5_REPLACE_MODULES=1 replaces an existing tree for the same kernel release
 #
 # ROOT-MODULES.tar is upstream/root-modules.sh's (lib/modules/<release>/...); the image's other lib/modules
 # directories are left, as build-rootfs.sh leaves the 5.15 one.
@@ -17,7 +18,26 @@ tar -xf "$MODS" -C "$T/m"
 rel=$(ls "$T/m/lib/modules")
 [ "$(printf '%s\n' "$rel" | wc -l | tr -d ' ')" = 1 ] || { echo "$MODS: not one release: $rel" >&2; exit 1; }
 if debugfs -R "stat /lib/modules/$rel" "$T/img" 2>/dev/null | grep -q '^Inode:'; then
-    echo "the image has /lib/modules/$rel already" >&2; exit 1
+    [ "${E5_REPLACE_MODULES:-0}" = 1 ] ||
+        { echo "the image has /lib/modules/$rel already (set E5_REPLACE_MODULES=1 to replace it)" >&2; exit 1; }
+    mkdir "$T/old"
+    debugfs -R "rdump /lib/modules/$rel $T/old" "$T/img" >"$T/old.log" 2>&1
+    (
+        if [ -d "$T/old/lib/modules" ]; then cd "$T/old/lib/modules"; else cd "$T/old"; fi
+        find "$rel" -depth \( -type f -o -type l \) | while read -r f; do
+            echo "rm /lib/modules/$f"
+        done
+        find "$rel" -depth -type d | while read -r f; do
+            echo "rmdir /lib/modules/$f"
+        done
+    ) > "$T/remove"
+    debugfs -w -f "$T/remove" "$T/img" > "$T/remove.log" 2>&1
+    ! grep -iE 'error|not found|cannot|failed' "$T/remove.log" || {
+        cat "$T/remove.log" >&2; echo 'debugfs failed while removing the old modules' >&2; exit 1;
+    }
+    ! debugfs -R "stat /lib/modules/$rel" "$T/img" 2>/dev/null | grep -q '^Inode:' || {
+        echo "could not remove the old /lib/modules/$rel completely" >&2; exit 1;
+    }
 fi
 (
     cd "$T/m"

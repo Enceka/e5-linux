@@ -15,6 +15,13 @@ command -v pahole >/dev/null || { echo 'BTF requires pahole (Ubuntu: apt install
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$(cd "$HERE/.." && pwd)"
 K="${E5_KERNEL_TREE:-$TOP/linux-lts-e5}"
+case "${E5_KERNEL_MANIFEST:-}" in
+    /*) ;;
+    '') E5_KERNEL_MANIFEST="$HERE/kernel-source.json" ;;
+    *) manifest="$E5_KERNEL_MANIFEST"
+       E5_KERNEL_MANIFEST="$(cd "$(dirname "$manifest")" && pwd)/$(basename "$manifest")" ;;
+esac
+export E5_KERNEL_MANIFEST
 if [ -z "${E5_CROSS:-}" ]; then
     gcc=$(echo "$TOP"/work/toolchain/*/bin/aarch64-*-linux-gnu-gcc 2>/dev/null | cut -d' ' -f1)
     [ -x "$gcc" ] || { echo "no aarch64 cross gcc under work/toolchain/ (or set E5_CROSS)" >&2; exit 1; }
@@ -33,11 +40,15 @@ O="${E5_OUTDIR:-$TOP/work/build/$KV}"
 mkdir -p "$O"
 echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
 
-CFG=$HERE/e5-mainline.config DEST=$HERE/out
+case "${E5_KERNEL_MANIFEST:-}" in
+    *kernel-source-lts-experiment.json) BASE_CFG=$HERE/e5-lts-experiment.config ;;
+    *) BASE_CFG=$HERE/e5-mainline.config ;;
+esac
+CFG=$BASE_CFG DEST=$HERE/out
 if [ -n "${E5_RELEASE:-}" ]; then
     CFG=$(mktemp) DEST=$HERE/out-release
     trap 'rm -f "$CFG"' EXIT
-    sed 's/ e5\.openwrt=[A-Za-z0-9._-]*//' $HERE/e5-mainline.config > "$CFG"
+    sed 's/ e5\.openwrt=[A-Za-z0-9._-]*//' "$BASE_CFG" > "$CFG"
     ! grep -q 'e5\.openwrt=' "$CFG" || { echo "e5.openwrt= is still in the release command line" >&2; exit 1; }
     echo "   (release: no e5.openwrt=, into out-release/)"
 fi

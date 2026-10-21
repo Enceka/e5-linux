@@ -111,6 +111,13 @@ LANDSCAPE_URL=https://github.com/ThisSeanZhang/landscape/releases/download/v$LAN
 LANDSCAPE_ASSETS="17095a4a25ce505d565edc5430ac549211e6b77e66c4294006747be63563bd3e landscape-webserver-aarch64-static
 60bbb82aa7b8508f035aa12f219aa793170597eea72d3087be79575b4ff0fb10 redirect_pkg_handler-aarch64-static
 dffbb8f2ce0ecabb8a0876bec8e58efe38941564fe0e8cd8ae929125195b2fe6 static.zip"
+# The release's own daemon has no IPv6 on a WAN link without a bound IPv6
+# address, which is this device's modem uplink (docs/LANDSCAPE-V6-NAT-20261021.zh-CN.md).
+# openwrt/build-landscape.sh builds the patched one from a pinned commit and
+# openwrt/patches/landscape-v6-nat-without-wan-binding.patch; it is what goes
+# in the image.  E5_LANDSCAPE_RELEASE=1 accepts the release binary instead
+# (no IPv6 on this modem uplink) rather than failing the image.
+LANDSCAPE_BUILT=$OUT/landscape-webserver-aarch64-static
 if [ "$LANDSCAPE" = 1 ]; then
     # the data path needs BTF/BPF from the kernel, which is a mainline build
     [ -n "${E5_ROOT_MODULES:-}" ] || { echo 'E5_LANDSCAPE=1 requires E5_ROOT_MODULES (the matching mainline kernel)' >&2; exit 1; }
@@ -166,6 +173,26 @@ have=$(shasum -a 256 "$WORK/$TARBALL" 2>/dev/null || sha256sum "$WORK/$TARBALL")
 
 if [ "$LANDSCAPE" = 1 ]; then
     mkdir -p "$WORK/landscape"
+    # The E5's own daemon (patched) replaces the release's: same file name, so
+    # the staging below is unchanged, and its checksum is its .sha256 from the
+    # build rather than the release's.
+    if [ "${E5_LANDSCAPE_RELEASE:-0}" != 1 ] && ! [ -s "$LANDSCAPE_BUILT" ]; then
+        # Building it here rather than trusting a stale out/ keeps the image and
+        # the patch in step: build-landscape.sh keys its cache on the patch set.
+        sh "$TOP/openwrt/build-landscape.sh" || {
+            echo 'landscape: the patched daemon did not build; set E5_LANDSCAPE_RELEASE=1 to accept the release binary, which has no IPv6 on this modem uplink' >&2
+            exit 1
+        }
+        [ -s "$LANDSCAPE_BUILT" ] || { echo "landscape: build-landscape.sh left no $LANDSCAPE_BUILT" >&2; exit 1; }
+    fi
+    if [ -f "$LANDSCAPE_BUILT" ] && [ -s "$LANDSCAPE_BUILT.sha256" ] &&
+       [ "$(shasum -a 256 "$LANDSCAPE_BUILT" 2>/dev/null | cut -d' ' -f1 || sha256sum "$LANDSCAPE_BUILT" | cut -d' ' -f1)" = "$(cat "$LANDSCAPE_BUILT.sha256")" ]; then
+        cp "$LANDSCAPE_BUILT" "$WORK/landscape/landscape-webserver-aarch64-static"
+        LANDSCAPE_ASSETS=$(printf "%s\n" "$LANDSCAPE_ASSETS" | grep -v ' landscape-webserver-aarch64-static$')
+        echo "landscape: patched daemon $(cat "$LANDSCAPE_BUILT.sha256")"
+    else
+        echo 'landscape: no patched daemon in out/openwrt -- the release binary has no IPv6 on this uplink (openwrt/build-landscape.sh, or E5_LANDSCAPE_RELEASE=1 to accept it)' >&2
+    fi
     printf "%s\n" "$LANDSCAPE_ASSETS" | while read -r sum f; do
         [ -f "$WORK/landscape/$f" ] ||
             curl -fsSL -o "$WORK/landscape/$f.part" "$LANDSCAPE_URL/$f" &&

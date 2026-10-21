@@ -1,0 +1,373 @@
+Landscape 0.26.3 + e9f019b5: keep IPv6 working on a WAN link with no bound
+IPv6 address (the E5's modem uplink).
+
+The E5's uplink is sipa_eth0, the modem's SIP netdev. netifd configures it
+from a bearer whose IPv6 method is dhcp and which yields only a link-local
+address, so nothing ever inserts an IPv6 row into Landscape's wan_ip_binding
+map for ifindex 3. Every IPv6 packet that reaches the TC data path then hits
+`wan_ip_info == NULL` in landscape-ebpf/src/bpf/nat/tc_nat6.h and is dropped
+with TC_ACT_SHOT -- the router's own traffic (ping6, DNS, DHCPv6) as well as
+everything it forwards. Measured on the device: 200 forwarded datagrams left
+Ip6OutForwDatagrams +200 while sipa_eth0 tx_packets did not move, and the
+router itself could not reach any IPv6 address at all.
+
+There is no WAN prefix to translate to in that case, so the NAT stage has
+nothing to do and must let the packet continue to the kernel route. The two
+route stages get the same treatment for the default flow only: a default flow
+with no Landscape target falls through to the kernel route (a carrier-assigned
+/64 with no PD pool is addressed by the LAN RA server), while an explicit
+flow whose target is missing still fails closed.
+
+The eBPF tests change with it: the no-binding NAT cases are new
+(landscape-ebpf/src/tests/nat/v6/no_wan_binding.rs) and the two route suites
+now expect the default flow to reach the kernel route. `cargo ttb` runs them.
+
+Apply with: patch -p1 (or git apply) in a checkout of the pinned commit.
+
+diff --git a/landscape-ebpf/src/bpf/nat/tc_nat6.h b/landscape-ebpf/src/bpf/nat/tc_nat6.h
+index 39d38423..d95cd763 100644
+--- a/landscape-ebpf/src/bpf/nat/tc_nat6.h
++++ b/landscape-ebpf/src/bpf/nat/tc_nat6.h
+@@ -112,7 +112,12 @@ static __always_inline int ipv6_egress_prefix_check_and_replace(struct __sk_buff
+ 
+     struct wan_ip_info_value *wan_ip_info = bpf_map_lookup_elem(&wan_ip_binding, &wan_search_key);
+     if (wan_ip_info == NULL) {
+-        return TC_ACT_SHOT;
++        // No IPv6 address is bound to this WAN ifindex (e.g. a v4-only WAN link).
++        // There is no WAN prefix to translate to, so the NAT stage has nothing to
++        // do and must let the packet through. Returning TC_ACT_SHOT here would
++        // black-hole every IPv6 packet on the link, including router-originated
++        // traffic such as RA/RS and DHCPv6.
++        return TC_ACT_UNSPEC;
+     }
+ 
+     u8 npt_id_mask = (u8)(wan_ip_info->npt_mask >> 56);
+@@ -295,7 +300,12 @@ static __always_inline int ipv6_ingress_prefix_check_and_replace(struct __sk_buf
+ 
+     struct wan_ip_info_value *wan_ip_info = bpf_map_lookup_elem(&wan_ip_binding, &wan_search_key);
+     if (wan_ip_info == NULL) {
+-        return TC_ACT_SHOT;
++        // No IPv6 address is bound to this WAN ifindex (e.g. a v4-only WAN link).
++        // There is no WAN prefix to translate to, so the NAT stage has nothing to
++        // do and must let the packet through. Returning TC_ACT_SHOT here would
++        // black-hole every IPv6 packet on the link, including router-originated
++        // traffic such as RA/RS and DHCPv6.
++        return TC_ACT_UNSPEC;
+     }
+ 
+     u8 npt_id_mask = (u8)(wan_ip_info->npt_mask >> 56);
+diff --git a/landscape-ebpf/src/bpf/tc_lan_ingress_route.bpf.c b/landscape-ebpf/src/bpf/tc_lan_ingress_route.bpf.c
+index 1ce221cd..ec4b6caa 100644
+--- a/landscape-ebpf/src/bpf/tc_lan_ingress_route.bpf.c
++++ b/landscape-ebpf/src/bpf/tc_lan_ingress_route.bpf.c
+@@ -109,8 +109,13 @@ static __always_inline int tc_route6_pick_wan_in_lan(struct __sk_buff *skb, u32
+ 
+     if (target_info == NULL) {
+         if (resolved_flow_id == 0) {
+-            ld_bpf_log("DROP default flow v6, no target");
+-            return TC_ACT_SHOT;
++            // A default flow is allowed to use the kernel route when this
++            // uplink has no Landscape IPv6 target.  This is required for a
++            // carrier-assigned /64 with no PD pool: the LAN RA server owns
++            // addressing, and kernel forwarding must not be black-holed.
++            // Explicit flows below still fail closed when their target is
++            // missing.
++            return TC_ACT_UNSPEC;
+         }
+         ld_bpf_log("DROP flow_id v6: %d", resolved_flow_id);
+         return TC_ACT_SHOT;
+diff --git a/landscape-ebpf/src/bpf/tc_wan_egress_route.bpf.c b/landscape-ebpf/src/bpf/tc_wan_egress_route.bpf.c
+index 80d30afb..b8291483 100644
+--- a/landscape-ebpf/src/bpf/tc_wan_egress_route.bpf.c
++++ b/landscape-ebpf/src/bpf/tc_wan_egress_route.bpf.c
+@@ -131,8 +131,11 @@ static __always_inline int tc_route6_pick_wan_in_wan_egress(struct __sk_buff *sk
+ 
+     if (target_info == NULL) {
+         if (resolved_flow_id == 0) {
+-            ld_bpf_log("DROP default flow v6, no target");
+-            return TC_ACT_SHOT;
++            // With no Landscape IPv6 target, the default flow must continue
++            // through the kernel route.  This keeps carrier-assigned /64
++            // forwarding working when the uplink has no PD pool.  Explicit
++            // flows still fail closed when their selected target is absent.
++            return TC_ACT_OK;
+         }
+         ld_bpf_log("DROP flow_id v6: %d", resolved_flow_id);
+         return TC_ACT_SHOT;
+diff --git a/landscape-ebpf/src/tests/nat/v6/mod.rs b/landscape-ebpf/src/tests/nat/v6/mod.rs
+index 6a684bc6..69df1883 100644
+--- a/landscape-ebpf/src/tests/nat/v6/mod.rs
++++ b/landscape-ebpf/src/tests/nat/v6/mod.rs
+@@ -1,4 +1,5 @@
+ mod dynamic_nat_v3;
++mod no_wan_binding;
+ mod egress_helper_v6;
+ mod static_nat6_ct_create;
+ mod static_nat_v3;
+diff --git a/landscape-ebpf/src/tests/nat/v6/no_wan_binding.rs b/landscape-ebpf/src/tests/nat/v6/no_wan_binding.rs
+new file mode 100644
+index 00000000..00ad2ff2
+--- /dev/null
++++ b/landscape-ebpf/src/tests/nat/v6/no_wan_binding.rs
+@@ -0,0 +1,113 @@
++//! Regression tests for an uplink that has no IPv6 address bound in
++//! `wan_ip_binding` (for example a carrier link that only got a v4 address, or
++//! an uplink whose IPv6 binding has not been published yet).
++//!
++//! The NAT stage must not black-hole IPv6 on such a link: there is no WAN
++//! prefix to translate to, so it has nothing to do and must hand the packet
++//! back to the kernel.  Returning `TC_ACT_SHOT` here dropped every IPv6 packet
++//! on the interface, including router-originated RS/RA and DHCPv6 traffic.
++
++use std::{mem::MaybeUninit, net::Ipv6Addr, str::FromStr};
++
++use etherparse::PacketBuilder;
++use libbpf_rs::{
++    ProgramInput,
++    skel::{OpenSkel, SkelBuilder as _},
++};
++use zerocopy::IntoBytes;
++
++use crate::{stages::nat::tc_nat_skel::TcNatSkelBuilder, tests::TestSkb};
++
++// Loopback: `test_run` needs a real netdev, and this path never looks at the
++// device itself — only at the absence of a `wan_ip_binding` row.
++const IFINDEX: u32 = 1;
++const CLIENT_PORT: u16 = 40000;
++
++fn lan_host() -> Ipv6Addr {
++    Ipv6Addr::from_str("fd00:1234:5678:abc5::100").unwrap()
++}
++
++fn remote() -> Ipv6Addr {
++    Ipv6Addr::from_str("2400:3200::1").unwrap()
++}
++
++fn build_ipv6_tcp(src: Ipv6Addr, dst: Ipv6Addr, src_port: u16, dst_port: u16) -> Vec<u8> {
++    let builder = PacketBuilder::ethernet2(
++        [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF],
++        [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
++    )
++    .ipv6(src.octets(), dst.octets(), 64)
++    .tcp(src_port, dst_port, 1, 1000);
++
++    let payload = [0u8; 8];
++    let mut buf = Vec::with_capacity(builder.size(payload.len()));
++    builder.write(&mut buf, &payload).unwrap();
++    buf
++}
++
++fn run_egress(pkt: &[u8]) -> (i32, Vec<u8>) {
++    let mut builder = TcNatSkelBuilder::default();
++    let pin_root = crate::tests::isolated_pin_root("nat-v6-no-wan-binding");
++    builder.object_builder_mut().pin_root_path(&pin_root).unwrap();
++    let mut open_object = MaybeUninit::uninit();
++    let open_skel = builder.open(&mut open_object).unwrap();
++    let skel = open_skel.load().unwrap();
++
++    // Deliberately no add_wan_ip(): the uplink has no IPv6 binding at all.
++    let mut ctx = TestSkb { ifindex: IFINDEX, ..Default::default() };
++    let mut packet_out = vec![0u8; pkt.len()];
++    let input = ProgramInput {
++        data_in: Some(pkt),
++        context_in: Some(ctx.as_mut_bytes()),
++        data_out: Some(&mut packet_out),
++        ..Default::default()
++    };
++
++    let result = skel.progs.tc_nat_wan_egress.test_run(input).expect("test_run failed");
++    (result.return_value as i32, packet_out)
++}
++
++fn run_ingress(pkt: &[u8]) -> (i32, Vec<u8>) {
++    let mut builder = TcNatSkelBuilder::default();
++    let pin_root = crate::tests::isolated_pin_root("nat-v6-no-wan-binding-ingress");
++    builder.object_builder_mut().pin_root_path(&pin_root).unwrap();
++    let mut open_object = MaybeUninit::uninit();
++    let open_skel = builder.open(&mut open_object).unwrap();
++    let skel = open_skel.load().unwrap();
++
++    let mut ctx = TestSkb { ifindex: IFINDEX, ..Default::default() };
++    let mut packet_out = vec![0u8; pkt.len()];
++    let input = ProgramInput {
++        data_in: Some(pkt),
++        context_in: Some(ctx.as_mut_bytes()),
++        data_out: Some(&mut packet_out),
++        ..Default::default()
++    };
++
++    let result = skel.progs.tc_nat_wan_ingress.test_run(input).expect("test_run failed");
++    (result.return_value as i32, packet_out)
++}
++
++#[test]
++fn v6_egress_without_wan_binding_passes_to_kernel_route() {
++    let pkt = build_ipv6_tcp(lan_host(), remote(), CLIENT_PORT, 443);
++    let (ret, out) = run_egress(&pkt);
++
++    assert_eq!(
++        ret, -1,
++        "no IPv6 binding on the uplink means NAT has nothing to do: TC_ACT_UNSPEC(-1), not TC_ACT_SHOT(-2)"
++    );
++    assert_eq!(out, pkt, "the packet must not be rewritten when there is no WAN prefix");
++}
++
++#[test]
++fn v6_ingress_without_wan_binding_passes_to_kernel_route() {
++    let pkt = build_ipv6_tcp(remote(), lan_host(), 443, CLIENT_PORT);
++    let (ret, out) = run_ingress(&pkt);
++
++    assert_eq!(
++        ret, 0,
++        "no IPv6 binding on the uplink means NAT has nothing to do: TC_ACT_OK(0), not TC_ACT_SHOT(-2)"
++    );
++    assert_eq!(out, pkt, "the packet must not be rewritten when there is no WAN prefix");
++}
+diff --git a/landscape-ebpf/src/tests/route/tc_lan_ingress_v6/cache_paths.rs b/landscape-ebpf/src/tests/route/tc_lan_ingress_v6/cache_paths.rs
+index f6254ae4..24024e42 100644
+--- a/landscape-ebpf/src/tests/route/tc_lan_ingress_v6/cache_paths.rs
++++ b/landscape-ebpf/src/tests/route/tc_lan_ingress_v6/cache_paths.rs
+@@ -215,10 +215,9 @@ fn lan6_ingress_lan_cache_zero_ifindex_without_slot_drops() {
+ 
+ #[test]
+ fn lan6_ingress_lan_cache_zero_ifindex_default_flow_passes() {
+-    // Legacy pick_wan twin (route6_pick_wan_and_send_by_flow_id) reached via
+-    // a cache entry with ifindex == 0 and a DEFAULT-flow mark: a flow id 0
+-    // slot-miss passes (TC_ACT_UNSPEC) — unlike the TC first-packet wrapper
+-    // which drops the default flow.
++    // A cache entry with ifindex == 0 and a DEFAULT-flow mark reaches
++    // pick_wan with a flow id 0 slot miss.  Both that legacy path and the TC
++    // first-packet wrapper must hand the packet to the kernel route.
+     load_skel!("tc-lan6-cache-default-pass", skel);
+     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, LAN_CACHE);
+     put_rt6_cache_value(
+@@ -235,7 +234,7 @@ fn lan6_ingress_lan_cache_zero_ifindex_default_flow_passes() {
+     let pkt = simple_ipv6_tcp_syn(local_addr(), remote_addr());
+     let (ret, out, mark, _forwarded) = run_lan6_ingress(&skel, &pkt, &mut lan_ctx());
+ 
+-    assert_eq!(ret, RET_UNSPEC, "legacy pick_wan passes default-flow traffic");
++    assert_eq!(ret, RET_UNSPEC, "default-flow traffic must use the kernel route");
+     assert_eq!(out, pkt);
+     assert_eq!(mark, 0x0200_0000, "wrapper stamps the LAN source on the search-cache return");
+ }
+@@ -384,7 +383,10 @@ fn lan6_ingress_wan_cache_hit_without_wan_binding_is_inert() {
+     let pkt = simple_ipv6_tcp_syn(local_addr(), remote_addr());
+     let (ret, _out, mark, _forwarded) = run_lan6_ingress(&skel, &pkt, &mut lan_ctx());
+ 
+-    assert_eq!(ret, RET_SHOT, "no binding → WAN-cache entry is inert → default drop");
++    assert_eq!(
++        ret, RET_UNSPEC,
++        "an inert WAN-cache entry reaches the default flow, which uses the kernel route"
++    );
+     assert_eq!(mark, 0x0200_0000);
+     assert!(
+         lookup_rt6_cache_value(&skel.maps.rt6_cache_map, LAN_CACHE, local_addr(), remote_addr())
+diff --git a/landscape-ebpf/src/tests/route/tc_lan_ingress_v6/first_packet.rs b/landscape-ebpf/src/tests/route/tc_lan_ingress_v6/first_packet.rs
+index f02ed60e..35ad4ae2 100644
+--- a/landscape-ebpf/src/tests/route/tc_lan_ingress_v6/first_packet.rs
++++ b/landscape-ebpf/src/tests/route/tc_lan_ingress_v6/first_packet.rs
+@@ -80,7 +80,10 @@ fn lan6_ingress_fe_non_link_local_dst_routes_normally() {
+     let pkt = simple_ipv6_tcp_syn(local_addr(), Ipv6Addr::from_str("fec0::1").unwrap());
+     let (ret, _out, mark, _forwarded) = run_lan6_ingress(&skel, &pkt, &mut lan_ctx());
+ 
+-    assert_eq!(ret, RET_SHOT, "fec0:: is not link-local → falls into routing (default drop)");
++    assert_eq!(
++        ret, RET_UNSPEC,
++        "fec0:: is not link-local; the default flow without a target uses the kernel route"
++    );
+     assert_eq!(mark, 0x0200_0000);
+ }
+ 
+@@ -149,14 +152,18 @@ fn ipv6_tcp_with_hop_by_hop(src: Ipv6Addr, dst: Ipv6Addr) -> Vec<u8> {
+ // ---------------------------------------------------------------------------
+ 
+ #[test]
+-fn lan6_ingress_default_flow_without_slot_target_drops() {
+-    load_skel!("tc-lan6-default-drop", skel);
++fn lan6_ingress_default_flow_without_slot_target_uses_kernel_route() {
++    load_skel!("tc-lan6-default-kernel", skel);
+     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, LAN_CACHE);
+ 
+     let pkt = simple_ipv6_tcp_syn(local_addr(), remote_addr());
+-    let (ret, _out, mark, _forwarded) = run_lan6_ingress(&skel, &pkt, &mut lan_ctx());
++    let (ret, out, mark, _forwarded) = run_lan6_ingress(&skel, &pkt, &mut lan_ctx());
+ 
+-    assert_eq!(ret, RET_SHOT, "default flow without slot target must drop");
++    assert_eq!(
++        ret, RET_UNSPEC,
++        "default flow without a Landscape IPv6 target must use the kernel route"
++    );
++    assert_eq!(out, pkt, "the kernel-route fallback must not rewrite the packet");
+     assert_eq!(mark, 0x0200_0000, "mark must carry FLOW_FROM_LAN source only");
+     assert!(
+         lookup_ip_mac_v6(&skel.maps.ip_mac_v6, local_addr()).is_some(),
+@@ -586,7 +593,7 @@ fn lan6_ingress_lan_map_wan_typed_own_addr_hands_to_stack() {
+ }
+ 
+ #[test]
+-fn lan6_ingress_lan_map_wan_typed_other_falls_to_verdict_drop() {
++fn lan6_ingress_lan_map_wan_typed_other_falls_to_kernel_route() {
+     load_skel!("tc-lan6-wan-other", skel);
+     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, LAN_CACHE);
+     insert_route6_lan_entry(
+@@ -603,7 +610,10 @@ fn lan6_ingress_lan_map_wan_typed_other_falls_to_verdict_drop() {
+     let pkt = simple_ipv6_tcp_syn(local_addr(), remote_addr());
+     let (ret, _out, mark, _forwarded) = run_lan6_ingress(&skel, &pkt, &mut lan_ctx());
+ 
+-    assert_eq!(ret, RET_SHOT, "fall-through reaches the default-flow drop");
++    assert_eq!(
++        ret, RET_UNSPEC,
++        "fall-through reaches the default flow, which uses the kernel route"
++    );
+     assert_eq!(mark, 0x0200_0000, "verdict path stamps the LAN source bits");
+ }
+ 
+diff --git a/landscape-ebpf/src/tests/route/tc_wan_egress_v6.rs b/landscape-ebpf/src/tests/route/tc_wan_egress_v6.rs
+index c5bddcca..be381afe 100644
+--- a/landscape-ebpf/src/tests/route/tc_wan_egress_v6.rs
++++ b/landscape-ebpf/src/tests/route/tc_wan_egress_v6.rs
+@@ -145,14 +145,18 @@ fn assert_no_route_cache(skel: &TcWanEgressRouteSkel<'_>) {
+ // ---------------------------------------------------------------------------
+ 
+ #[test]
+-fn wan6_egress_default_flow_without_slot_target_drops() {
+-    load_skel!("tc-wan6-eg-default-drop", skel);
++fn wan6_egress_default_flow_without_slot_target_uses_kernel_route() {
++    load_skel!("tc-wan6-eg-default-kernel", skel);
+     assert_no_route_cache(&skel);
+ 
+     let pkt = simple_ipv6_tcp_syn(local_addr(), remote_addr());
+-    let (ret, _out, mark, forwarded) = run_wan6_egress(&skel, &pkt, &mut egress_ctx());
++    let (ret, out, mark, forwarded) = run_wan6_egress(&skel, &pkt, &mut egress_ctx());
+ 
+-    assert_eq!(ret, RET_SHOT, "default flow without slot target must drop");
++    assert_eq!(
++        ret, RET_OK,
++        "default flow without a Landscape IPv6 target must use the kernel route"
++    );
++    assert_eq!(out, pkt, "the kernel-route fallback must not rewrite the packet");
+     assert_eq!(mark, 0x0400_0000, "mark must carry FLOW_FROM_WAN source only");
+     assert_eq!(forwarded, 0);
+ }
+@@ -301,7 +305,8 @@ fn wan6_egress_lan_entry_own_addr_hands_to_stack() {
+ #[test]
+ fn wan6_egress_wan_typed_entry_falls_through_to_pick_wan() {
+     // F3 skips WAN-typed entries with TC_ACT_OK, then the packet continues
+-    // into verdict + pick_wan where the default flow has no slot → SHOT.
++    // into verdict + pick_wan where the default flow has no slot target, so
++    // the kernel route decides the packet.
+     load_skel!("tc-wan6-eg-wan-entry", skel);
+     insert_route6_lan_entry(
+         &skel.maps.rt6_lan_map,
+@@ -317,7 +322,10 @@ fn wan6_egress_wan_typed_entry_falls_through_to_pick_wan() {
+     let pkt = simple_ipv6_tcp_syn(local_addr(), remote_addr());
+     let (ret, _out, mark, _forwarded) = run_wan6_egress(&skel, &pkt, &mut egress_ctx());
+ 
+-    assert_eq!(ret, RET_SHOT);
++    assert_eq!(
++        ret, RET_OK,
++        "the default flow without a Landscape IPv6 target uses the kernel route"
++    );
+     assert_eq!(mark, 0x0400_0000, "mark must carry the WAN source bits");
+ }
+ 

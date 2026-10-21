@@ -70,6 +70,9 @@ class RootTools(unittest.TestCase):
                         patch.object(flash, 'SU', None), patch.object(flash, 'ANDROID_BUSYBOX', None), \
                         patch.object(flash, 'validate_installer_busybox'), patch.object(flash, 'adb', side_effect=adb), \
                         contextlib.redirect_stderr(io.StringIO()):
+                    # The post-upload probe deliberately has no Android PATH;
+                    # its first checksum must use the validated BusyBox itself.
+                    self.assertIn('hash=$(' + str(root) + '/e5-tools-', calls[2][1])
                     if fault == 'none':
                         flash.android_tools()
                         self.assertTrue(flash.ANDROID_BUSYBOX.endswith('/busybox'))

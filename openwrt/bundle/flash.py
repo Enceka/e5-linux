@@ -252,7 +252,7 @@ def android_tools():
     probe = (f'for tool in sh chroot nsenter timeout sha256sum dd od blockdev '
              f'tar gzip losetup mount umount mktemp stat readlink; do '
              f'{path} --list | {path} grep -qx "$tool" || exit 1; done; '
-             f'PATH=/nonexistent; hash=$(sha256sum {path}); '
+             f'PATH=/nonexistent; hash=$({path} sha256sum {path}); '
              f'[ "${{hash%% *}}" = {want} ] || exit 1; echo E5_BUSYBOX_OK')
     out = su_checked('准备随包安装工具 / preparing bundled installer tools',
                      f'chown 0:0 {directory} {path}; chmod 700 {directory} {path}; '
@@ -586,7 +586,16 @@ def python_tool(*argv):
     """
     if getattr(sys, 'frozen', False):
         return [sys.executable, '--run-tool', *argv]
-    return [sys.executable, argv[0], *argv[1:]]
+    # APPIMAGE is inherited by some bundled terminal hosts.  Their launcher
+    # can leak into sys.executable and would try to parse Python helpers as
+    # JavaScript; choose an actual Python interpreter before running them.
+    executable = os.environ.get('E5_PYTHON') or sys.executable
+    appimage = os.environ.get('APPIMAGE')
+    if appimage and os.path.realpath(executable) == os.path.realpath(appimage):
+        executable = shutil.which('python3') or shutil.which('python')
+        if not executable:
+            die('no Python interpreter for the package helper scripts')
+    return [executable, argv[0], *argv[1:]]
 
 
 def ask(prompt, default=''):

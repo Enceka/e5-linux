@@ -58,6 +58,17 @@ class Diagnostics(unittest.TestCase):
         with patch.object(flash.sys,'frozen',False,create=True):
             self.assertEqual(flash.python_tool('/helper.py','argument'),[flash.sys.executable,'/helper.py','argument'])
 
+    def test_source_installer_does_not_use_an_inherited_appimage_as_python(self):
+        # Desktop shells can leak their own launcher into sys.executable.
+        # Package helpers are Python and must not be handed to that binary.
+        with tempfile.NamedTemporaryFile() as launcher, \
+                patch.object(flash.sys, 'frozen', False, create=True), \
+                patch.object(flash.sys, 'executable', launcher.name), \
+                patch.dict(flash.os.environ, {'APPIMAGE': launcher.name}, clear=False), \
+                patch.object(flash.shutil, 'which', side_effect=lambda name: '/usr/bin/python3' if name == 'python3' else None):
+            self.assertEqual(flash.python_tool('/helper.py', 'argument'),
+                             ['/usr/bin/python3', '/helper.py', 'argument'])
+
     def test_reinstall_launchers_ship_with_the_package(self):
         # Legacy source wrappers retain their flags; both packagers now use
         # the descriptive generator exercised by install-entrypoints.py.

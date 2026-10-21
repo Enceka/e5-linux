@@ -15,7 +15,9 @@
 #       The kernel is the mainline build, whose BTF/BPF options Landscape requires.
 #   E5_IMAGE_FROM=<openwrt.ext4.gz> (with E5_MAINLINE=1)   no image rebuilt (build-rootfs.sh needs docker):
 #       that one, a flash package's files/openwrt.ext4.gz, with this kernel's root modules written in
-#       (openwrt/image-add-modules.sh) -- only for an image whose sources did not change since
+#       (openwrt/image-add-modules.sh) -- only for an image whose sources did not change since.
+#       E5_LANDSCAPE=1 accepts another Landscape image; it is checked for the daemon/UI before packaging.
+#   E5_BOOTCTL=<e5-bootctl>   a static ARM64 binary built outside Docker (for a no-CI local build)
 #
 # What goes in, and what does not:
 #
@@ -79,10 +81,8 @@ if [ -n "$MAINLINE" ]; then
         { echo "$KERNEL has e5.openwrt= on its command line: a trial kernel" >&2; exit 1; }
     E5_UPSTREAM_OUT=$KOUT sh "$TOP/upstream/root-modules.sh"
     if [ -n "${E5_IMAGE_FROM:-}" ]; then
-        [ "$LANDSCAPE" != 1 ] || {
-            echo 'E5_LANDSCAPE=1 needs the image rebuilt: the existing one carries no Landscape' >&2
-            exit 1; }
-        bash "$HERE/image-add-modules.sh" "$E5_IMAGE_FROM" "$KOUT/root-modules.tar" "$IMG"
+        E5_REPLACE_MODULES=1 bash "$HERE/image-add-modules.sh" \
+            "$E5_IMAGE_FROM" "$KOUT/root-modules.tar" "$IMG"
     else
         # the image always again: it has to carry this kernel's root modules
         E5_LANDSCAPE=$LANDSCAPE E5_ROOT_MODULES=$KOUT/root-modules.tar E5_ROOT_MODULES_ONLY=1 \
@@ -158,7 +158,7 @@ grep -q "Linux version $rel " < <(strings "$KERNEL") ||
     { echo "the kernel ($KERNEL) is not the build of out_linux ($rel)" >&2; exit 1; }
 
 S=$(mktemp -d)
-trap 'rm -rf "$S0" "$S"' EXIT
+trap 'rm -rf "$S0" "$S" "${IMG_TMP:-}"' EXIT
 P=$S/$NAME
 mkdir -p "$P/files" "$P/scripts/tools"
 cp "$BUSYBOX" "$P/files/busybox"
@@ -172,7 +172,8 @@ fi
 python3 "$HERE/bundle/install-entrypoints.py" "$P"
 cp "$HERE/bundle/part-write.sh" "$P/files/"
 test -f "$OUT/ext4-tools.tar" || { echo 'Missing ext4-tools.tar: openwrt/prepare-ext4-tools.py --root CLEAN_ARM64_ROOT --out out/openwrt/ext4-tools.tar' >&2; exit 1; }
-tar -tf "$OUT/ext4-tools.tar" | grep -qx 'ext4-geometry.sh' || {
+tar -tf "$OUT/ext4-tools.tar" > "$S0/ext4-tools.list"
+grep -qx 'ext4-geometry.sh' "$S0/ext4-tools.list" || {
     echo 'ext4-tools.tar is stale: rebuild it with openwrt/prepare-ext4-tools.py before packaging' >&2; exit 1;
 }
 cp "$OUT/ext4-tools.tar" "$P/files/"
@@ -195,10 +196,17 @@ printf "e5-openwrt-flash %s (OpenWrt %s, e5-linux %s, kernel %s)\n" \
 # Compile as the user running this script: with the image default (root) the
 # binary belongs to root, and the packaging step below can no longer chmod it
 # ("Operation not permitted") when the build runs on a normal, non-root host.
-docker run --rm --platform linux/arm64 --user "$(id -u):$(id -g)" -v "$P/files":/out \
-    -v "$TOP/magisk/e5-linux-switch/bootctl.c":/src.c:ro \
-    "${E5_MAGISK_BUILD_IMAGE:-e5-mainline-build}" \
-    sh -ec 'gcc -static -Os -s -Wall -Wextra -Werror -o /out/e5-bootctl /src.c'
+# A host without Docker access can build the static ARM64 binary with its cross
+# compiler and pass it as E5_BOOTCTL.
+if [ -n "${E5_BOOTCTL:-}" ]; then
+    [ -x "$E5_BOOTCTL" ] || { echo "no executable E5_BOOTCTL: $E5_BOOTCTL" >&2; exit 1; }
+    cp "$E5_BOOTCTL" "$P/files/e5-bootctl"
+else
+    docker run --rm --platform linux/arm64 --user "$(id -u):$(id -g)" -v "$P/files":/out \
+        -v "$TOP/magisk/e5-linux-switch/bootctl.c":/src.c:ro \
+        "${E5_MAGISK_BUILD_IMAGE:-e5-mainline-build}" \
+        sh -ec 'gcc -static -Os -s -Wall -Wextra -Werror -o /out/e5-bootctl /src.c'
+fi
 # Fail here, where the cause is obvious, rather than inside the packaging step.
 if [ ! -O "$P/files/e5-bootctl" ]; then
     echo "make-flash-bundle: e5-bootctl is not owned by $(id -u); the container must run as --user" >&2

@@ -34,6 +34,9 @@ WAN_SYNC = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-sync'
 WAN_LOOP = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-sync-loop'
 WAN_SLOTS = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-slots'
 WAN_HOTPLUG = TOP / 'openwrt/landscape/etc/hotplug.d/iface/95-landscape-wan'
+NATIVE_BUILD = TOP / 'upstream/build-native.sh'
+LTS_MANIFEST = TOP / 'upstream/kernel-source-lts-experiment.json'
+NCM_CHECKSUM_FIX = '6692deff8885aa536738f8ddeb3f0773b31c73ef'
 
 # landscape.whileaway.dev/zh/intro/requirements, verbatim where the kernel
 # Kconfig does not derive it (BPF_JIT_DEFAULT_ON and IPV6_SEG6_BPF are
@@ -381,11 +384,30 @@ class Bundle(unittest.TestCase):
     def test_landscape_bundle_is_named_apart(self):
         self.assertIn('e5-openwrt-flash-$VER-landscape-$STAMP-$GIT', self.text)
 
-    def test_landscape_is_not_bolted_onto_an_existing_image(self):
-        # E5_IMAGE_FROM only writes modules into an existing image, which has
-        # no daemon/UI: refuse it instead of shipping a bundle without
-        # Landscape.
-        self.assertIn('E5_LANDSCAPE=1 needs the image rebuilt', self.text)
+    def test_an_existing_landscape_image_can_be_repackaged_locally(self):
+        # The image is checked for every Landscape file below before packaging;
+        # replacing its modules lets a kernel-only local rebuild reuse it when
+        # Docker cannot assemble a fresh ARM64 rootfs.
+        self.assertIn('E5_REPLACE_MODULES=1 bash "$HERE/image-add-modules.sh"', self.text)
+        self.assertIn('if [ -n "${E5_BOOTCTL:-}" ]; then', self.text)
+
+    def test_bundle_checks_survive_pipefail(self):
+        # tar has more members after the match; a direct tar | grep pipeline
+        # makes tar exit through SIGPIPE once grep leaves early.
+        self.assertIn('tar -tf "$OUT/ext4-tools.tar" > "$S0/ext4-tools.list"', self.text)
+        self.assertIn('grep -qx \'ext4-geometry.sh\' "$S0/ext4-tools.list"', self.text)
+        self.assertIn('trap \'rm -rf "$S0" "$S" "${IMG_TMP:-}"\' EXIT', self.text)
+
+    def test_lts_kernel_cannot_regress_past_the_ncm_checksum_fix(self):
+        import json
+        manifest = json.loads(LTS_MANIFEST.read_text())
+        self.assertEqual(manifest['minimum_revision'], NCM_CHECKSUM_FIX)
+
+    def test_native_lts_build_selects_the_landscape_config(self):
+        text = NATIVE_BUILD.read_text()
+        self.assertIn('*kernel-source-lts-experiment.json) BASE_CFG=$HERE/e5-lts-experiment.config', text)
+        self.assertIn('sed \'s/ e5\\.openwrt=[A-Za-z0-9._-]*//\' "$BASE_CFG"', text)
+        self.assertIn('E5_KERNEL_MANIFEST="$(cd "$(dirname "$manifest")" && pwd)/$(basename "$manifest")"', text)
 
     def test_bundle_image_is_checked_for_landscape(self):
         self.assertIn('checking the image for Landscape', self.text)

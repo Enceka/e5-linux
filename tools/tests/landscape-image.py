@@ -40,7 +40,7 @@ DAEMON_INNER = TOP / 'openwrt/build-landscape-inner.sh'
 DAEMON_DOCKERFILE = TOP / 'openwrt/landscape.Dockerfile'
 V6_NAT_PATCH = TOP / 'openwrt/patches/landscape-v6-nat-without-wan-binding.patch'
 NATIVE_BUILD = TOP / 'upstream/build-native.sh'
-LTS_MANIFEST = TOP / 'upstream/kernel-source-lts-experiment.json'
+K618_MANIFEST = TOP / 'upstream/kernel-source-6.18.json'
 K72_MANIFEST = TOP / 'upstream/kernel-source-7.2.json'
 NCM_CHECKSUM_FIX = '6692deff8885aa536738f8ddeb3f0773b31c73ef'
 NCM_CHECKSUM_FIX_72 = '7e19780b4699b77ea7366bdf49f1fbf2535934f1'
@@ -421,9 +421,10 @@ class Bundle(unittest.TestCase):
         self.assertIn('grep -qx \'ext4-geometry.sh\' "$S0/ext4-tools.list"', self.text)
         self.assertIn('trap \'rm -rf "$S0" "$S" "${IMG_TMP:-}"\' EXIT', self.text)
 
-    def test_lts_kernel_cannot_regress_past_the_ncm_checksum_fix(self):
+    def test_the_618_kernel_line_pins_the_ncm_checksum_fix(self):
         import json
-        manifest = json.loads(LTS_MANIFEST.read_text())
+        manifest = json.loads(K618_MANIFEST.read_text())
+        self.assertEqual(manifest['branch'], 'e5-6.18-experiment')
         self.assertEqual(manifest['minimum_revision'], NCM_CHECKSUM_FIX)
 
     def test_the_72_kernel_line_pins_the_ncm_checksum_fix(self):

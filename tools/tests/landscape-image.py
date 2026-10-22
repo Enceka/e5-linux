@@ -41,7 +41,9 @@ DAEMON_DOCKERFILE = TOP / 'openwrt/landscape.Dockerfile'
 V6_NAT_PATCH = TOP / 'openwrt/patches/landscape-v6-nat-without-wan-binding.patch'
 NATIVE_BUILD = TOP / 'upstream/build-native.sh'
 LTS_MANIFEST = TOP / 'upstream/kernel-source-lts-experiment.json'
+K72_MANIFEST = TOP / 'upstream/kernel-source-7.2.json'
 NCM_CHECKSUM_FIX = '6692deff8885aa536738f8ddeb3f0773b31c73ef'
+NCM_CHECKSUM_FIX_72 = '7e19780b4699b77ea7366bdf49f1fbf2535934f1'
 
 # landscape.whileaway.dev/zh/intro/requirements, verbatim where the kernel
 # Kconfig does not derive it (BPF_JIT_DEFAULT_ON and IPV6_SEG6_BPF are
@@ -423,6 +425,23 @@ class Bundle(unittest.TestCase):
         import json
         manifest = json.loads(LTS_MANIFEST.read_text())
         self.assertEqual(manifest['minimum_revision'], NCM_CHECKSUM_FIX)
+
+    def test_the_72_kernel_line_pins_the_ncm_checksum_fix(self):
+        # Without the repair a 7.2 Landscape image gets no DHCP lease over USB
+        # NCM, so the 7.2 manifest may not point at anything older.
+        import json
+        manifest = json.loads(K72_MANIFEST.read_text())
+        self.assertEqual(manifest['branch'], 'e5-7.2')
+        self.assertEqual(manifest['minimum_revision'], NCM_CHECKSUM_FIX_72)
+
+    def test_both_landscape_manifests_share_one_fragment(self):
+        # The fragment follows the manifest: every Landscape line selects it and
+        # the release baseline keeps e5-mainline.config.
+        for script, prefix in ((TOP / 'upstream/build.sh', '/work'),
+                               (NATIVE_BUILD, '$HERE')):
+            text = script.read_text()
+            self.assertIn(f'*kernel-source-*.json) BASE_CFG={prefix}/e5-landscape.config', text)
+            self.assertIn(f'*) BASE_CFG={prefix}/e5-mainline.config', text)
 
     def test_native_lts_build_selects_the_landscape_config(self):
         text = NATIVE_BUILD.read_text()

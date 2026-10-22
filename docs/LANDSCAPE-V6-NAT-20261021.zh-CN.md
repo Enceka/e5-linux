@@ -157,3 +157,69 @@ runt 用例，报 `run tc_route6_wan_egress: Error: Invalid argument (os error 2
 - CI 里新增的 `daemon` job 只在本机验证过它的校验逻辑（build id、`.patches`、
   `landscape-bundle.py --daemon` 的正反例），完整跑通要等下一次
   `Build Landscape Router OpenWrt` 的实际运行。
+
+## 7. LAN 侧 IPv6：daemon 之外还有一处缺口
+
+NAT 补丁修好了转发，镜像仍然没有 IPv6：客户端只拿到链路本地地址。原因是
+Landscape 镜像的网络默认值本身没给 LAN 前缀，也没人发 RA。
+
+### 7.1 现象与定位
+
+- 镜像里的 `/etc/config/network`（`openwrt/standalone/network.landscape`）
+  是 `proto 'none'` 且没有 `ip6assign`，`99-landscape` 又把 odhcpd 停掉，
+  于是 br-lan 没有全局地址，也没有进程响应 RS。
+- 上行本身没问题：`sipa_eth0` 有运营商的 `/64` 和默认路由，路由器
+  `ping6` 外网 0% 丢失。缺的只是 LAN 侧通告。
+
+### 7.2 为什么不能用 Landscape 自己的 LAN IPv6
+
+两条路都试过，都走不通，根因和 §39 记的 relay 限制是同一个：`sipa_eth0`
+是 raw-IP（NOARP）设备，`PACKET_ADD_MEMBERSHIP` 在上面失败。
+
+1. **wan link 的 PD 客户端**。它把 UDP socket 绑到设备上再向 all-servers
+   组播 soliciting，收不到 Advertise。通过 API 打开 `pd.enable` 后
+   `runtime-status` 一直停在 `soliciting`：`expected_pd_len` 取 60/56/64、
+   以及在 odhcp6c 让出 546 的情况下共 4 轮、每轮 60-80 秒，全部超时
+   （日志 `DHCPv6 solicit timeout exceeded limit`）；同一时刻 netifd 的
+   odhcp6c 在同一个 iface 上几秒内就拿到 `240a:42a4:1401:13d7::/64`。
+2. **把委托前缀当静态父级**。`PUT /services/lan_ipv6` 用
+   `parent.t = "static"` 指向运营商 `/64` 被拒：409
+   `lan_ipv6.prefix_conflict.wan_reserved` —— 该 /64 槽位在 Landscape 里
+   是给 WAN 保留的。
+
+### 7.3 修法：委托留在 netifd，前缀下移到 LAN
+
+和 §39 给非 Landscape 镜像验证过的做法一致：
+
+- `network.landscape` 给 `lan` 加 `ip6assign '64'`。`proto 'none'` 保留，
+  netifd 仍然不碰 IPv4（那是 Landscape DHCPv4 的，会被它删掉）。
+- `99-landscape` 不再停 odhcpd，但只让它做 IPv6：`dhcpv4='disabled'`、
+  `odhcpd.maindhcp='0'`（因此不会占用 67，Landscape 继续独占）、
+  `ra='server'` + `ra_slaac='1'` 发地址、`ra_flags='other-config'` 让客户端
+  用无状态 DHCPv6 取 DNS、`ndp='disabled'`（中继 NDP 正是这条链路做不到的
+  那个模式）。dnsmasq 仍然关闭，53 还是 Landscape 的。
+
+`ip6assign` 的地址由 netifd 在**接口重新配置**时下发：`/etc/init.d/network
+reload` 不会重新分配，`/etc/init.d/network restart` 才会（实测：删掉 br-lan
+上的全局地址后 reload 不回来，restart 立刻恢复）。这是 netifd 的正常行为，
+不是缺陷。
+
+### 7.4 验证
+
+- 在设备上按 `99-landscape` 的 uci 命令逐条应用：odhcpd 起在
+  `Features: ra ndp dhcpv6 no-dhcpv4 ubus`，67 仍是
+  `landscape-webserver`。
+- `/etc/init.d/network restart` 后 br-lan 拿到 `240a:42a4:1401:13d7::1/64`，
+  `ubus call network.interface.lan status` 的 `ipv6-prefix-assignment`
+  与 `wan_6` 的委托前缀一致。
+- USB 网卡上的主机随即拿到同前缀的全局地址，默认路由 `proto ra`；
+  `ping6 2400:3200::1` 与 `2001:4860:4860::8888` 均 3/3。
+- 开机瞬间 odhcpd 会报 `No default route present, setting ra_lifetime to 0!`
+  和一次 `Failed to send to ff02::1`：那是默认路由还没装好的短暂窗口，
+  路由就位后停止，之后 40 秒静默。
+
+`tools/tests/landscape-image.py` 原先断言了缺陷本身
+（`assertNotIn('ip6assign', landscape)`）并要求 odhcpd 被关闭；两处都已
+反转，另加一条测试把 odhcpd 钉在"只做 IPv6"。三条断言都做了变异检验：
+去掉 `ip6assign`、把 odhcpd 改回 disable、把 `maindhcp` 改成 1，各自都会
+让套件失败。

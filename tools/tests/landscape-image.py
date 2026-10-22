@@ -431,7 +431,7 @@ class Bundle(unittest.TestCase):
         # NCM, so the 7.2 manifest may not point at anything older.
         import json
         manifest = json.loads(K72_MANIFEST.read_text())
-        self.assertEqual(manifest['branch'], 'e5-7.2')
+        self.assertEqual(manifest['branch'], 'e5-7.2-experiment')
         self.assertEqual(manifest['minimum_revision'], NCM_CHECKSUM_FIX_72)
 
     def test_both_landscape_manifests_share_one_fragment(self):

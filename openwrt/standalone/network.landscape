@@ -13,6 +13,14 @@ config device 'br_lan'
 
 # Landscape's DHCPv4 service adds 192.168.9.1/24 itself and deletes any other
 # IPv4 address on the interface label; netifd must only create the bridge.
+#
+# ip6assign is netifd's, not Landscape's: sipa_eth0 is a raw-IP (NOARP) bearer
+# where PACKET_ADD_MEMBERSHIP fails, so no DHCPv6-PD client can solicit on it
+# (docs/FINDINGS.md section 39).  netifd's own wan_6 keeps the delegation and
+# hands br-lan a /64 from it; odhcpd then advertises that prefix.  Without
+# this the LAN has IPv6 only as a link-local address and clients get no
+# global address.
 config interface 'lan'
 	option device 'br-lan'
 	option proto 'none'
+	option ip6assign '64'

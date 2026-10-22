@@ -65,10 +65,19 @@ E5_KERNEL_MANIFEST=upstream/kernel-source-6.18.json upstream/build.sh  # 6.18
 E5_KERNEL_MANIFEST=upstream/kernel-source-7.2.json upstream/build.sh   # 7.2
 ```
 
-发布 workflow 仍默认 6.18 与 `upstream/kernel-source.json`，这是刻意的：6.18 是已经过
-实机验证的那条线，默认路径不该因为多了一条实验内核线而改变；Landscape 构建 workflow
-的 `source_ref` 才决定这次用哪条分支和哪份清单，它默认 `lts-experiment`（6.18），要
-7.2 的镜像时把它指到 `e5-7.2-experiment`。
+Landscape 构建 workflow 只有一个内核输入：`kernel_ref`，取值必须是
+`e5-<line>-experiment`。它的 `resolve` 作业从分支名里截掉 `e5-` 前缀和 `-experiment`
+后缀得到 `<line>`，再去找 `upstream/kernel-source-<line>.json`——清单名能被纯字符串
+算出来，正是这套命名存在的理由。`kernel_ref: e5-6.18-experiment` 用
+`kernel-source-6.18.json` 构建 6.18，`kernel_ref: e5-7.2-experiment` 用
+`kernel-source-7.2.json` 构建 7.2。`source_ref` 只决定用哪条 e5-linux 分支提供源码树，
+不选清单；它默认 `lts-experiment`（6.18），7.2 的镜像才指到 `e5-7.2-experiment`，
+那是因为对应的分支在那里，不是因为它选了什么。
+
+发布默认仍是 6.18 与 `upstream/kernel-source.json`，这是刻意的：6.18 是已经过实机验证
+的那条线，默认路径不该因为多了一条实验内核线而改变。加一条内核线因此不需要改 workflow：
+在内核仓库建 `e5-<line>-experiment`，在这里加 `upstream/kernel-source-<line>.json`，
+两者名字对上就够了。
 
 在 `e5-7.2-experiment`（7.2.11）上曾验证 Wi-Fi AP、5G 数据、充电、显示/触摸和音频；
 6.18 已有的 charger-manager `-22`、`asoc_sprd_card_parse_of` `-517`、thermal v2t 和

@@ -74,6 +74,3 @@ sprd_serial DMA 告警在 7.2 同样存在，未新增 workqueue 告警或 Call 
 DHCP 在 7.2.11 上曾取不到地址（服务器 ACK 的 UDP 校验和固定错误 `0xcae6`，主机
 `rx-checksumming` 为 `off [fixed]` 时内核直接丢包），7.2 线现在带着同一对 gadget
 校验和修复，正是 `kernel-source-7.2.json` 把 `minimum_revision` 钉在修复之后的原因。
-
-6.18 仍是发布 workflow 的默认，因为它是唯一走完整实机验证的内核线；7.2 线用于在 7.2
-内核上验证 Landscape，默认值不为它改动。

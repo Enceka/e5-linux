@@ -87,6 +87,44 @@ runt 用例，报 `run tc_route6_wan_egress: Error: Invalid argument (os error 2
 - `build-rootfs.sh` 在该产物存在且校验通过时用它替换发布二进制，并把它从
   发布资产列表里剔除；没有该产物时仍回退到上游发布二进制，同时在 stderr
   提示该二进制在本机型上没有 IPv6。
+- 回退只是本机的手动路径。CI 设置 `E5_LANDSCAPE_DAEMON_REQUIRED=1`，产物
+  缺失或与 `.sha256` 不符就直接失败，不再悄悄装回发布二进制。
+
+### 4.1 CI
+
+`e5-linux-release` 的 `landscape.yml` 原先只有 block-mount、kernel、image
+三个 job，镜像里的 daemon 一直是上游发布资产，本补丁根本没有进 CI。现在多了
+一个 `daemon` job（`needs: resolve`，与 kernel 并行）：
+
+1. 先确认 `landscape_version` 输入与 `build-landscape.sh` 里的 `LS_VER`
+   一致（web UI／redirect handler 来自该发布，daemon 来自源码固定的那个
+   commit，两边版本不同就是错配），再取 `openwrt/build-landscape.sh
+   --build-id`：该子命令只算哈希、不碰 Docker，任何 job 都能在不建容器的
+   前提下复核"这个二进制是哪套输入造的"。build id 覆盖
+   `landscape.Dockerfile`、两个构建脚本和全部
+   `openwrt/patches/landscape-*.patch`。
+2. 用 `actions/cache` 把 `work/landscape-cargo`（crate registry）跨 run 带
+   过去；每个 runner 都是干净的，Docker 命名卷带不走。为此
+   `build-landscape.sh` 现在接受 `E5_LANDSCAPE_CARGO`：是路径就 bind
+   mount，是名字才是命名卷。
+3. 构建后复核 `.sha256`、`.build-id` 和新增的 `.patches` 出处文件（固定
+   commit + 每个补丁的 SHA-256），然后作为 `landscape-daemon-<run>` artifact
+   上传，连同三个旁挂文件。
+4. `image` job 改成 `needs: [resolve, kernel, daemon]`，把 artifact 还原到
+   `out/openwrt` 并再校验一遍（含"build id 与当前源码一致"），然后
+   `make-flash-bundle.sh` 在 `E5_LANDSCAPE_DAEMON_REQUIRED=1` 下组装镜像。
+
+最后一步的打包校验也变了：原来是 `python3 tools/tests/landscape-bundle.py`
+不带参数，它只拿 `openwrt/landscape` 目录造一个合成镜像，从来没看过真正的
+产物。现在传 `--bundle <刚打出来的 zip> --daemon <构建的 daemon>`，
+`landscape-bundle.py` 会把镜像里的 `/usr/sbin/landscape-webserver` dump 出来
+和构建产物逐字节比较 —— 这正是"镜像里装的是不是打过补丁的那个"的直接证据，
+而不是"镜像里有没有一个 aarch64 的 daemon"。
+
+`tools/tests/landscape-image.py` 增加了一组静态检查（`class Daemon`）和一条
+`E5_LANDSCAPE_DAEMON_REQUIRED` 的顺序检查，跑在 kernel/image 两个 job 的
+"Check the OpenWrt landscape integration" 步骤里，所以补丁路径、build id 的
+覆盖范围或缓存挂载被改动而没同步时，CI 会先在这里失败。
 
 两个踩过的坑，都已写进镜像与脚本：
 
@@ -116,3 +154,6 @@ runt 用例，报 `run tc_route6_wan_egress: Error: Invalid argument (os error 2
   验证过；本机型的承载只给链路本地地址，走不到那条路径。
 - `landscape-ebpf/build.rs` 里 `{e}` → `{e:#}` 的差异是调试用的错误信息
   格式改动，未纳入补丁。
+- CI 里新增的 `daemon` job 只在本机验证过它的校验逻辑（build id、`.patches`、
+  `landscape-bundle.py --daemon` 的正反例），完整跑通要等下一次
+  `Build Landscape Router OpenWrt` 的实际运行。

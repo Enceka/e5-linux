@@ -14,6 +14,7 @@ option, the OpenWrt package list and the procd service):
   * 99-landscape turns OpenWrt's dnsmasq/odhcpd off (Landscape owns :53/:67)
     and only in a landscape image.
 """
+import hashlib
 import re
 import shlex
 import subprocess
@@ -34,6 +35,10 @@ WAN_SYNC = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-sync'
 WAN_LOOP = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-sync-loop'
 WAN_SLOTS = TOP / 'openwrt/landscape/usr/libexec/landscape-wan-slots'
 WAN_HOTPLUG = TOP / 'openwrt/landscape/etc/hotplug.d/iface/95-landscape-wan'
+DAEMON_BUILD = TOP / 'openwrt/build-landscape.sh'
+DAEMON_INNER = TOP / 'openwrt/build-landscape-inner.sh'
+DAEMON_DOCKERFILE = TOP / 'openwrt/landscape.Dockerfile'
+V6_NAT_PATCH = TOP / 'openwrt/patches/landscape-v6-nat-without-wan-binding.patch'
 NATIVE_BUILD = TOP / 'upstream/build-native.sh'
 LTS_MANIFEST = TOP / 'upstream/kernel-source-lts-experiment.json'
 NCM_CHECKSUM_FIX = '6692deff8885aa536738f8ddeb3f0773b31c73ef'
@@ -142,6 +147,22 @@ class Build(unittest.TestCase):
     def test_install_is_gated_on_the_flag(self):
         self.assertIn('LANDSCAPE=${E5_LANDSCAPE:-0}', self.text)
         self.assertIn('E5_LANDSCAPE=1 requires E5_ROOT_MODULES', self.text)
+
+    def test_the_release_daemon_is_not_a_fallback(self):
+        # 0.26.3's landscape-webserver drops every IPv6 packet on a WAN link
+        # with no bound IPv6 address, which is this device's modem uplink
+        # (docs/LANDSCAPE-V6-NAT-20261021.zh-CN.md).  The patched build in
+        # out/openwrt replaces it, and CI must not assemble an image that
+        # quietly took the release asset instead.
+        self.assertIn('LANDSCAPE_BUILT=$OUT/landscape-webserver-aarch64-static', self.text)
+        self.assertIn('sh "$TOP/openwrt/build-landscape.sh"', self.text)
+        self.assertIn('${E5_LANDSCAPE_DAEMON_REQUIRED:-0}', self.text)
+        required = self.text.index('${E5_LANDSCAPE_DAEMON_REQUIRED:-0}" = 1')
+        fallback = self.text.index('landscape: no patched daemon in out/openwrt')
+        self.assertLess(required, fallback)
+        # the release's checksum entry is dropped only once the patched binary
+        # is staged under the same name
+        self.assertIn("grep -v ' landscape-webserver-aarch64-static$'", self.text)
 
     def test_landscape_flag_is_set_before_reads(self):
         # The script runs under `set -u`; assigning LANDSCAPE after the
@@ -418,6 +439,60 @@ class Bundle(unittest.TestCase):
                      'usr/libexec/landscape-wan-slots',
                      'etc/hotplug.d/iface/95-landscape-wan'):
             self.assertIn(name, self.text)
+
+
+class Daemon(unittest.TestCase):
+    """The patched landscape-webserver: what CI builds and the image ships."""
+
+    def setUp(self):
+        self.text = DAEMON_BUILD.read_text()
+        self.inner = DAEMON_INNER.read_text()
+
+    def test_the_source_is_pinned_by_commit_and_tree(self):
+        # A release asset would be whatever upstream shipped; the pin is the
+        # commit plus its tree, so a moved commit fails the build.
+        self.assertIn('LS_COMMIT=e9f019b5ff3b5306a7b336ee36693ca374618480', self.text)
+        self.assertIn('LS_TREE=9dd7bf0cb8cd53128a76765c0a52305abc287daf', self.text)
+        self.assertIn('[ "$tree" = "$LS_TREE" ]', self.inner)
+        self.assertIn('landscape_init.toml', self.text)
+
+    def test_every_landscape_patch_is_applied(self):
+        self.assertTrue(V6_NAT_PATCH.is_file())
+        self.assertIn('for p in /src/patches/landscape-*.patch; do', self.inner)
+        self.assertIn('git apply --check "$p"', self.inner)
+
+    def test_the_build_id_needs_no_docker_and_covers_the_patches(self):
+        # The image job runs this before any container exists and compares its
+        # own artifact against it; a patch that does not move the id would let
+        # a stale daemon pass.
+        self.assertIn('"$TOP"/openwrt/patches/landscape-*.patch', self.text)
+        result = subprocess.run(['sh', str(DAEMON_BUILD), '--build-id'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout.strip(), r'^[0-9a-f]{64}$')
+        # and it is the hash of exactly those inputs
+        inputs = [DAEMON_DOCKERFILE, DAEMON_BUILD, DAEMON_INNER,
+                  *sorted(V6_NAT_PATCH.parent.glob('landscape-*.patch'))]
+        expected = hashlib.sha256(b''.join(p.read_bytes() for p in inputs)).hexdigest()
+        self.assertEqual(result.stdout.strip(), expected)
+
+    def test_the_artifact_records_what_it_was_built_from(self):
+        for suffix in ('.sha256', '.build-id', '.patches'):
+            self.assertIn(f'"$OUT{suffix}"', self.text)
+        self.assertIn('echo "commit $LS_COMMIT"', self.text)
+        self.assertIn('echo "patch $(basename "$p")', self.text)
+
+    def test_the_crate_cache_can_be_a_directory(self):
+        # CI carries work/landscape-cargo through actions/cache; a bare Docker
+        # volume name is not something a cache action can persist.
+        self.assertIn('CARGO_CACHE=${E5_LANDSCAPE_CARGO:-e5-landscape-cargo}', self.text)
+        self.assertIn('-v "$CARGO_CACHE:/usr/local/cargo/registry"', self.text)
+
+    def test_the_toolchain_matches_the_pinned_commit(self):
+        # The pinned commit's rust-toolchain.toml selects 1.98.0; a mismatch
+        # makes rustup fetch it without the musl target ("can't find crate for
+        # core").
+        self.assertIn('rust:1.98.0', DAEMON_DOCKERFILE.read_text())
 
 
 class WanHelpers(unittest.TestCase):

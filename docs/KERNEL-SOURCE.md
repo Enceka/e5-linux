@@ -34,9 +34,10 @@ E5 专用输出另存 `source-commit`。改动驱动后一起重建内核和模�
 
 ## lts-experiment 与 e5-7.2-experiment（Landscape 镜像）
 
-Landscape Router 镜像现在有两条内核线，分支与清单一一对应。`lts-experiment` 取
-`e5-6.18`（`b93bbc3a`），清单是
-[`upstream/kernel-source-lts-experiment.json`](../upstream/kernel-source-lts-experiment.json)；
+Landscape Router 镜像现在有两条内核线，分支与清单一一对应：清单名就是内核分支名去掉
+`e5-` 前缀和 `-experiment` 后缀。`lts-experiment` 取内核分支
+`e5-6.18-experiment`（基线 `b93bbc3a`），清单是
+[`upstream/kernel-source-6.18.json`](../upstream/kernel-source-6.18.json)；
 `e5-7.2-experiment` 取内核分支 `e5-7.2-experiment`（7.2.11，基线
 `a2de78ee6ed8`），清单是
 [`upstream/kernel-source-7.2.json`](../upstream/kernel-source-7.2.json)。两条分支的内核
@@ -60,8 +61,8 @@ DHCP 地址。6.18 侧是 `6692deff8885`，7.2 侧是把同一对提交重放过
 构建时显式选择清单：
 
 ```sh
-E5_KERNEL_MANIFEST=upstream/kernel-source-lts-experiment.json upstream/build.sh   # 6.18
-E5_KERNEL_MANIFEST=upstream/kernel-source-7.2.json upstream/build.sh             # 7.2
+E5_KERNEL_MANIFEST=upstream/kernel-source-6.18.json upstream/build.sh  # 6.18
+E5_KERNEL_MANIFEST=upstream/kernel-source-7.2.json upstream/build.sh   # 7.2
 ```
 
 发布 workflow 仍默认 6.18 与 `upstream/kernel-source.json`，这是刻意的：6.18 是已经过

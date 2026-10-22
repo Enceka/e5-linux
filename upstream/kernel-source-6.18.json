@@ -2,7 +2,7 @@
   "schema": 1,
   "repository": "https://github.com/Enceka/linux.git",
   "base_revision": "b93bbc3a36fd3c1acae0e44b93d909f7fe942182",
-  "branch": "e5-6.18",
+  "branch": "e5-6.18-experiment",
   "minimum_revision": "6692deff8885aa536738f8ddeb3f0773b31c73ef",
   "policy_sources": {
     "linux_device_common": "90d418efe480c9adcbc110251657e0e0b7503982"

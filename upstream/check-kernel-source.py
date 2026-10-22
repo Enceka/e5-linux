@@ -13,8 +13,8 @@ MANIFEST = Path(__file__).with_name('kernel-source.json')
 def check(kernel, requirements=None, release_file=None, require_clean=True):
     kernel = Path(kernel).resolve()
     if requirements is None:
-        # E5_KERNEL_MANIFEST selects the lts-experiment manifest
-        # (kernel-source-lts-experiment.json) without editing the release default.
+        # E5_KERNEL_MANIFEST selects a kernel line's manifest
+        # (kernel-source-<line>.json) without editing the release default.
         manifest = os.environ.get('E5_KERNEL_MANIFEST')
         requirements = json.loads((Path(manifest) if manifest else MANIFEST).read_text())
     required = requirements['minimum_revision']

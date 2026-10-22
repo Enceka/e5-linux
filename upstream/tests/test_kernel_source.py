@@ -106,7 +106,7 @@ class ManifestSelection(unittest.TestCase):
                                'commit', '-qm', 'fixture'])
         self.head = subprocess.check_output(['git', '-C', str(self.kernel), 'rev-parse', 'HEAD'],
                                             text=True).strip()
-        self.manifest = self.base / 'kernel-source-lts-experiment.json'
+        self.manifest = self.base / 'kernel-source-6.18.json'
         self.manifest.write_text(json.dumps({'minimum_revision': self.head,
                                              'repository': 'https://example.invalid/kernel.git',
                                              'branch': 'e5-6.18'}))

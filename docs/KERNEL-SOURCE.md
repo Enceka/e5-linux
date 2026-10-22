@@ -37,7 +37,8 @@ E5 专用输出另存 `source-commit`。改动驱动后一起重建内核和模�
 Landscape Router 镜像现在有两条内核线，分支与清单一一对应。`lts-experiment` 取
 `e5-6.18`（`b93bbc3a`），清单是
 [`upstream/kernel-source-lts-experiment.json`](../upstream/kernel-source-lts-experiment.json)；
-`e5-7.2-experiment` 取 `e5-7.2`（7.2.11，基线 `a2de78ee6ed8`），清单是
+`e5-7.2-experiment` 取内核分支 `e5-7.2-experiment`（7.2.11，基线
+`a2de78ee6ed8`），清单是
 [`upstream/kernel-source-7.2.json`](../upstream/kernel-source-7.2.json)。两条分支的内核
 之外的内容完全相同，差别只在清单指向哪条内核分支，因此同一份 Landscape 集成不必维护
 两遍，两边合并也不会产生内容冲突。

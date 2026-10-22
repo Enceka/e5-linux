@@ -1,17 +1,43 @@
 #!/bin/sh
 # Landscape Router owns the router functions this image enables it for: DNS on
-# port 53, DHCP, and the packet path.  OpenWrt's dnsmasq and odhcpd would hold
-# 53/67 first, so they stay installed but start turned off; netifd keeps the
-# interfaces themselves (br-lan, sipa_eth0) that Landscape configures.
+# port 53, DHCP, and the packet path.  OpenWrt's dnsmasq would hold 53 first,
+# so it stays installed but starts turned off; netifd keeps the interfaces
+# themselves (br-lan, sipa_eth0) that Landscape configures.
+#
+# odhcpd is the exception: it stays enabled, for IPv6 on the LAN only.  This
+# uplink is a raw-IP (NOARP) bearer where PACKET_ADD_MEMBERSHIP fails, so
+# neither a DHCPv6-PD client nor odhcpd's relay mode can work on sipa_eth0
+# (docs/FINDINGS.md section 39).  The delegation therefore has to be netifd's
+# (wan_6) and the prefix moves to the LAN via ip6assign in network.landscape;
+# odhcpd is what turns that prefix into an RA.  Landscape's own LAN IPv6
+# service cannot do it either: it would have to take the delegated /64 as a
+# static parent, and its validation rejects that slot as WAN-reserved.
+# DHCPv4 stays Landscape's, so odhcpd runs with maindhcp=0 and dhcpv4 disabled
+# and never binds port 67.
 #
 # Only runs in an image built with E5_LANDSCAPE=1: the service, binary and web
 # UI are absent otherwise.
 [ -x /usr/sbin/landscape-webserver ] && [ -f /etc/landscape-router/landscape.toml ] || exit 0
 
 /etc/init.d/dnsmasq disable 2>/dev/null
-/etc/init.d/odhcpd disable 2>/dev/null
 /etc/init.d/dnsmasq stop 2>/dev/null
-/etc/init.d/odhcpd stop 2>/dev/null
+
+# ra_slaac hands clients an address from the prefix; other-config makes them
+# ask for DNS over stateless DHCPv6.  ndp stays disabled: relaying neighbour
+# discovery is the mode that cannot work on this uplink.
+uci -q set dhcp.lan=dhcp
+uci -q set dhcp.lan.interface='lan'
+uci -q set dhcp.lan.dhcpv4='disabled'
+uci -q set dhcp.lan.dhcpv6='server'
+uci -q set dhcp.lan.ra='server'
+uci -q set dhcp.lan.ra_slaac='1'
+uci -q set dhcp.lan.ra_flags='other-config'
+uci -q set dhcp.lan.ndp='disabled'
+uci -q set dhcp.odhcpd=odhcpd
+uci -q set dhcp.odhcpd.maindhcp='0'
+uci -q commit dhcp
+/etc/init.d/odhcpd enable 2>/dev/null
+/etc/init.d/odhcpd restart 2>/dev/null
 
 # Landscape rewrites /etc/resolv.conf to its own resolver; point it at each
 # other before the first start, as its manual asks.

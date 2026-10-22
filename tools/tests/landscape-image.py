@@ -11,8 +11,9 @@ option, the OpenWrt package list and the procd service):
     redirect handler, the web UI and the service into the image;
   * the landscape service starts the static binary with the config dir, the
     web root and the ports the overlay ships;
-  * 99-landscape turns OpenWrt's dnsmasq/odhcpd off (Landscape owns :53/:67)
-    and only in a landscape image.
+  * 99-landscape turns OpenWrt's dnsmasq off (Landscape owns :53) and keeps
+    odhcpd on for LAN IPv6 only (Landscape's PD client cannot run on the
+    raw-IP bearer), and only in a landscape image.
 """
 import hashlib
 import re
@@ -229,10 +230,15 @@ class Build(unittest.TestCase):
         self.assertIn("list ipaddr '192.168.9.1/24'", plain)
         self.assertIn("option ip6assign '64'", plain)
         # Landscape's DHCPv4 owns the address and deletes netifd's copy, so
-        # its image must not let netifd configure it at all.
+        # its image must not let netifd configure IPv4 at all.
         self.assertNotIn("list ipaddr '192.168.9.1/24'", landscape)
-        self.assertNotIn('ip6assign', landscape)
         self.assertIn("option proto 'none'", landscape)
+        # IPv6 is the other way round: netifd keeps the delegation on wan_6
+        # and hands br-lan a /64, because no DHCPv6-PD client can solicit on
+        # the raw-IP bearer (docs/FINDINGS.md section 39).  odhcpd turns that
+        # prefix into an RA.  Dropping ip6assign leaves the LAN with only a
+        # link-local address and clients with no global one.
+        self.assertIn("option ip6assign '64'", landscape)
         self.assertIn("option hostname 'E5'", system)
         # and the build has to mount and use those files
         self.assertIn('-v "$HERE/standalone":/in/standalone:ro', self.text)
@@ -316,10 +322,25 @@ class Defaults(unittest.TestCase):
         self.assertTrue(self.text.lstrip().splitlines()[0].startswith('#!'))
         self.assertIn('exit 0', self.text)
 
-    def test_openwrt_dns_and_dhcp_are_turned_off(self):
-        for service in ('dnsmasq', 'odhcpd'):
-            self.assertIn(f'/etc/init.d/{service} disable', self.text)
-            self.assertIn(f'/etc/init.d/{service} stop', self.text)
+    def test_openwrt_dns_is_turned_off(self):
+        self.assertIn('/etc/init.d/dnsmasq disable', self.text)
+        self.assertIn('/etc/init.d/dnsmasq stop', self.text)
+
+    def test_odhcpd_serves_ipv6_only(self):
+        # Landscape has no working LAN IPv6 service on this uplink, so odhcpd
+        # stays enabled -- but only for IPv6: Landscape's DHCPv4 owns port 67,
+        # so odhcpd must not act as main DHCP and must not serve dhcpv4.
+        self.assertIn('/etc/init.d/odhcpd enable', self.text)
+        self.assertNotIn('/etc/init.d/odhcpd disable', self.text)
+        self.assertNotIn('/etc/init.d/odhcpd stop', self.text)
+        self.assertIn("dhcp.odhcpd.maindhcp='0'", self.text)
+        self.assertIn("dhcp.lan.dhcpv4='disabled'", self.text)
+        self.assertIn("dhcp.lan.dhcpv6='server'", self.text)
+        self.assertIn("dhcp.lan.ra='server'", self.text)
+        self.assertIn("dhcp.lan.ra_slaac='1'", self.text)
+        # relaying neighbour discovery is the mode that cannot work here
+        self.assertIn("dhcp.lan.ndp='disabled'", self.text)
+        self.assertIn('uci -q commit dhcp', self.text)
 
     def test_resolv_conf_points_at_landscape(self):
         self.assertIn('/etc/resolv.conf', self.text)

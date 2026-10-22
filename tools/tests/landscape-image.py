@@ -22,9 +22,9 @@ import unittest
 from pathlib import Path
 
 TOP = Path(__file__).resolve().parents[2]
-# The Landscape image builds with its own fragment so the release baseline
+# Both Landscape kernel lines build from one fragment so the release baseline
 # (upstream/e5-mainline.config) keeps the options it has always had.
-CONFIG = TOP / 'upstream/e5-lts-experiment.config'
+CONFIG = TOP / 'upstream/e5-landscape.config'
 BASELINE_CONFIG = TOP / 'upstream/e5-mainline.config'
 BUILD = TOP / 'openwrt/build-rootfs.sh'
 SERVICE = TOP / 'openwrt/landscape/etc/init.d/landscape-router'
@@ -426,7 +426,7 @@ class Bundle(unittest.TestCase):
 
     def test_native_lts_build_selects_the_landscape_config(self):
         text = NATIVE_BUILD.read_text()
-        self.assertIn('*kernel-source-lts-experiment.json) BASE_CFG=$HERE/e5-lts-experiment.config', text)
+        self.assertIn('*kernel-source-*.json) BASE_CFG=$HERE/e5-landscape.config', text)
         self.assertIn('sed \'s/ e5\\.openwrt=[A-Za-z0-9._-]*//\' "$BASE_CFG"', text)
         self.assertIn('E5_KERNEL_MANIFEST="$(cd "$(dirname "$manifest")" && pwd)/$(basename "$manifest")"', text)
 

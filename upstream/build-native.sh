@@ -40,8 +40,11 @@ O="${E5_OUTDIR:-$TOP/work/build/$KV}"
 mkdir -p "$O"
 echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
 
+# Every kernel line that builds the Landscape image (kernel-source-<line>.json)
+# shares e5-landscape.config; the bare kernel-source.json is the release
+# baseline and keeps e5-mainline.config unchanged.
 case "${E5_KERNEL_MANIFEST:-}" in
-    *kernel-source-lts-experiment.json) BASE_CFG=$HERE/e5-lts-experiment.config ;;
+    *kernel-source-*.json) BASE_CFG=$HERE/e5-landscape.config ;;
     *) BASE_CFG=$HERE/e5-mainline.config ;;
 esac
 CFG=$BASE_CFG DEST=$HERE/out

@@ -57,12 +57,13 @@ O=/out/$KV
 mkdir -p "$O"
 echo "== linux-lts-e5 $KV, $(git log --oneline -1)"
 
-# The config fragment travels with the manifest: the lts-experiment kernel
-# (E5_KERNEL_MANIFEST=upstream/kernel-source-lts-experiment.json) carries the
-# Landscape BPF options, so it uses its own fragment and the release baseline
-# keeps e5-mainline.config unchanged.
+# The config fragment travels with the manifest: every kernel line that builds
+# the Landscape image (E5_KERNEL_MANIFEST=upstream/kernel-source-<line>.json)
+# needs the same Landscape BPF block, so all of them share e5-landscape.config.
+# The bare kernel-source.json is the release baseline and keeps
+# e5-mainline.config unchanged.
 case "${E5_KERNEL_MANIFEST:-}" in
-    *kernel-source-lts-experiment.json) BASE_CFG=/work/e5-lts-experiment.config ;;
+    *kernel-source-*.json) BASE_CFG=/work/e5-landscape.config ;;
     *) BASE_CFG=/work/e5-mainline.config ;;
 esac
 CFG=$BASE_CFG DEST=/work/out

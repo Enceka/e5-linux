@@ -5,16 +5,24 @@ Runs the same extraction and assertions as the CI step after
 openwrt/make-flash-bundle.sh, but against a build tree it is pointed at:
 
   python3 tools/tests/landscape-bundle.py [--image out/openwrt/e5-openwrt-*.ext4.gz]
-                                          [--bundle out/openwrt/*landscape*.tar.gz]
+                                          [--bundle out/openwrt/*landscape*.zip]
+                                          [--daemon out/openwrt/landscape-webserver-aarch64-static]
 
 Without arguments it builds a throwaway ext4 image with mke2fs (no root, no
 loop device) from the staged `openwrt/landscape` tree, writes it through the
 same debugfs calls the bundle check uses, and verifies every file that must
-be in a Landscape image.  This is the check that catches a build flagthat
+be in a Landscape image.  This is the check that catches a build flag that
 enabled the service but forgot the daemon, the UI or the packages.
+
+--daemon compares the image's /usr/sbin/landscape-webserver with that file
+byte for byte.  CI passes the daemon it built from openwrt/build-landscape.sh:
+the release's own binary has no IPv6 on this device's modem uplink
+(docs/LANDSCAPE-V6-NAT-20261021.zh-CN.md), and only this comparison tells an
+image built with the patch from one that fell back to the release asset.
 """
 import argparse
 import gzip
+import hashlib
 import io
 import os
 import re
@@ -48,7 +56,16 @@ def debugfs_list(image):
     return {line.split('/')[-1] for line in out.splitlines() if line.startswith('/')}
 
 
-def assert_image(image):
+def dump(image, name):
+    """The bytes of /<name> inside the ext4 image."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / 'file'
+        subprocess.run(['debugfs', '-R', f'dump /{name} {out}', str(image)],
+                       capture_output=True, check=True)
+        return out.read_bytes()
+
+
+def assert_image(image, daemon=None):
     for name in REQUIRED:
         path = '/'
         for part in name.split('/')[:-1]:
@@ -65,13 +82,19 @@ def assert_image(image):
             raise SystemExit(f'landscape image must not carry /{name}')
     # the binary is aarch64 ELF; a wrong download (or a stub) would pass an
     # existence check
-    dumped = tempfile.NamedTemporaryFile(delete=False).name
-    subprocess.run(['debugfs', '-R', 'dump /usr/sbin/landscape-webserver ' + dumped, str(image)],
-                   capture_output=True)
-    head = Path(dumped).read_bytes()[:20]
-    Path(dumped).unlink()
-    if head[:4] != b'\x7fELF' or head[18:20] != b'\xb7\x00':
+    binary = dump(image, REQUIRED[0])
+    if binary[:4] != b'\x7fELF' or binary[18:20] != b'\xb7\x00':
         raise SystemExit('landscape-webserver is not an ARM64 ELF')
+    if daemon is not None:
+        # Same file, not merely another aarch64 daemon: the release asset is
+        # one too, and it is the one that has no IPv6 on this uplink.
+        expected = Path(daemon).read_bytes()
+        if binary != expected:
+            raise SystemExit(
+                f'landscape-webserver is not {daemon} '
+                f'(image {hashlib.sha256(binary).hexdigest()}, '
+                f'built {hashlib.sha256(expected).hexdigest()})')
+        print(f'ok: /{REQUIRED[0]} is {daemon} ({hashlib.sha256(binary).hexdigest()})')
     print(f'ok: /{REQUIRED[0]} and the UI, service, defaults in {image}')
 
 
@@ -96,6 +119,9 @@ def main():
     ap.add_argument('--image', type=Path, help='ext4 or .ext4.gz Landscape image')
     ap.add_argument('--bundle', type=Path,
                     help='Landscape flash bundle: the .zip artifact, or a .tar.gz')
+    ap.add_argument('--daemon', type=Path,
+                    help='the landscape-webserver the image must carry '
+                         '(out/openwrt/landscape-webserver-aarch64-static)')
     a = ap.parse_args()
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -130,8 +156,10 @@ def main():
             if image.suffix == '.gz':
                 (tmp / 'img').write_bytes(gzip.decompress(image.read_bytes()))
                 image = tmp / 'img'
-            assert_image(image)
+            assert_image(image, a.daemon)
             return
+        # The synthetic image carries a stub daemon, so --daemon has nothing
+        # to compare against; it only means something for a real image.
         synthetic(tmp / 'img')
         assert_image(tmp / 'img')
 

@@ -115,8 +115,11 @@ dffbb8f2ce0ecabb8a0876bec8e58efe38941564fe0e8cd8ae929125195b2fe6 static.zip"
 # address, which is this device's modem uplink (docs/LANDSCAPE-V6-NAT-20261021.zh-CN.md).
 # openwrt/build-landscape.sh builds the patched one from a pinned commit and
 # openwrt/patches/landscape-v6-nat-without-wan-binding.patch; it is what goes
-# in the image.  E5_LANDSCAPE_RELEASE=1 accepts the release binary instead
-# (no IPv6 on this modem uplink) rather than failing the image.
+# in the image, and the image is not assembled without it: an image that ships
+# the release daemon has no IPv6 on the modem, which is not a failure anyone
+# notices at build time.  E5_LANDSCAPE_RELEASE=1 asks for that binary anyway;
+# E5_LANDSCAPE_DAEMON_REQUIRED=1 (the CI) fails the build instead of falling
+# back to it.
 LANDSCAPE_BUILT=$OUT/landscape-webserver-aarch64-static
 if [ "$LANDSCAPE" = 1 ]; then
     # the data path needs BTF/BPF from the kernel, which is a mainline build
@@ -176,7 +179,15 @@ if [ "$LANDSCAPE" = 1 ]; then
     # The E5's own daemon (patched) replaces the release's: same file name, so
     # the staging below is unchanged, and its checksum is its .sha256 from the
     # build rather than the release's.
-    if [ "${E5_LANDSCAPE_RELEASE:-0}" != 1 ] && ! [ -s "$LANDSCAPE_BUILT" ]; then
+    # CI builds and verifies the daemon in its own job and restores it into
+    # out/openwrt, with E5_LANDSCAPE_DAEMON_REQUIRED=1: there a missing or stale
+    # artifact stops the image instead of falling back to the release binary.
+    if [ "${E5_LANDSCAPE_DAEMON_REQUIRED:-0}" = 1 ]; then
+        [ -s "$LANDSCAPE_BUILT" ] && [ -s "$LANDSCAPE_BUILT.sha256" ] || {
+            echo "landscape: E5_LANDSCAPE_DAEMON_REQUIRED=1 but $LANDSCAPE_BUILT or its .sha256 is missing (openwrt/build-landscape.sh)" >&2
+            exit 1
+        }
+    elif [ "${E5_LANDSCAPE_RELEASE:-0}" != 1 ] && ! [ -s "$LANDSCAPE_BUILT" ]; then
         # Building it here rather than trusting a stale out/ keeps the image and
         # the patch in step: build-landscape.sh keys its cache on the patch set.
         sh "$TOP/openwrt/build-landscape.sh" || {
@@ -190,6 +201,12 @@ if [ "$LANDSCAPE" = 1 ]; then
         cp "$LANDSCAPE_BUILT" "$WORK/landscape/landscape-webserver-aarch64-static"
         LANDSCAPE_ASSETS=$(printf "%s\n" "$LANDSCAPE_ASSETS" | grep -v ' landscape-webserver-aarch64-static$')
         echo "landscape: patched daemon $(cat "$LANDSCAPE_BUILT.sha256")"
+    elif [ "${E5_LANDSCAPE_DAEMON_REQUIRED:-0}" = 1 ]; then
+        # CI restores the daemon its own job built and verified; falling back
+        # to the release binary there would ship an image with no IPv6 on the
+        # modem and say nothing about it, so it fails instead.
+        echo "landscape: E5_LANDSCAPE_DAEMON_REQUIRED=1 but $LANDSCAPE_BUILT is missing or does not match its .sha256" >&2
+        exit 1
     else
         echo 'landscape: no patched daemon in out/openwrt -- the release binary has no IPv6 on this uplink (openwrt/build-landscape.sh, or E5_LANDSCAPE_RELEASE=1 to accept it)' >&2
     fi
